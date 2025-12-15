@@ -12,8 +12,9 @@ class TBLoss(AbstractLoss):
 
     Parameters
     ----------
-    dataset_loss : dict
-        Dictionary containing the dataset loss information.
+    dataset_loss : dict or AbstractLoss
+        Dictionary containing the dataset loss information (for default losses),
+        or an already-instantiated loss object (for custom losses like GraphMAE).
     modules_losses : AbstractLoss, optional
         Custom modules' losses to be used.
     """
@@ -22,7 +23,12 @@ class TBLoss(AbstractLoss):
         super().__init__()
         self.losses = []
         # Dataset loss
-        self.losses.append(DatasetLoss(dataset_loss))
+        # Handle both dict (for default losses) and already-instantiated loss objects (for custom losses like GraphMAE)
+        if isinstance(dataset_loss, dict):
+            self.losses.append(DatasetLoss(dataset_loss))
+        else:
+            # Already instantiated loss object
+            self.losses.append(dataset_loss)
         # Model losses
         self.losses.extend(
             [loss for loss in modules_losses.values() if loss is not None]

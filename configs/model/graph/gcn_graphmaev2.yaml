@@ -1,0 +1,54 @@
+_target_: topobench.model.TBModel
+
+model_name: gcn_graphmaev2
+model_domain: graph
+
+feature_encoder:
+  _target_: topobench.nn.encoders.${model.feature_encoder.encoder_name}
+  encoder_name: AllCellFeatureEncoder
+  in_channels: ${infer_in_channels:${dataset},${oc.select:transforms,null}}
+  out_channels: 128
+  proj_dropout: 0.0
+
+backbone:
+  _target_: torch_geometric.nn.models.GCN
+  in_channels: ${model.feature_encoder.out_channels}
+  hidden_channels: ${model.feature_encoder.out_channels}
+  num_layers: 2
+  dropout: 0.2
+  act: relu
+
+# Use GraphMAEv2GNNWrapper for masking, EMA encoder, and latent loss
+backbone_wrapper:
+  _target_: topobench.nn.wrappers.GraphMAEv2GNNWrapper 
+  _partial_: true
+  wrapper_name: GraphMAEv2GNNWrapper
+  out_channels: ${model.feature_encoder.out_channels}
+  num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
+  # GraphMAEv2-specific parameters
+  mask_rate: 0.5  # Percentage of nodes to mask
+  replace_rate: 0.0  # Percentage of masked nodes to replace with random features
+  drop_edge_rate: 0.0  # Percentage of edges to drop during training
+  momentum: 0.996  # EMA momentum
+  delayed_ema_epoch: 0  # Epochs to delay EMA updates
+  lam: 1.0  # Weight for latent loss
+
+# GraphMAEv2ReadOut handles the decoder with re-masking
+readout:
+  _target_: topobench.nn.readouts.${model.readout.readout_name}
+  readout_name: GraphMAEv2ReadOut
+  num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
+  hidden_dim: ${model.feature_encoder.out_channels}
+  out_channels: ${model.feature_encoder.out_channels}  # Reconstructs encoded features
+  task_level: ${dataset.parameters.task_level}
+  pooling_type: sum
+  # GraphMAEv2 readout specific parameters
+  decoder_type: mlp  # Options: linear, mlp
+  decoder_hidden_dim: 256  # Hidden dimension for MLP decoder
+  num_remasking: 3  # Number of re-masking iterations
+  remask_rate: 0.5  # Rate of re-masking
+  remask_method: random  # Options: random, fixed
+
+# compile model for faster training with pytorch 2.0
+compile: false
+

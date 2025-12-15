@@ -1,0 +1,13 @@
+# Deep Graph Infomax (DGI) Evaluator Configuration
+
+_target_: topobench.evaluator.dgi_evaluator.DGIEvaluator
+
+# DGI evaluator tracks:
+# - pos_score: Average positive discrimination score
+# - neg_score: Average negative discrimination score  
+# - discrimination_acc: Discrimination accuracy
+metrics:
+  - pos_score
+  - neg_score
+  - discrimination_acc
+

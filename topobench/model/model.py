@@ -49,8 +49,10 @@ class TBModel(LightningModule):
 
         # This line allows to access init params with 'self.hparams' attribute
         # also ensures init params will be stored in ckpt
+        # Ignore nn.Module and complex objects to make checkpoints portable
         self.save_hyperparameters(
-            logger=False, ignore=["backbone", "readout", "feature_encoder"]
+            logger=False, 
+            ignore=["backbone", "readout", "feature_encoder", "loss", "evaluator", "optimizer", "backbone_wrapper"]
         )
 
         self.feature_encoder = (
