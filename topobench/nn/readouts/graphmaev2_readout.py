@@ -142,6 +142,7 @@ class GraphMAEv2ReadOut(AbstractZeroCellReadOut):
         """
         rep_remasked = rep.clone()
         rep_remasked[mask_nodes] = 0
+        rep_remasked[mask_nodes] = rep_remasked[mask_nodes] + self.dec_mask_token
         return rep_remasked
     
     def forward(
