@@ -154,8 +154,8 @@ class GraphMAEv2ReadOut(AbstractZeroCellReadOut):
         ----------
         model_out : dict
             Dictionary containing:
-            - x_0: Encoded node features
-            - x_original: Original node features
+            - x_0: Encoded node features from GNN
+            - x_raw_original: Original RAW node features
             - mask_nodes: Indices of masked nodes
         batch : torch_geometric.data.Data
             Batch object containing the batched domain data.
@@ -166,7 +166,7 @@ class GraphMAEv2ReadOut(AbstractZeroCellReadOut):
             Dictionary containing reconstruction results and losses.
         """
         enc_rep = model_out["x_0"]
-        x_original = model_out["x_original"]
+        x_raw_original = model_out.get("x_raw_original", model_out.get("x_original"))
         mask_nodes = model_out["mask_nodes"]
         
         num_nodes = enc_rep.size(0)
@@ -176,32 +176,32 @@ class GraphMAEv2ReadOut(AbstractZeroCellReadOut):
         origin_rep = self.encoder_to_decoder(enc_rep)
         
         # Apply re-masking strategy
-        total_rec_loss = 0
         all_reconstructed = []
         
         if self.remask_method == "random":
             # Multiple random re-masks
             for i in range(self.num_remasking):
-                rep_remasked, _, _ = self.random_remask(origin_rep, num_nodes, device)
+                rep_remasked, remask_nodes, rekeep_nodes = self.random_remask(origin_rep, num_nodes, device)
                 
-                # Decode
-                recon = self.decoder(rep_remasked)
-                all_reconstructed.append(recon[mask_nodes])
+                # Decode to reconstruct RAW features
+                recon_full = self.decoder(rep_remasked)
+                all_reconstructed.append(recon_full[mask_nodes])
             
-            # Average reconstructions
+            # Average reconstructions across different re-masks
             x_reconstructed = torch.stack(all_reconstructed).mean(dim=0)
             
         elif self.remask_method == "fixed":
             # Fixed re-masking at original positions
             rep_remasked = self.fixed_remask(origin_rep, mask_nodes)
-            x_reconstructed = self.decoder(rep_remasked)[mask_nodes]
+            recon_full = self.decoder(rep_remasked)
+            x_reconstructed = recon_full[mask_nodes]
             
         else:
             raise ValueError(f"Unknown remask_method: {self.remask_method}")
         
-        # Update model output
-        model_out["x_reconstructed"] = x_reconstructed
-        model_out["x_original"] = x_original[mask_nodes]
+        # Update model output with RAW feature reconstruction
+        model_out["x_reconstructed"] = x_reconstructed  # Reconstructed RAW features
+        model_out["x_original"] = x_raw_original[mask_nodes]  # Original RAW features at masked positions
         model_out["num_remasking"] = self.num_remasking
         
         return model_out

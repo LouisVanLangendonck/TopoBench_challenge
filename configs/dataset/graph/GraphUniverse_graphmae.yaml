@@ -28,6 +28,9 @@ loader:
         power_law_exponent_range: [1.5, 2.5]
         seed: ${dataset.loader.parameters.generation_parameters.universe_parameters.seed}
     
+# Pre-transforms (applied before feature encoding)
+pre_transforms:
+  - save_raw_features
 
 # Dataset parameters
 parameters:

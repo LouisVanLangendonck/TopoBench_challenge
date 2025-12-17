@@ -37,7 +37,7 @@ readout:
   readout_name: GraphMAEReadOut
   num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
   hidden_dim: ${model.feature_encoder.out_channels}
-  out_channels: ${model.feature_encoder.out_channels}  # Reconstructs encoded features (64-dim, not raw features)
+  out_channels: ${get_raw_feature_dim:${model.feature_encoder.in_channels}}  # Reconstructs RAW features
   task_level: ${dataset.parameters.task_level}
   pooling_type: sum
   # GraphMAE readout specific parameters

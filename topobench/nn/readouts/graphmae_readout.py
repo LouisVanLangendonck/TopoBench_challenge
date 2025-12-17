@@ -119,8 +119,8 @@ class GraphMAEReadOut(AbstractZeroCellReadOut):
         ----------
         model_out : dict
             Dictionary containing:
-            - x_0: Encoded node features
-            - x_original: Original node features (before masking)
+            - x_0: Encoded node features from GNN
+            - x_raw_original: Original RAW node features (before encoding)
             - mask_nodes: Indices of masked nodes
         batch : torch_geometric.data.Data
             Batch object containing the batched domain data.
@@ -129,36 +129,39 @@ class GraphMAEReadOut(AbstractZeroCellReadOut):
         -------
         dict
             Dictionary containing:
-            - x_reconstructed: Reconstructed features (at masked positions)
-            - x_original: Original features (at masked positions)
+            - x_reconstructed: Reconstructed RAW features (at masked positions)
+            - x_original: Original RAW features (at masked positions)
             - logits: Reconstructed features (for compatibility)
             Plus all original model_out keys
         """
-        # Get encoded representations
+        # Get encoded representations from GNN
         enc_rep = model_out["x_0"]
-        x_original = model_out["x_original"]
+        
+        # Get ORIGINAL RAW features (what we want to reconstruct)
+        x_raw_original = model_out.get("x_raw_original", model_out.get("x_original"))
         mask_nodes = model_out["mask_nodes"]
         
         # Project from encoder to decoder space
         rep = self.encoder_to_decoder(enc_rep)
         
         # Re-mask: zero out the masked nodes in the representation
-        # This forces the decoder to rely on the global structure
+        # This forces the decoder to rely on the neighborhood information
         if self.remask and self.decoder_type != "linear":
             rep = rep.clone()  # Don't modify in-place
             rep[mask_nodes] = 0
         
-        # Decode to reconstruct features
+        # Decode to reconstruct RAW features
         if self.decoder_type in ("mlp", "linear"):
-            x_reconstructed = self.decoder(rep)
+            x_reconstructed_full = self.decoder(rep)
         else:
             # GNN decoder would need edge information
             # For now, use MLP-style decoding
-            x_reconstructed = self.decoder(rep)
+            x_reconstructed_full = self.decoder(rep)
         
         # Update model output with reconstruction results
-        model_out["x_reconstructed"] = x_reconstructed[mask_nodes]  # Only masked nodes
-        model_out["x_original"] = x_original[mask_nodes]  # Original at masked positions
+        # We only care about reconstructing the MASKED positions
+        model_out["x_reconstructed"] = x_reconstructed_full[mask_nodes]  # Reconstructed RAW features at masked positions
+        model_out["x_original"] = x_raw_original[mask_nodes]  # Original RAW features at masked positions
         
         return model_out
     

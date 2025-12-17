@@ -191,6 +191,7 @@ def get_monitor_mode(task):
         task == "classification"
         or task == "multilabel classification"
         or task == "dgi"  # DGI: maximize discrimination accuracy
+        or task == "graphmaev2"  # GraphMAEv2: maximize cosine similarity
         ):
         return "max"
 
@@ -198,7 +199,6 @@ def get_monitor_mode(task):
         task == "regression"
         or task == "graphmae"
         or task == "graphcl"  # GraphCL: minimize contrastive loss
-        or task == "graphmaev2"  # GraphMAEv2: minimize reconstruction loss
         or task == "linkpred"  # LinkPred: minimize link prediction loss
         ):
         return "min"
@@ -272,6 +272,27 @@ def check_pses_in_transforms(transforms):
             added_features += transforms[key].get("max_pe_dim")
 
     return added_features
+
+
+def get_raw_feature_dim(in_channels):
+    r"""Extract the raw feature dimension from in_channels list.
+    
+    For GraphMAE/GraphMAEv2, we need to reconstruct raw features.
+    This helper extracts the first dimension from the in_channels list.
+    
+    Parameters
+    ----------
+    in_channels : list or int
+        Input channels (can be list like [15] or int like 15).
+    
+    Returns
+    -------
+    int
+        The raw feature dimension (e.g., 15).
+    """
+    if isinstance(in_channels, list):
+        return in_channels[0]
+    return in_channels
 
 
 def infer_in_channels(dataset, transforms):

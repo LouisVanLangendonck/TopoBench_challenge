@@ -207,7 +207,7 @@ class GraphMAEv2GNNWrapper(AbstractWrapper):
         # Initialize EMA on first forward
         self._init_ema()
         
-        # Input features
+        # Input features AFTER feature encoding
         x_0 = batch.x_0
         edge_index = batch.edge_index
         edge_weight = batch.get("edge_weight", None)
@@ -216,10 +216,14 @@ class GraphMAEv2GNNWrapper(AbstractWrapper):
         num_nodes = x_0.size(0)
         device = x_0.device
         
-        # Store original features for reconstruction
-        x_original = x_0.clone()
+        # Store ORIGINAL RAW features for reconstruction
+        if hasattr(batch, 'x_raw'):
+            x_raw_original = batch.x_raw.clone()
+        else:
+            # Fallback
+            x_raw_original = x_0.clone()
         
-        # Apply masking to get student input
+        # Apply masking to the ENCODED features (x_0) for student input
         masked_x, mask_nodes, keep_nodes = self.encoding_mask_noise(
             x_0, num_nodes, device
         )
@@ -242,11 +246,12 @@ class GraphMAEv2GNNWrapper(AbstractWrapper):
         latent_loss = torch.tensor(0.0, device=device)
         
         if self.training and self._ema_initialized:
-            # EMA encoder sees clean input (no masking)
+            # EMA encoder sees clean ENCODED input (no masking)
+            # This makes sense: we want to match the latent representations
+            # of masked vs clean encoded inputs (not raw inputs)
             with torch.no_grad():
-                # Optionally use different edge dropout for teacher
                 latent_target = self.encoder_ema(
-                    x_0,  # Clean input
+                    x_0,  # Clean encoded input (no masking)
                     edge_index,  # Full edges
                     batch=batch_indices,
                     edge_weight=edge_weight,
@@ -263,8 +268,8 @@ class GraphMAEv2GNNWrapper(AbstractWrapper):
         
         # Prepare outputs for readout
         model_out = {
-            "x_0": enc_rep,  # Encoded representations
-            "x_original": x_original,  # Original features
+            "x_0": enc_rep,  # Encoded representations from GNN
+            "x_raw_original": x_raw_original,  # ORIGINAL RAW features (for reconstruction)
             "mask_nodes": mask_nodes,  # Which nodes were masked
             "keep_nodes": keep_nodes,  # Which nodes were kept
             "latent_loss": latent_loss,  # Latent representation loss

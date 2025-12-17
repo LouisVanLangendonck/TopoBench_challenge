@@ -161,13 +161,12 @@ class GraphMAEGNNWrapper(AbstractWrapper):
         dict
             Dictionary containing:
             - x_0: Encoded node features after GNN
-            - x_original: Original input features (to reconstruct)
+            - x_raw_original: Original RAW input features (to reconstruct)
             - mask_nodes: Indices of randomly masked nodes
             - labels: Original labels (for compatibility)
             - batch_0: Batch assignment
         """
-        # Input features (after all preprocessing/feature encoding)
-        # This is what we will mask and reconstruct
+        # Input features AFTER feature encoding (what goes into the GNN)
         x_0 = batch.x_0
         edge_index = batch.edge_index
         edge_weight = batch.get("edge_weight", None)
@@ -176,12 +175,18 @@ class GraphMAEGNNWrapper(AbstractWrapper):
         num_nodes = x_0.size(0)
         device = x_0.device
         
-        # Store original input features for reconstruction
-        # GraphMAE reconstructs these exact features at masked positions
-        x_original = x_0.clone()
+        # Store ORIGINAL RAW features for reconstruction (before any encoding)
+        # This is what GraphMAE should reconstruct
+        if hasattr(batch, 'x_raw'):
+            x_raw_original = batch.x_raw.clone()
+        else:
+            # Fallback: use x_0 if x_raw is not available (shouldn't happen with proper config)
+            x_raw_original = x_0.clone()
+            print("Warning: x_raw not found in batch. Using x_0 instead. "
+                  "Make sure SaveRawNodeFeatures transform is applied.")
         
-        # ALWAYS apply masking (both train and eval) for proper reconstruction evaluation
-        # The randomness ensures different patterns each time (controlled by global RNG seed)
+        # Apply masking to the ENCODED features (x_0)
+        # We mask at the encoded feature level for the GNN input
         masked_x, mask_nodes, keep_nodes = self.encoding_mask_noise(
             x_0, num_nodes, device
         )
@@ -218,8 +223,8 @@ class GraphMAEGNNWrapper(AbstractWrapper):
         
         # Prepare outputs for readout
         model_out = {
-            "x_0": enc_rep,  # Encoded representations
-            "x_original": x_original,  # Original features (for reconstruction)
+            "x_0": enc_rep,  # Encoded representations from GNN
+            "x_raw_original": x_raw_original,  # ORIGINAL RAW features (for reconstruction)
             "mask_nodes": mask_nodes,  # Which nodes were masked
             "labels": batch.y if hasattr(batch, 'y') else None,  # For compatibility
             "batch_0": batch_indices,
