@@ -7,15 +7,23 @@ configuration, and runs downstream NODE-LEVEL evaluation with three modes:
 1. Linear probing (frozen encoder + linear classifier)
 2. MLP probing (frozen encoder + MLP classifier)
 3. Fine-tuning (unfrozen encoder + MLP classifier)
+4. Scratch (randomly initialized encoder + MLP classifier)
 
 For GraphUniverse community detection: predicts community label for each node.
 Number of classes = K (from universe_parameters).
+
+FAIR EVALUATION METHODOLOGY (for GraphUniverse):
+- Generates (n_evaluation + n_train) graphs TOGETHER with the same seed
+- First n_evaluation graphs: FIXED evaluation set (val + test), same for all n_train values
+- Next n_train graphs: training set, additional to evaluation set
+- This ensures all models are evaluated on the SAME test set regardless of n_train
+- All graphs from same generation = same distribution, fair comparison
 
 Designed to work both locally in the topobench repo and in separate
 repos where topobench is pip-installed.
 
 Usage:
-    python downstream_eval.py --run_dir /path/to/wandb/run --n_graphs 100 --n_train 20 --mode linear
+    python downstream_eval.py --run_dir /path/to/wandb/run --n_evaluation_graphs 200 --n_train 20 --mode finetune
 """
 
 import argparse
@@ -162,7 +170,9 @@ def _create_graph_universe_dataset(
         gen_params["family_parameters"]["n_graphs"] = n_graphs
     
     # Override seed
-    gen_params["family_parameters"]["seed"] = seed
+    # Increases the seed by 1 to have completely new graphs for downstream evaluation
+    gen_params["family_parameters"]["seed"] = seed + 1 
+    # Keeps the same seed for the universe parameters to have the same distribution of graphs
     gen_params["universe_parameters"]["seed"] = seed
     
     # Override data directory if specified
@@ -296,7 +306,7 @@ def detect_pretraining_method(config: dict) -> str:
     Returns
     -------
     str
-        One of: 'dgi', 'graphmae', 'graphmaev2', 'graphcl', 'linkpred', 'supervised', 'unknown'
+        One of: 'dgi', 'graphmae', 'graphmaev2', 'graphcl', 'linkpred', 's2gae', 'higmae', 'supervised', 'unknown'
     """
     model_config = config.get("model", {})
     wrapper_config = model_config.get("backbone_wrapper", {})
@@ -313,6 +323,10 @@ def detect_pretraining_method(config: dict) -> str:
             return "graphcl"
         elif "LinkPred" in wrapper_target:
             return "linkpred"
+        elif "S2GAE" in wrapper_target or "s2gae" in wrapper_target.lower():
+            return "s2gae"
+        elif "HiGMAE" in wrapper_target or "higmae" in wrapper_target.lower():
+            return "higmae"
     
     # Check loss
     loss_config = config.get("loss", {})
@@ -329,6 +343,10 @@ def detect_pretraining_method(config: dict) -> str:
         return "graphcl"
     elif "LinkPred" in loss_target:
         return "linkpred"
+    elif "S2GAE" in loss_target or "s2gae" in loss_target.lower():
+        return "s2gae"
+    elif "HiGMAE" in loss_target or "higmae" in loss_target.lower():
+        return "higmae"
     
     return "supervised"
 
@@ -472,11 +490,15 @@ def load_pretrained_encoder(
     backbone_state = {}
     wrapper_only_state = {}  # Params that belong to wrapper, not backbone
     
-    # Check if this is a wrapped backbone (DGI, GraphMAE, GraphCL, LinkPred, etc.)
-    has_wrapper = pretraining_method in ["dgi", "graphmae", "graphmaev2", "graphcl", "linkpred"]
+    # Check if this is a wrapped backbone (DGI, GraphMAE, GraphCL, LinkPred, S2GAE, HiGMAE, etc.)
+    has_wrapper = pretraining_method in ["dgi", "graphmae", "graphmaev2", "graphcl", "linkpred", "s2gae", "higmae"]
     
     # Get expected backbone parameter names for filtering
     expected_backbone_keys = set(backbone.state_dict().keys())
+    
+    # DEBUG: Show a few expected keys
+    print(f"  Expected backbone keys (first 5): {list(expected_backbone_keys)[:5]}")
+    print(f"  Total expected backbone keys: {len(expected_backbone_keys)}")
     
     for key, value in state_dict.items():
         if key.startswith("feature_encoder."):
@@ -489,18 +511,22 @@ def load_pretrained_encoder(
             if has_wrapper:
                 # For wrapped backbones, structure is:
                 # TBModel.backbone (wrapper) -> wrapper.backbone (actual backbone)
+                # Keys in checkpoint: "backbone.backbone.convs.X" (double nested)
+                # or "backbone.enc_mask_token" (wrapper-specific)
+                
+                # If still starts with "backbone.", strip it again (double nesting)
                 if stripped_key.startswith("backbone."):
-                    # backbone.backbone.X -> X (nested backbone param)
                     final_key = stripped_key.replace("backbone.", "", 1)
                     # This is definitely a backbone param
                     backbone_state[final_key] = value
                 else:
-                    # backbone.X -> could be wrapper param (ln_0, projector, etc.) or direct backbone param
-                    # Check if it's an expected backbone key
+                    # Single "backbone." prefix - could be wrapper param or direct backbone param
+                    # Check against expected keys
                     if stripped_key in expected_backbone_keys:
+                        # Direct backbone param (shouldn't happen with proper wrapping, but handle it)
                         backbone_state[stripped_key] = value
                     else:
-                        # This is a wrapper-specific param (e.g., ln_0, projector, predictor, enc_mask_token, etc.)
+                        # Wrapper-specific param (enc_mask_token, ln_0, projector, predictor, encoder_ema, etc.)
                         wrapper_only_state[stripped_key] = value
             else:
                 # No wrapper, direct backbone
@@ -1268,9 +1294,9 @@ def evaluate(
 def run_downstream_evaluation(
     run_dir: str | Path,
     checkpoint_path: str | Path | None = None,
-    n_graphs: int = 100,
+    n_evaluation_graphs: int = 200,
     n_train: int = 20,
-    mode: str = "linear",  # "linear", "mlp", "finetune"
+    mode: str = "linear",  # "linear", "mlp", "finetune", "scratch", "gpf", "gpf-plus", "untrained_frozen"
     epochs: int = 100,
     lr: float = 0.001,
     batch_size: int = 32,
@@ -1280,9 +1306,23 @@ def run_downstream_evaluation(
     use_wandb: bool = False,
     wandb_project: str = "downstream_eval",
     subsample_from_train: bool = False,
+    n_graphs: int = None,  # DEPRECATED: kept for backward compatibility
+    p_num: int = 5,  # Number of basis vectors for GPF-Plus
 ) -> dict:
     """
     Run full downstream evaluation pipeline for NODE-LEVEL classification.
+    
+    NEW BEHAVIOR (for fair comparison):
+    - Generates (n_evaluation_graphs + n_train) graphs TOGETHER with the same seed
+    - First n_evaluation_graphs are used for val/test (FIXED, same for all n_train values)
+    - Next n_train graphs are used for training (ADDITIONAL, not from evaluation set)
+    - All graphs from same generation run ensures consistent distribution
+    - This ensures all models are evaluated on the SAME test set regardless of n_train
+    
+    **CRITICAL FIX**: The `seed` parameter is ONLY used for model initialization and 
+    training randomness. For dataset generation, we ALWAYS use the seed from the 
+    pretraining config to ensure downstream evaluation uses THE EXACT SAME DATASET
+    as pretraining.
     
     Parameters
     ----------
@@ -1290,12 +1330,14 @@ def run_downstream_evaluation(
         Path to wandb run directory.
     checkpoint_path : str or Path, optional
         Path to checkpoint. If None, reads from wandb-summary.json.
-    n_graphs : int
-        Number of graphs to generate for evaluation.
+    n_evaluation_graphs : int
+        Number of FIXED evaluation graphs (val + test). These are generated once
+        with a fixed seed and are the same for all n_train values.
     n_train : int
-        Number of training graphs (inductive split at graph level).
+        Number of training graphs. These are generated ADDITIONALLY (not taken from
+        evaluation set) to ensure fair comparison across different n_train values.
     mode : str
-        Evaluation mode: "linear", "mlp", or "finetune".
+        Evaluation mode: "linear", "mlp", "finetune", "scratch", "gpf", "gpf-plus", or "untrained_frozen".
     epochs : int
         Maximum training epochs.
     lr : float
@@ -1312,12 +1354,22 @@ def run_downstream_evaluation(
         Whether to log to Weights & Biases.
     wandb_project : str
         W&B project name.
+    subsample_from_train : bool
+        For TUDataset only: whether to subsample from training set.
+    n_graphs : int, optional
+        DEPRECATED: Use n_evaluation_graphs instead. Kept for backward compatibility.
+    p_num : int
+        Number of basis vectors for GPF-Plus (default: 5).
     
     Returns
     -------
     dict
         Results including test accuracy and training history.
     """
+    # Handle backward compatibility
+    if n_graphs is not None and n_evaluation_graphs == 200:
+        print(f"WARNING: n_graphs parameter is deprecated. Use n_evaluation_graphs instead.")
+        n_evaluation_graphs = n_graphs
     run_dir = Path(run_dir)
     
     # Load config
@@ -1367,16 +1419,96 @@ def run_downstream_evaluation(
         print(f"WARNING: This script is designed for node-level community detection.")
         print(f"         For graph-level tasks, the evaluation may not be appropriate.")
     
-    # Create dataset
+    # Create dataset with FIXED evaluation set + ADDITIONAL training graphs
     print("\n" + "=" * 60)
-    print("Creating dataset...")
+    print("Creating dataset with FIXED evaluation set...")
     print("=" * 60)
-    dataset, data_dir, dataset_info = create_dataset_from_config(
-        config, 
-        n_graphs=n_graphs, 
+    
+    # Determine if GraphUniverse
+    loader_target = config["dataset"]["loader"]["_target_"]
+    is_graph_universe = "GraphUniverse" in loader_target
+    
+    # CRITICAL: Extract pretraining dataset seed from config
+    # This ensures downstream evaluation uses THE SAME dataset
+    pretraining_seed = seed  # Default to function arg
+    if is_graph_universe:
+        gen_params = config["dataset"]["loader"]["parameters"].get("generation_parameters", {})
+        family_params = gen_params.get("family_parameters", {})
+        universe_params = gen_params.get("universe_parameters", {})
+        
+        # Try to get seed from family_parameters first, then universe_parameters
+        pretraining_seed = family_params.get("seed") or universe_params.get("seed") or seed
+        
+        print("\n" + "=" * 80)
+        print("SEED VERIFICATION (GraphUniverse)")
+        print("=" * 80)
+        print(f"🔍 PRETRAINING DATASET SEED:  {pretraining_seed}")
+        print(f"🔍 DOWNSTREAM EVAL SEED:      {pretraining_seed}  (SAME - using pretraining seed)")
+        print(f"   (Function arg seed={seed} was {'IGNORED' if pretraining_seed != seed else 'same'} for dataset generation)")
+        print(f"   ✓ Ensures downstream evaluation uses THE EXACT SAME DATASET as pretraining!")
+        print("=" * 80)
+    
+    if is_graph_universe:
+        # NEW APPROACH: Generate ALL graphs together, split by index
+        # First n_evaluation_graphs are FIXED for val/test (same for all n_train)
+        # Next n_train graphs are for training (additional)
+        total_graphs = n_evaluation_graphs + n_train
+        
+        print(f"\nGenerating {total_graphs} total graphs (seed={pretraining_seed})...")
+        print(f"  - First {n_evaluation_graphs} graphs: FIXED evaluation set (val/test)")
+        print(f"  - Next {n_train} graphs: training set")
+        
+        dataset, data_dir, dataset_info = create_dataset_from_config(
+            config, 
+                n_graphs=total_graphs, 
+                n_train=None,
+                subsample_train=False,
+                seed=pretraining_seed  # CRITICAL: Use pretraining seed!
+            )
+        
+        # Apply transforms
+        transforms_config = config.get("transforms")
+        preprocessor = apply_transforms(dataset, data_dir, transforms_config)
+        data_list = preprocessor.data_list
+        
+        print(f"✓ Generated {len(data_list)} graphs total using seed={pretraining_seed}")
+        print(f"  This is the SAME dataset distribution as used in pretraining!")
+
+        
+        # Split by index:
+        # [0 : n_evaluation_graphs] -> evaluation (will be split into val/test)
+        # [n_evaluation_graphs : n_evaluation_graphs + n_train] -> training
+        
+        eval_data_list = data_list[:n_evaluation_graphs]
+        train_data = data_list[n_evaluation_graphs:n_evaluation_graphs + n_train]
+        
+        # Split evaluation data into val/test (50/50)
+        # Use the PRETRAINING seed so val/test split is consistent
+        import random
+        random.seed(pretraining_seed)
+        eval_indices = list(range(len(eval_data_list)))
+        random.shuffle(eval_indices)
+        n_val = len(eval_indices) // 2
+        val_indices = eval_indices[:n_val]
+        test_indices = eval_indices[n_val:]
+        val_data = [eval_data_list[i] for i in val_indices]
+        test_data = [eval_data_list[i] for i in test_indices]
+        
+        print(f"\nFinal split:")
+        print(f"  Training: {len(train_data)} graphs")
+        print(f"  Validation: {len(val_data)} graphs (from fixed eval set)")
+        print(f"  Test: {len(test_data)} graphs (from fixed eval set)")
+        print(f"  Total: {len(train_data) + len(val_data) + len(test_data)} graphs")
+        
+    else:
+        # For non-GraphUniverse: use original approach
+        print("Non-GraphUniverse dataset: using original splitting approach...")
+        dataset, data_dir, dataset_info = create_dataset_from_config(
+            config, 
+            n_graphs=n_evaluation_graphs, 
         n_train=n_train,
         subsample_train=subsample_from_train,
-        seed=seed
+        seed=pretraining_seed  # Use pretraining seed here too
     )
 
     # Apply transforms
@@ -1392,7 +1524,7 @@ def run_downstream_evaluation(
         data_list, 
         n_train, 
         dataset_info=dataset_info,
-        seed=seed
+        seed=pretraining_seed  # Use pretraining seed for consistency
     )
     
     # Create data loaders
@@ -1400,45 +1532,83 @@ def run_downstream_evaluation(
     val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
     test_loader = DataLoader(test_data, batch_size=batch_size, shuffle=False)
     
-    # Load encoder (pre-trained or random init for scratch mode)
+    # Load encoder (pre-trained, random init, or prompted)
     print("\n" + "=" * 60)
-    if mode == "scratch":
-        print("Creating randomly initialized encoder (scratch baseline)...")
-        print("=" * 60)
-        feature_encoder, backbone, hidden_dim = create_random_encoder(config, device=device)
-    else:
-        print("Loading pre-trained encoder...")
-        print("=" * 60)
-        feature_encoder, backbone, hidden_dim = load_pretrained_encoder(
-            config, checkpoint_path, device=device
-        )
-
-    # Create appropriate encoder wrapper based on task level
-    if task_level == "graph":
-        encoder = GraphLevelEncoder(
-            feature_encoder=feature_encoder,
-            backbone=backbone,
-            readout_type="mean",  # Could be configurable
-        )
-        print(f"  Using GraphLevelEncoder with mean pooling")
-    else:
-        encoder = PretrainedEncoder(
-            feature_encoder=feature_encoder,
-            backbone=backbone,
-        )
-        print(f"  Using PretrainedEncoder (node-level)")
     
-    # Verify encoder produces meaningful outputs
-    print("\n" + "=" * 60)
-    print("Verifying encoder outputs...")
-    print("=" * 60)
-    verify_result = verify_encoder_outputs(encoder, train_loader, device=device)
-    print(f"  Status: {verify_result['status']}")
-    print(f"  Output shape: {verify_result.get('shape', 'N/A')}")
-    print(f"  Mean: {verify_result.get('mean', 'N/A'):.4f}, Std: {verify_result.get('std', 'N/A'):.4f}")
-    print(f"  Range: [{verify_result.get('min', 'N/A'):.4f}, {verify_result.get('max', 'N/A'):.4f}]")
-    if verify_result.get('issues'):
-        print(f"  ISSUES: {verify_result['issues']}")
+    # Check if using prompt-based methods
+    is_prompt_method = mode in ["gpf", "gpf-plus"]
+    
+    if is_prompt_method:
+        # Import prompt tuning utilities
+        from prompt_tuning import create_prompted_model
+        
+        print(f"Creating prompted model ({mode.upper()})...")
+        print("=" * 60)
+        
+        # Create prompted model (handles encoder + prompt + classifier)
+        downstream_model, prompt_info = create_prompted_model(
+            config=config,
+            checkpoint_path=checkpoint_path,
+            num_classes=num_classes,
+            prompt_type=mode,
+            p_num=p_num,
+            task_level=task_level,
+            device=device,
+            classifier_type="mlp",
+            mode="finetune",  # Always use pre-trained for prompts
+        )
+        
+        # Skip the manual encoder/classifier creation below
+        skip_manual_model_creation = True
+        
+    else:
+        skip_manual_model_creation = False
+        
+        if mode == "scratch":
+            print("Creating randomly initialized encoder (scratch baseline)...")
+            print("=" * 60)
+            feature_encoder, backbone, hidden_dim = create_random_encoder(config, device=device)
+        elif mode == "untrained_frozen":
+            print("Creating randomly initialized encoder (untrained frozen baseline)...")
+            print("  This tests: random weights + frozen encoder + MLP classifier")
+            print("=" * 60)
+            feature_encoder, backbone, hidden_dim = create_random_encoder(config, device=device)
+        else:
+            print("Loading pre-trained encoder...")
+            print("=" * 60)
+            feature_encoder, backbone, hidden_dim = load_pretrained_encoder(
+                config, checkpoint_path, device=device
+            )
+
+        # Create appropriate encoder wrapper based on task level
+        if task_level == "graph":
+            encoder = GraphLevelEncoder(
+                feature_encoder=feature_encoder,
+                backbone=backbone,
+                readout_type="mean",  # Could be configurable
+            )
+            print(f"  Using GraphLevelEncoder with mean pooling")
+        else:
+            encoder = PretrainedEncoder(
+                feature_encoder=feature_encoder,
+                backbone=backbone,
+            )
+            print(f"  Using PretrainedEncoder (node-level)")
+    
+    # Verify encoder produces meaningful outputs (skip for prompt methods, verified internally)
+    if not is_prompt_method:
+        print("\n" + "=" * 60)
+        print("Verifying encoder outputs...")
+        print("=" * 60)
+        verify_result = verify_encoder_outputs(encoder, train_loader, device=device)
+        print(f"  Status: {verify_result['status']}")
+        print(f"  Output shape: {verify_result.get('shape', 'N/A')}")
+        print(f"  Mean: {verify_result.get('mean', 'N/A'):.4f}, Std: {verify_result.get('std', 'N/A'):.4f}")
+        print(f"  Range: [{verify_result.get('min', 'N/A'):.4f}, {verify_result.get('max', 'N/A'):.4f}]")
+        if verify_result.get('issues'):
+            print(f"  ISSUES: {verify_result['issues']}")
+    else:
+        verify_result = {"status": "SKIPPED (prompt method)"}
     
     # Initialize wandb if requested
     if use_wandb:
@@ -1446,63 +1616,81 @@ def run_downstream_evaluation(
             print("WARNING: wandb not installed, skipping logging")
             use_wandb = False
         else:
-            wandb.init(
-                project=wandb_project,
-                config={
-                    "mode": mode,
-                    "n_graphs": n_graphs,
-                    "n_train": n_train,
-                    "epochs": epochs,
-                    "lr": lr,
-                    "batch_size": batch_size,
-                    "seed": seed,
-                    "num_classes": num_classes,
-                    "hidden_dim": hidden_dim,
-                    "pretraining_run": str(run_dir),
-                    "encoder_verify": verify_result,
-                },
-            )
+            wandb_config = {
+                "mode": mode,
+                "n_evaluation_graphs": n_evaluation_graphs,
+                "n_val": len(val_data),
+                "n_test": len(test_data),
+                "n_train": n_train,
+                "n_train_actual": len(train_data),
+                "n_total_generated": n_evaluation_graphs + n_train if is_graph_universe else len(data_list),
+                "epochs": epochs,
+                "lr": lr,
+                "batch_size": batch_size,
+                "seed": seed,
+                "num_classes": num_classes,
+                "pretraining_run": str(run_dir),
+                "encoder_verify": verify_result,
+                "fixed_eval_set": is_graph_universe,
+            }
+            
+            # Add prompt-specific config
+            if is_prompt_method:
+                wandb_config["hidden_dim"] = prompt_info["hidden_dim"]
+                wandb_config["prompt_type"] = prompt_info["prompt_type"]
+                wandb_config["p_num"] = prompt_info["p_num"]
+                wandb_config["prompt_params"] = prompt_info["prompt_params"]
+            else:
+                wandb_config["hidden_dim"] = hidden_dim
+            
+            wandb.init(project=wandb_project, config=wandb_config)
     
-    # Create classifier based on mode
-    # For node-level classification: input is node embedding, output is K classes
-    print("\n" + "=" * 60)
-    print(f"Setting up downstream NODE-LEVEL evaluation (mode: {mode})...")
-    print("=" * 60)
-    print(f"  Hidden dim: {hidden_dim}, Num classes (K): {num_classes}")
-    
-    # Determine if encoder should be frozen
-    # - linear/mlp: frozen encoder (probing)
-    # - finetune: unfrozen encoder (fine-tuning pre-trained)
-    # - scratch: unfrozen encoder (training from random init)
-    freeze_encoder = mode in ["linear", "mlp"]
-    
-    if mode == "linear":
-        classifier = LinearClassifier(hidden_dim, num_classes)
-    else:  # mlp, finetune, or scratch
-        classifier = MLPClassifier(hidden_dim, num_classes)
-    
-    # Create downstream model
-    downstream_model = DownstreamModel(
-        encoder=encoder,
-        classifier=classifier,
-        freeze_encoder=freeze_encoder,
-        task_level=task_level,
-    )
+    # Create classifier based on mode (skip if already created by prompt method)
+    if not skip_manual_model_creation:
+        # For node-level classification: input is node embedding, output is K classes
+        print("\n" + "=" * 60)
+        print(f"Setting up downstream evaluation (mode: {mode})...")
+        print("=" * 60)
+        print(f"  Hidden dim: {hidden_dim}, Num classes (K): {num_classes}")
+        
+        # Determine if encoder should be frozen
+        # - linear/mlp: frozen encoder (probing)
+        # - untrained_frozen: frozen random encoder (baseline to test if frozen matters)
+        # - finetune: unfrozen encoder (fine-tuning pre-trained)
+        # - scratch: unfrozen encoder (training from random init)
+        freeze_encoder = mode in ["linear", "mlp", "untrained_frozen"]
+        
+        if mode == "linear":
+            classifier = LinearClassifier(hidden_dim, num_classes)
+        else:  # mlp, finetune, or scratch
+            classifier = MLPClassifier(hidden_dim, num_classes)
+        
+        # Create downstream model
+        downstream_model = DownstreamModel(
+            encoder=encoder,
+            classifier=classifier,
+            freeze_encoder=freeze_encoder,
+            task_level=task_level,
+        )
     
     # Set model to train mode before checking state
     downstream_model.train()
     
     # Get detailed model state info
-    state_info = downstream_model.get_model_state_info()
-    total_params = sum(p.numel() for p in downstream_model.parameters())
-    trainable_params = sum(p.numel() for p in downstream_model.parameters() if p.requires_grad)
-    
-    print(f"Total parameters: {total_params:,}")
-    print(f"Trainable parameters: {trainable_params:,}")
-    print(f"Encoder frozen: {freeze_encoder}")
-    print(f"  - Encoder params: {state_info['encoder_params']:,} ({state_info['encoder_trainable']:,} trainable)")
-    print(f"  - Encoder in train mode: {state_info['encoder_in_train_mode']} (should be {not freeze_encoder})")
-    print(f"  - Classifier params: {state_info['classifier_params']:,}")
+    if not is_prompt_method:
+        state_info = downstream_model.get_model_state_info()
+        total_params = sum(p.numel() for p in downstream_model.parameters())
+        trainable_params = sum(p.numel() for p in downstream_model.parameters() if p.requires_grad)
+        
+        print(f"Total parameters: {total_params:,}")
+        print(f"Trainable parameters: {trainable_params:,}")
+        print(f"Encoder frozen: {freeze_encoder}")
+        print(f"  - Encoder params: {state_info['encoder_params']:,} ({state_info['encoder_trainable']:,} trainable)")
+        print(f"  - Encoder in train mode: {state_info['encoder_in_train_mode']} (should be {not freeze_encoder})")
+        print(f"  - Classifier params: {state_info['classifier_params']:,}")
+    else:
+        # Already printed by create_prompted_model
+        pass
     
     # Train
     print("\n" + "=" * 60)
@@ -1542,19 +1730,42 @@ def run_downstream_evaluation(
     
     # Add metadata to results
     results["mode"] = mode
-    results["n_graphs"] = n_graphs
+    results["n_evaluation_graphs"] = n_evaluation_graphs
     results["n_train"] = n_train
+    results["n_train_actual"] = len(train_data)
+    results["n_val"] = len(val_data)
+    results["n_test"] = len(test_data)
     results["num_classes"] = num_classes
     results["history"] = history
     results["from_scratch"] = (mode == "scratch")
-    results["encoder_frozen"] = freeze_encoder
+    # Determine if encoder was frozen (for prompt methods, check mode; otherwise use freeze_encoder variable)
+    if is_prompt_method:
+        results["encoder_frozen"] = True  # Prompt methods always freeze encoder
+    else:
+        results["encoder_frozen"] = freeze_encoder
+    results["fixed_eval_set"] = is_graph_universe
     results["config"] = {
         "epochs": epochs,
         "lr": lr,
         "batch_size": batch_size,
         "seed": seed,
-        "hidden_dim": hidden_dim,
+        "hidden_dim": prompt_info["hidden_dim"] if is_prompt_method else hidden_dim,
     }
+    
+    # Print final summary
+    print("\n" + "=" * 60)
+    print("EVALUATION SUMMARY")
+    print("=" * 60)
+    if is_graph_universe:
+        print(f"Dataset approach: FIXED eval set (first {n_evaluation_graphs} graphs) + ADDITIONAL train (next {n_train} graphs)")
+        print(f"All graphs generated together with seed={seed}")
+    else:
+        print(f"Dataset approach: Traditional split")
+    print(f"Training graphs: {len(train_data)}")
+    print(f"Validation graphs: {len(val_data)}")
+    print(f"Test graphs: {len(test_data)}")
+    print(f"Test Accuracy: {results['test_accuracy']:.4f}")
+    print("=" * 60)
     
     return results
 
@@ -1568,7 +1779,7 @@ def main():
         description="Downstream NODE-LEVEL evaluation of pre-trained TopoBench models."
     )
     parser.add_argument(
-        "--run_dir", type=str, required=True,
+        "--run_dir", type=str, default="../../../data/louisvl/TB/outputs/wandb/run-20251215_130646-2mnqjy9t",
         help="Path to wandb run directory"
     )
     parser.add_argument(
@@ -1576,17 +1787,25 @@ def main():
         help="Path to checkpoint file"
     )
     parser.add_argument(
-        "--n_graphs", type=int, default=500,
-        help="Number of graphs to generate (default: 100)"
+        "--n_evaluation_graphs", type=int, default=200,
+        help="Number of FIXED evaluation graphs (val+test, same for all n_train). Default: 200"
     )
     parser.add_argument(
         "--n_train", type=int, default=50,
-        help="Number of training graphs (default: 50)"
+        help="Number of ADDITIONAL training graphs (generated separately). Default: 50"
     )
     parser.add_argument(
-        "--mode", type=str, default="linear",
-        choices=["linear", "mlp", "finetune", "scratch"],
-        help="Evaluation mode: linear/mlp (frozen encoder), finetune (unfrozen pretrained), scratch (random init baseline)"
+        "--n_graphs", type=int, default=None,
+        help="DEPRECATED: Use --n_evaluation_graphs instead"
+    )
+    parser.add_argument(
+        "--mode", type=str, default="finetune",
+        choices=["linear", "mlp", "finetune", "scratch", "gpf", "gpf-plus", "untrained_frozen"],
+        help="Evaluation mode: linear/mlp (frozen encoder), finetune (unfrozen pretrained), scratch (random init baseline), untrained_frozen (random init, frozen encoder), gpf/gpf-plus (prompt tuning)"
+    )
+    parser.add_argument(
+        "--p_num", type=int, default=5,
+        help="Number of basis vectors for GPF-Plus (default: 5)"
     )
     parser.add_argument(
         "--epochs", type=int, default=400,
@@ -1598,11 +1817,11 @@ def main():
     )
     parser.add_argument(
         "--batch_size", type=int, default=16,
-        help="Batch size in graphs (default: 32)"
+        help="Batch size in graphs (default: 16)"
     )
     parser.add_argument(
-        "--patience", type=int, default=100,
-        help="Early stopping patience (default: 20)"
+        "--patience", type=int, default=50,
+        help="Early stopping patience (default: 50)"
     )
     parser.add_argument(
         "--device", type=str, default="cuda",
@@ -1617,7 +1836,7 @@ def main():
         help="Enable Weights & Biases logging"
     )
     parser.add_argument(
-        "--wandb_project", type=str, default="downstream_eval",
+        "--wandb_project", type=str, default="downstream_eval_big_run",
         help="W&B project name (default: downstream_eval)"
     )
 
@@ -1632,9 +1851,9 @@ def main():
     results = run_downstream_evaluation(
         run_dir=args.run_dir,
         checkpoint_path=args.checkpoint,
-        n_graphs=args.n_graphs,
+        n_evaluation_graphs=args.n_evaluation_graphs,
         n_train=args.n_train,
-        subsample_from_train=args.subsample_from_train,  # Add this
+        subsample_from_train=args.subsample_from_train,
         mode=args.mode,
         epochs=args.epochs,
         lr=args.lr,
@@ -1644,6 +1863,8 @@ def main():
         seed=args.seed,
         use_wandb=args.wandb,
         wandb_project=args.wandb_project,
+        n_graphs=args.n_graphs,  # Backward compatibility
+        p_num=args.p_num,
     )
     
     print("\n" + "=" * 60)
@@ -1658,9 +1879,12 @@ def main():
         print("  (Frozen pre-trained encoder)")
     print(f"Test Accuracy: {results['test_accuracy']:.4f}")
     print(f"Number of classes (K): {results['num_classes']}")
-    print(f"Training graphs: {args.n_train}")
-    print(f"Total graphs: {args.n_graphs}")
+    print(f"Training graphs: {results['n_train_actual']}")
+    print(f"Validation graphs: {results['n_val']}")
+    print(f"Test graphs: {results['n_test']}")
     print(f"Test nodes: {results['num_nodes']}")
+    if results.get('fixed_eval_set'):
+        print(f"\nNote: Using FIXED evaluation set approach for fair comparison")
     
     return results
 

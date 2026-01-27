@@ -1,0 +1,15 @@
+# S2GAE Loss Configuration
+
+_target_: topobench.loss.TBLoss
+
+dataset_loss:
+  _target_: topobench.loss.dataset.S2GAELoss
+  loss_type: bce  # Options: bce, weighted_bce
+  pos_weight: 1.0  # Weight for positive samples (only used for weighted_bce)
+
+modules_losses:
+  feature_encoder: ${oc.select:model.feature_encoder.loss,null}
+  backbone: ${oc.select:model.backbone.loss,null}
+  readout: ${oc.select:model.readout.loss,null}
+
+

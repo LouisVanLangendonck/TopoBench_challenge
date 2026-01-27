@@ -163,6 +163,8 @@ def get_monitor_metric(task, metric):
         or task == "graphcl"
         or task == "graphmaev2"
         or task == "linkpred"
+        or task == "s2gae"
+        or task == "higmae"
     ):
         return f"val/{metric}"
     else:
@@ -192,6 +194,8 @@ def get_monitor_mode(task):
         or task == "multilabel classification"
         or task == "dgi"  # DGI: maximize discrimination accuracy
         or task == "graphmaev2"  # GraphMAEv2: maximize cosine similarity
+        or task == "s2gae"  # S2GAE: maximize edge reconstruction accuracy
+        or task == "higmae"  # Hi-GMAE: maximize cosine similarity
         ):
         return "max"
 
@@ -537,5 +541,9 @@ def get_default_metrics(task, metrics=None):
             return ["pos_score", "neg_score", "discrimination_acc"]
         elif "graphcl" in task:
             return ["contrastive_loss", "alignment", "cosine_sim"]
+        elif "s2gae" in task:
+            return ["edge_accuracy", "edge_reconstruction_loss"]
+        elif "higmae" in task:
+            return ["recon_loss", "cosine_sim"]
         else:
             raise ValueError(f"Invalid task {task}")

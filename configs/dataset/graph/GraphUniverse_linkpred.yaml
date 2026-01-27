@@ -16,7 +16,7 @@ loader:
         edge_propensity_variance: 0.5
         seed: 42
       family_parameters:
-        n_graphs: 5000
+        n_graphs: 500
         min_n_nodes: 50
         max_n_nodes: 300
         min_communities: 2
@@ -36,7 +36,7 @@ parameters:
   task: linkpred
   loss_type: bce  # Used internally by LinkPred loss
   monitor_metric: auc  # Track AUC-ROC (higher = better)
-  task_level: edge
+  task_level: node
 
 #splits
 split_params:

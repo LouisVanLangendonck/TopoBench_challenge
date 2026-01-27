@@ -1,0 +1,15 @@
+# Hi-GMAE Loss Configuration
+
+_target_: topobench.loss.TBLoss
+
+dataset_loss:
+  _target_: topobench.loss.dataset.HiGMAELoss
+  loss_type: sce  # Options: sce, mse
+  alpha: 1.0  # Alpha parameter for SCE loss
+
+modules_losses:
+  feature_encoder: ${oc.select:model.feature_encoder.loss,null}
+  backbone: ${oc.select:model.backbone.loss,null}
+  readout: ${oc.select:model.readout.loss,null}
+
+

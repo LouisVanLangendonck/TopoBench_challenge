@@ -1,49 +1,48 @@
 _target_: topobench.model.TBModel
 
-model_name: gps_linkpred
+model_name: gat
 model_domain: graph
 
 feature_encoder:
   _target_: topobench.nn.encoders.${model.feature_encoder.encoder_name}
   encoder_name: AllCellFeatureEncoder
-  in_channels: ${infer_in_channels:${dataset},${oc.select:transforms,null}}
-  out_channels: 64
+  in_channels: ${infer_in_channels:${dataset},${oc.select:transforms,null}} 
+  out_channels: 32
   proj_dropout: 0.0
 
 backbone:
-  _target_: topobench.nn.backbones.GPSEncoder
-  input_dim: ${model.feature_encoder.out_channels}
-  hidden_dim: ${model.feature_encoder.out_channels}
-  num_layers: 2
-  dropout: 0.2
-  heads: 2
-  attn_type: multihead
-  local_conv_type: gin
+  _target_: torch_geometric.nn.models.GAT
+  in_channels: ${model.feature_encoder.out_channels}
+  hidden_channels: ${model.feature_encoder.out_channels}
+  num_layers: 3
+  dropout: 0.0
+  act: relu
+  v2: true
+  heads: 4
+  concat: true
 
-# Use LinkPredGNNWrapper for edge masking and negative sampling
+# Use DGIGNNWrapper for corruption and encoding
 backbone_wrapper:
-  _target_: topobench.nn.wrappers.LinkPredGNNWrapper 
+  _target_: topobench.nn.wrappers.DGIGNNWrapper 
   _partial_: true
-  wrapper_name: LinkPredGNNWrapper
+  wrapper_name: DGIGNNWrapper
   out_channels: ${model.feature_encoder.out_channels}
   num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
-  # Link prediction-specific parameters
-  mask_ratio: 0.3  # Ratio of edges to mask for prediction
-  neg_sampling_ratio: 1.0  # Ratio of negative samples per positive
+  # DGI-specific parameters
+  corruption_type: shuffle  # Options: shuffle, random
+  readout_type: mean  # Options: mean, max, sum
 
-# LinkPredReadOut handles the edge decoder
+# DGIReadOut handles the discriminator
 readout:
   _target_: topobench.nn.readouts.${model.readout.readout_name}
-  readout_name: LinkPredReadOut
+  readout_name: DGIReadOut
   num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
   hidden_dim: ${model.feature_encoder.out_channels}
   out_channels: ${model.feature_encoder.out_channels}
-  task_level: edge
+  task_level: ${dataset.parameters.task_level}
   pooling_type: sum
-  # Link prediction readout specific parameters
-  decoder_type: mlp  # Options: dot, bilinear, mlp
+  # DGI readout specific parameters
+  discriminator_type: bilinear  # Options: bilinear, mlp
 
 # compile model for faster training with pytorch 2.0
 compile: false
-
-

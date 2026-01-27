@@ -1,6 +1,6 @@
 _target_: topobench.model.TBModel
 
-model_name: gat
+model_name: gat_dgi
 model_domain: graph
 
 feature_encoder:

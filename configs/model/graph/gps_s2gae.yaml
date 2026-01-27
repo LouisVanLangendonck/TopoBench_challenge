@@ -1,47 +1,49 @@
 _target_: topobench.model.TBModel
 
-model_name: gps_linkpred
+model_name: gps_s2gae
 model_domain: graph
 
 feature_encoder:
   _target_: topobench.nn.encoders.${model.feature_encoder.encoder_name}
   encoder_name: AllCellFeatureEncoder
   in_channels: ${infer_in_channels:${dataset},${oc.select:transforms,null}}
-  out_channels: 64
-  proj_dropout: 0.0
+  out_channels: 128
+  proj_dropout: 0.1
 
 backbone:
   _target_: topobench.nn.backbones.GPSEncoder
   input_dim: ${model.feature_encoder.out_channels}
   hidden_dim: ${model.feature_encoder.out_channels}
-  num_layers: 2
-  dropout: 0.2
-  heads: 2
+  num_layers: 4
+  dropout: 0.5
+  heads: 4
   attn_type: multihead
   local_conv_type: gin
 
-# Use LinkPredGNNWrapper for edge masking and negative sampling
+# Use S2GAEGNNWrapper for edge masking and multi-layer representation
 backbone_wrapper:
-  _target_: topobench.nn.wrappers.LinkPredGNNWrapper 
+  _target_: topobench.nn.wrappers.S2GAEGNNWrapper 
   _partial_: true
-  wrapper_name: LinkPredGNNWrapper
+  wrapper_name: S2GAEGNNWrapper
   out_channels: ${model.feature_encoder.out_channels}
   num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
-  # Link prediction-specific parameters
-  mask_ratio: 0.3  # Ratio of edges to mask for prediction
-  neg_sampling_ratio: 1.0  # Ratio of negative samples per positive
+  # S2GAE-specific parameters
+  mask_ratio: 0.5  # Ratio of edges to mask during training
+  mask_type: undirected  # undirected or directed edge masking
+  mask_during_eval: true  # Also mask edges during validation/testing for evaluation
 
-# LinkPredReadOut handles the edge decoder
+# S2GAEReadOut handles cross-layer edge reconstruction
 readout:
   _target_: topobench.nn.readouts.${model.readout.readout_name}
-  readout_name: LinkPredReadOut
+  readout_name: S2GAEReadOut
   num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
   hidden_dim: ${model.feature_encoder.out_channels}
-  out_channels: ${model.feature_encoder.out_channels}
-  task_level: edge
-  pooling_type: sum
-  # Link prediction readout specific parameters
-  decoder_type: mlp  # Options: dot, bilinear, mlp
+  out_channels: 1  # Binary edge prediction
+  task_level: node
+  num_layers: ${model.backbone.num_layers}
+  # S2GAE decoder parameters
+  decoder_hidden_dim: 256
+  decoder_layers: 2
 
 # compile model for faster training with pytorch 2.0
 compile: false

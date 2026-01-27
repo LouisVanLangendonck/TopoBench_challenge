@@ -112,7 +112,7 @@ def collate_fn(batch):
             data[key] = value
 
         # Generate batch_slice values for x_1, x_2, x_3, ...
-        x_keys = [el for el in keys if ("x_" in el)]
+        x_keys = [el for el in keys if ("x_" in el) and el != "x_raw"]
         for x_key in x_keys:
             # if x_key != "x_0":
             if x_key != "x_hyperedges":
