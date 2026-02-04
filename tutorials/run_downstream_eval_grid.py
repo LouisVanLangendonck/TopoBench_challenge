@@ -1,46 +1,83 @@
 """
-Automated downstream evaluation for pre-trained models using wandb API.
+Automated downstream evaluation grid with flexible parameter exploration.
 
-This script:
-1. Fetches runs from a wandb project via the API
-2. Automatically detects unique dataset and base model configurations
-3. Runs scratch baselines only once per unique (dataset_config, base_model_config, n_train)
-4. Runs finetuning for all pretraining variations per base configuration
-5. Logs all results to wandb with original pre-training config
+This script provides a flexible grid search over downstream evaluation parameters:
+- Multiple pretrained model run directories OR a wandb project to fetch all runs
+- Multiple training set sizes (n_train)
+- Multiple tasks (community_detection, triangle_counting, basic_property_reconstruction)
+- Multiple evaluation modes (linear, mlp, finetune, scratch, gpf, gpf-plus, etc.)
+- Multiple GraphUniverse override configurations
 
-Key Features:
-- Works with wandb projects directly (no local file access needed)
-- Automatically extracts unique dataset configs
-- Automatically extracts base model configs (excluding pretraining-specific params)
-- Smart deduplication for scratch models
-- Supports any pretraining method (DGI, GraphCL, GraphMAE, etc.)
-- **Parallel execution across multiple GPUs for faster evaluation**
+All combinations of the specified parameters are evaluated, with results logged to wandb.
+
+GraphUniverse Overrides:
+    - Define your override configurations in DEFAULT_GRAPHUNIVERSE_OVERRIDES (line ~60)
+    - These will be used by default if --graphuniverse_overrides is not specified
+    - Each override is a dict that recursively updates the pretraining config
+    - Use None for no override (pretraining config as-is)
+
+WANDB Tracking:
+    Each experiment run logs comprehensive config to wandb for easy plotting/filtering:
+    - graphuniverse_override: Full nested dict of override parameters
+    - has_override: Boolean flag (True/False)
+    - override_hash: Short hash identifying unique override configs
+    - override/*: Flattened parameters (e.g., override/family_parameters/homophily_range)
+    - override_label/homophily: Human-readable labels ("high", "low", or range)
+    
+    Example plots in wandb:
+    - Test accuracy vs n_train, colored by override_label/homophily
+    - Test accuracy vs mode, filtered by has_override == True
+    - Compare performance across different homophily ranges
 
 Usage:
-    # Sequential (single GPU)
-    python tutorials/run_downstream_eval_grid_v2.py \
-        --wandb_project "entity/project-name" \
-        --device cuda
-    
-    # Parallel (4 GPUs)
-    python tutorials/run_downstream_eval_grid_v2.py \
-        --wandb_project "entity/project-name" \
-        --device cuda \
-        --num_workers 4 \
-        --devices 0 1 2 3
+    # Fetch all runs from a wandb project
+    python tutorials/run_downstream_eval_grid.py \
+        --wandb_pretrain_project myteam/pretraining_project \
+        --n_train 10 50 100 \
+        --tasks community_detection \
+        --modes finetune scratch \
+        --device cuda:0 \
+        --wandb_project downstream_eval_grid
+
+    # Or specify run directories manually
+    python tutorials/run_downstream_eval_grid.py \
+        --run_dirs data/outputs/wandb/run-1 data/outputs/wandb/run-2 \
+        --n_train 10 50 100 \
+        --tasks community_detection \
+        --modes finetune scratch \
+        --device cuda:0 \
+        --wandb_project downstream_eval_grid
+
+    # With command-line overrides (overrides DEFAULT_GRAPHUNIVERSE_OVERRIDES)
+    python tutorials/run_downstream_eval_grid.py \
+        --wandb_pretrain_project myteam/pretraining_project \
+        --n_train 50 \
+        --tasks community_detection \
+        --modes finetune \
+        --graphuniverse_overrides \
+            'null' \
+            '{"family_parameters": {"homophily_range": [0.9, 1.0]}}' \
+            '{"family_parameters": {"homophily_range": [0.0, 0.1]}}' \
+        --device cuda:0
+
+    # Property reconstruction task
+    python tutorials/run_downstream_eval_grid.py \
+        --wandb_pretrain_project myteam/pretraining_project \
+        --n_train 50 100 \
+        --tasks basic_property_reconstruction \
+        --modes finetune \
+        --readout_types sum \
+        --device cuda:0
 """
 
 import argparse
 import sys
+import json
+import itertools
 from pathlib import Path
 from datetime import datetime
-import json
-import hashlib
-import yaml
-from copy import deepcopy
-from concurrent.futures import ProcessPoolExecutor, as_completed
-from multiprocessing import Manager
-import queue
+from typing import List, Dict, Any
+import numpy as np
 
 # Allow running from local repo
 _THIS_DIR = Path(__file__).resolve().parent
@@ -49,8 +86,7 @@ if (_REPO_ROOT / "topobench").exists():
     sys.path.insert(0, str(_REPO_ROOT))
 
 # Add tutorials to path
-_TUTORIALS_DIR = _REPO_ROOT / "tutorials"
-sys.path.insert(0, str(_TUTORIALS_DIR))
+sys.path.insert(0, str(_THIS_DIR))
 
 try:
     import wandb
@@ -59,866 +95,673 @@ except ImportError:
     print("ERROR: wandb not installed. This script requires wandb.")
     sys.exit(1)
 
-from downstream_eval import run_downstream_evaluation
+from downstream_eval import run_downstream_evaluation, load_wandb_config, get_checkpoint_path_from_summary
 
 
 # =============================================================================
-# Configuration
+# JSON Serialization Helper
 # =============================================================================
 
-# Modes to evaluate
-EVAL_MODES = ['gpf', 'gpf-plus', 'mlp', 'scratch', 'finetune'] #["finetune", "scratch"]
-
-# Prompt tuning modes (optional, with hyperparameter grids)
-PROMPT_MODES = {
-    "gpf": {
-        "p_num": [1],  # Not used, but kept for consistency
-        "lr": [0.001],
-    },
-    "gpf-plus": {
-        "p_num": [5,10],  # Number of basis vectors to try
-        "lr": [0.001],
-    },
-}
-
-# Training set sizes to test
-N_TRAIN_VALUES = [1,5,10,50]
-
-# FIXED evaluation graphs (same for all N_train values for fair comparison)
-N_EVALUATION_VAL = 100
-N_EVALUATION_TEST = 100
-N_EVALUATION_TOTAL = N_EVALUATION_VAL + N_EVALUATION_TEST  # 200
-
-# Training hyperparameters
-EPOCHS = 400
-LR = 0.001
-BATCH_SIZE = 16
-PATIENCE = 30
-
-# Wandb project name for logging downstream evaluations
-DOWNSTREAM_WANDB_PROJECT = "linkpred_pretraining_downstream_eval_full"
+class NumpyEncoder(json.JSONEncoder):
+    """Custom JSON encoder that handles numpy types."""
+    def default(self, obj):
+        if isinstance(obj, np.integer):
+            return int(obj)
+        elif isinstance(obj, np.floating):
+            return float(obj)
+        elif isinstance(obj, np.ndarray):
+            return obj.tolist()
+        return super().default(obj)
 
 
 # =============================================================================
-# Configuration Extraction and Hashing
+# Wandb Project Fetching
 # =============================================================================
 
-def extract_dataset_config(config: dict) -> dict:
-    """
-    Extract dataset configuration (everything that affects data generation).
-    
-    This includes:
-    - GraphUniverse generation parameters (homophily, n_graphs, etc.)
-    - TUDataset parameters
-    - Any other dataset-specific settings
-    
-    Returns
-    -------
-    dict
-        Normalized dataset config for comparison.
-    """
-    dataset_config = config.get("dataset", {})
-    
-    # Get loader parameters
-    loader_params = dataset_config.get("loader", {}).get("parameters", {})
-    
-    # For GraphUniverse, extract generation parameters
-    if "generation_parameters" in loader_params:
-        gen_params = loader_params["generation_parameters"]
-        return {
-            "type": "GraphUniverse",
-            "task": gen_params.get("task"),
-            "universe_params": gen_params.get("universe_parameters", {}),
-            "family_params": gen_params.get("family_parameters", {}),
-        }
-    
-    # For other datasets, extract relevant params
-    return {
-        "type": dataset_config.get("loader", {}).get("_target_", "unknown"),
-        "data_name": loader_params.get("data_name"),
-        "parameters": dataset_config.get("parameters", {}),
-    }
-
-
-def extract_base_model_config(config: dict) -> dict:
-    """
-    Extract base model configuration (excluding pretraining-specific params).
-    
-    This includes:
-    - Feature encoder settings
-    - Backbone architecture (layers, hidden dims, dropout, etc.)
-    - But EXCLUDES wrapper-specific params (augmentations, corruption, etc.)
-    
-    Returns
-    -------
-    dict
-        Normalized base model config for comparison.
-    """
-    model_config = config.get("model", {})
-    
-    # Feature encoder (always included)
-    feature_encoder = model_config.get("feature_encoder", {})
-    
-    # Backbone architecture (excluding wrapper)
-    backbone = model_config.get("backbone", {})
-    
-    return {
-        "model_name": model_config.get("model_name"),
-        "feature_encoder": {
-            "encoder_name": feature_encoder.get("encoder_name"),
-            "out_channels": feature_encoder.get("out_channels"),
-            "proj_dropout": feature_encoder.get("proj_dropout"),
-        },
-        "backbone": {
-            "_target_": backbone.get("_target_"),
-            "num_layers": backbone.get("num_layers"),
-            "hidden_channels": backbone.get("hidden_channels"),
-            "hidden_dim": backbone.get("hidden_dim"),
-            "dropout": backbone.get("dropout"),
-            "heads": backbone.get("heads"),
-            "attn_type": backbone.get("attn_type"),
-            # Add other architecture params but not wrapper-specific ones
-        },
-    }
-
-
-def extract_pretraining_specific_config(config: dict) -> dict:
-    """
-    Extract pretraining-specific configuration.
-    
-    This includes:
-    - Wrapper parameters (augmentations, corruption, masking, etc.)
-    - Readout parameters specific to pretraining (discriminator, projection head, etc.)
-    
-    Returns
-    -------
-    dict
-        Pretraining-specific config.
-    """
-    model_config = config.get("model", {})
-    
-    wrapper = model_config.get("backbone_wrapper", {})
-    readout = model_config.get("readout", {})
-    
-    return {
-        "wrapper": wrapper,
-        "readout": readout,
-    }
-
-
-def config_to_hash(config_dict: dict) -> str:
-    """
-    Convert a config dict to a stable hash for comparison.
-    
-    Parameters
-    ----------
-    config_dict : dict
-        Configuration dictionary.
-    
-    Returns
-    -------
-    str
-        MD5 hash of the canonicalized JSON representation.
-    """
-    # Canonicalize: sort keys, convert to JSON
-    canonical = json.dumps(config_dict, sort_keys=True)
-    return hashlib.md5(canonical.encode()).hexdigest()
-
-
-def detect_pretraining_method(config: dict) -> str:
-    """
-    Detect which pre-training method was used.
-    
-    Returns
-    -------
-    str
-        One of: 'dgi', 'graphmae', 'graphmaev2', 'graphcl', 'linkpred', 'supervised', 'unknown'
-    """
-    model_config = config.get("model", {})
-    wrapper_config = model_config.get("backbone_wrapper", {})
-    
-    if wrapper_config:
-        wrapper_target = wrapper_config.get("_target_", "")
-        if "DGI" in wrapper_target:
-            return "dgi"
-        elif "GraphMAEv2" in wrapper_target:
-            return "graphmaev2"
-        elif "GraphMAE" in wrapper_target:
-            return "graphmae"
-        elif "GraphCL" in wrapper_target:
-            return "graphcl"
-        elif "LinkPred" in wrapper_target:
-            return "linkpred"
-    
-    return "supervised"
-
-
-# =============================================================================
-# Wandb API Integration
-# =============================================================================
-
-def fetch_runs_from_wandb(
+def fetch_runs_from_wandb_project(
     project_path: str,
-    filters: dict = None,
-    max_runs: int = None,
-) -> list[dict]:
+    filters: dict | None = None,
+    min_runs: int = 1,
+) -> List[Dict[str, Any]]:
     """
-    Fetch runs from wandb project via API.
+    Fetch all runs from a wandb project and extract their local paths and configs.
     
     Parameters
     ----------
     project_path : str
-        Wandb project path in format "entity/project-name".
+        Wandb project path in format "entity/project" or just "project".
     filters : dict, optional
-        Additional filters for wandb API query.
-    max_runs : int, optional
-        Maximum number of runs to fetch.
+        Filters to apply when fetching runs (e.g., {"state": "finished"}).
+    min_runs : int
+        Minimum number of runs expected (raises error if fewer found).
     
     Returns
     -------
-    list[dict]
-        List of run metadata dicts.
+    List[Dict[str, Any]]
+        List of dicts with keys: "run_dir", "run_id", "config", "checkpoint_path", "pretrain_config"
     """
-    print(f"\nFetching runs from wandb project: {project_path}")
-    
-    # Initialize wandb API
     api = wandb.Api()
     
+    # Parse project path
+    if "/" in project_path:
+        entity, project = project_path.split("/", 1)
+    else:
+        entity = None
+        project = project_path
+    
+    print(f"\n{'=' * 80}")
+    print(f"FETCHING RUNS FROM WANDB PROJECT: {project_path}")
+    print(f"{'=' * 80}")
+    
+    # Build filter
+    if filters is None:
+        filters = {"state": "finished"}
+    
     # Fetch runs
-    runs = api.runs(project_path, filters=filters)
+    if entity:
+        runs = api.runs(f"{entity}/{project}", filters=filters)
+    else:
+        runs = api.runs(project, filters=filters)
     
-    run_metadata_list = []
+    run_infos = []
     
-    for i, run in enumerate(runs):
-        if max_runs and i >= max_runs:
-            break
+    for run in runs:
+        run_id = run.id
+        run_name = run.name
         
-        print(f"\n[{i+1}] {run.name} ({run.id})")
-        print(f"  State: {run.state}")
-        print(f"  Created: {run.created_at}")
-        
-        # Skip failed/crashed runs
-        if run.state not in ["finished", "running"]:
-            print(f"  ⚠️  Skipping (state: {run.state})")
-            continue
-        
-        # Get config
-        config = run.config
-        
-        # Get checkpoint path from summary
+        # Try to get checkpoint path from summary
         checkpoint_path = run.summary.get("best_epoch/checkpoint")
         
-        if not checkpoint_path:
-            print(f"  ⚠️  Skipping (no checkpoint found)")
+        if checkpoint_path is None:
+            print(f"  ⚠️  Skipping {run_id} ({run_name}): no checkpoint in summary")
             continue
         
-        # Check if GraphUniverse
-        dataset_config = config.get("dataset", {})
-        loader_target = dataset_config.get("loader", {}).get("_target_", "")
-        is_graph_universe = "GraphUniverse" in loader_target
+        # Get run directory from wandb
+        # This assumes the run was logged to local wandb (data/outputs/wandb/run-...)
+        # If you're using a different structure, adjust accordingly
+        run_dir = None
         
-        if not is_graph_universe:
-            print(f"  ⚠️  Skipping (not GraphUniverse)")
+        # Try to find local run directory
+        # Wandb stores runs as: {wandb_dir}/run-{timestamp}-{run_id}
+        potential_wandb_dirs = [
+            Path("data/outputs/wandb"),
+            Path("wandb"),
+        ]
+        
+        for wandb_dir in potential_wandb_dirs:
+            if wandb_dir.exists():
+                # Look for run directory matching this run_id
+                for run_path in wandb_dir.iterdir():
+                    if run_path.is_dir() and run_id in run_path.name:
+                        run_dir = str(run_path)
+                        break
+            if run_dir:
+                break
+        
+        if run_dir is None:
+            print(f"  ⚠️  Skipping {run_id} ({run_name}): local run directory not found")
             continue
         
-        # Check if pretraining run
-        wrapper_config = config.get("model", {}).get("backbone_wrapper", {})
-        is_pretraining = wrapper_config is not None and len(wrapper_config) > 0
+        # Get config from wandb API
+        config = dict(run.config)
         
-        if not is_pretraining:
-            print(f"  ⚠️  Skipping (not a pretraining run)")
-            continue
+        # Load full pretraining config from local files
+        pretrain_config = load_wandb_config(run_dir)
         
-        # Detect pretraining method
-        pretraining_method = detect_pretraining_method(config)
-        model_name = config.get("model", {}).get("model_name", "unknown")
-        
-        print(f"  ✓ {pretraining_method} - {model_name}")
-        
-        # Extract configs
-        dataset_cfg = extract_dataset_config(config)
-        base_model_cfg = extract_base_model_config(config)
-        pretraining_cfg = extract_pretraining_specific_config(config)
-        
-        metadata = {
-            "run_id": run.id,
-            "run_name": run.name,
-            "run_path": run.path,
-            "checkpoint_path": checkpoint_path,
-            "pretraining_method": pretraining_method,
-            "model_name": model_name,
+        run_infos.append({
+            "run_dir": run_dir,
+            "run_id": run_id,
+            "run_name": run_name,
             "config": config,
-            "dataset_config": dataset_cfg,
-            "base_model_config": base_model_cfg,
-            "pretraining_config": pretraining_cfg,
-            "dataset_hash": config_to_hash(dataset_cfg),
-            "base_model_hash": config_to_hash(base_model_cfg),
-            "pretraining_hash": config_to_hash(pretraining_cfg),
-        }
+            "checkpoint_path": checkpoint_path,
+            "pretrain_config": pretrain_config,  # Full pretraining config
+        })
         
-        run_metadata_list.append(metadata)
+        print(f"  ✓ {run_id} ({run_name})")
+        print(f"    Dir: {run_dir}")
+        print(f"    Checkpoint: {checkpoint_path}")
     
-    print(f"\nFetched {len(run_metadata_list)} valid pretraining runs")
+    print(f"\n{'=' * 80}")
+    print(f"FOUND {len(run_infos)} RUNS WITH VALID CHECKPOINTS")
+    print(f"{'=' * 80}\n")
     
-    return run_metadata_list
+    if len(run_infos) < min_runs:
+        raise ValueError(
+            f"Expected at least {min_runs} runs, but only found {len(run_infos)} "
+            f"with valid checkpoints in project {project_path}"
+        )
+    
+    return run_infos
 
 
 # =============================================================================
-# Downstream Evaluation
+# Default GraphUniverse Override Configurations
+# =============================================================================
+# Define your GraphUniverse override configurations here as a list of dicts.
+# These will be used as the default if --graphuniverse_overrides is not specified.
+# Set to [None] to use pretraining config without modifications.
+
+DEFAULT_GRAPHUNIVERSE_OVERRIDES = [
+    None
+]
+
+
+# =============================================================================
+# Grid Configuration
 # =============================================================================
 
-def run_single_downstream_eval(
-    run_metadata: dict,
-    mode: str,
-    n_train: int,
+def generate_grid_configs(
+    run_dirs: List[str],
+    n_train_values: List[int],
+    tasks: List[str],
+    modes: List[str],
+    graphuniverse_overrides: List[Dict | None],
+    n_evaluation_graphs: int = 200,
+    readout_types: List[str] = None,
+    p_nums: List[int] = None,
+    run_infos: List[Dict[str, Any]] = None,  # NEW: Include pretraining configs
+) -> List[Dict[str, Any]]:
+    """
+    Generate all combinations of grid parameters.
+    
+    Parameters
+    ----------
+    run_dirs : List[str]
+        List of pretrained model run directories.
+    n_train_values : List[int]
+        List of training set sizes to test.
+    tasks : List[str]
+        List of tasks to evaluate ("community_detection", "triangle_counting", "basic_property_reconstruction").
+    modes : List[str]
+        List of evaluation modes ("linear", "mlp", "finetune", "scratch", etc.).
+    graphuniverse_overrides : List[Dict | None]
+        List of GraphUniverse override configurations. Use [None] for no override.
+    n_evaluation_graphs : int
+        Number of fixed evaluation graphs (default: 200).
+    readout_types : List[str], optional
+        List of readout types for graph-level tasks. If None, uses ["sum"] for each task.
+    p_nums : List[int], optional
+        List of p_num values for GPF-Plus. If None, uses [5] for prompt modes.
+    run_infos : List[Dict[str, Any]], optional
+        List of run info dicts with pretraining configs. If None, configs won't be included.
+    
+    Returns
+    -------
+    List[Dict[str, Any]]
+        List of configuration dictionaries for each experiment.
+    """
+    # Default readout types
+    if readout_types is None:
+        readout_types = ["sum"]
+    
+    # Default p_nums for prompt methods
+    if p_nums is None:
+        p_nums = [5]
+    
+    # Create a mapping from run_dir to pretrain_config
+    run_dir_to_config = {}
+    if run_infos is not None:
+        for info in run_infos:
+            run_dir_to_config[info["run_dir"]] = info.get("pretrain_config")
+    
+    configs = []
+    
+    # Generate all combinations
+    for run_dir in run_dirs:
+        # Get pretrain config for this run_dir
+        pretrain_config = run_dir_to_config.get(run_dir)
+        
+        for n_train in n_train_values:
+            for task in tasks:
+                    for mode in modes:
+                        for override in graphuniverse_overrides:
+                            # Skip prompt methods for property reconstruction (not yet supported)
+                            if task == "basic_property_reconstruction" and mode in ["gpf", "gpf-plus", "gpf-linear", "gpf-plus-linear"]:
+                                continue
+                            
+                            # For prompt methods, iterate over p_nums
+                            if mode in ["gpf", "gpf-plus", "gpf-linear", "gpf-plus-linear"]:
+                                for p_num in p_nums:
+                                    # For graph-level tasks, iterate over readout types
+                                    if task in ["triangle_counting", "basic_property_reconstruction"]:
+                                        for readout_type in readout_types:
+                                            configs.append({
+                                                "run_dir": run_dir,
+                                                "n_train": n_train,
+                                                "task": task,
+                                                "mode": mode,
+                                                "graphuniverse_override": override,
+                                                "n_evaluation_graphs": n_evaluation_graphs,
+                                                "readout_type": readout_type,
+                                                "p_num": p_num,
+                                                "pretrain_config": pretrain_config,  # NEW
+                                            })
+                                    else:
+                                        # Node-level task (community detection)
+                                        configs.append({
+                                            "run_dir": run_dir,
+                                            "n_train": n_train,
+                                            "task": task,
+                                            "mode": mode,
+                                            "graphuniverse_override": override,
+                                            "n_evaluation_graphs": n_evaluation_graphs,
+                                            "readout_type": "sum",  # Default, not used for node-level
+                                            "p_num": p_num,
+                                            "pretrain_config": pretrain_config,  # NEW
+                                        })
+                            else:
+                                # Non-prompt methods
+                                # For graph-level tasks, iterate over readout types
+                                if task in ["triangle_counting", "basic_property_reconstruction"]:
+                                    for readout_type in readout_types:
+                                        configs.append({
+                                            "run_dir": run_dir,
+                                            "n_train": n_train,
+                                            "task": task,
+                                            "mode": mode,
+                                            "graphuniverse_override": override,
+                                            "n_evaluation_graphs": n_evaluation_graphs,
+                                            "readout_type": readout_type,
+                                            "p_num": 5,  # Default, not used
+                                            "pretrain_config": pretrain_config,  # NEW
+                                        })
+                                else:
+                                    # Node-level task (community detection)
+                                    configs.append({
+                                        "run_dir": run_dir,
+                                        "n_train": n_train,
+                                        "task": task,
+                                        "mode": mode,
+                                        "graphuniverse_override": override,
+                                        "n_evaluation_graphs": n_evaluation_graphs,
+                                        "readout_type": "sum",  # Default, not used for node-level
+                                        "p_num": 5,  # Default, not used
+                                        "pretrain_config": pretrain_config,  # NEW
+                                    })
+    
+    return configs
+
+
+def get_experiment_name(config: Dict[str, Any], run_dir: str) -> str:
+    """
+    Generate a descriptive name for the experiment.
+    
+    Parameters
+    ----------
+    config : Dict[str, Any]
+        Configuration dictionary.
+    run_dir : str
+        Pretrained model run directory.
+    
+    Returns
+    -------
+    str
+        Descriptive experiment name.
+    """
+    # Extract run ID from path
+    run_id = Path(run_dir).name
+    
+    # Build name components
+    task_abbrev = {
+        "community_detection": "CD",
+        "triangle_counting": "TC",
+        "basic_property_reconstruction": "PR",
+    }
+    
+    components = [
+        run_id,
+        task_abbrev.get(config["task"], config["task"][:2].upper()),
+        config["mode"],
+        f"n{config['n_train']}",
+    ]
+    
+    # Add readout type if graph-level task
+    if config["task"] in ["triangle_counting", "basic_property_reconstruction"]:
+        components.append(f"ro_{config['readout_type']}")
+    
+    # Add p_num if prompt method
+    if config["mode"] in ["gpf", "gpf-plus", "gpf-linear", "gpf-plus-linear"]:
+        components.append(f"p{config['p_num']}")
+    
+    # Add override indicator if present
+    if config["graphuniverse_override"] is not None:
+        import hashlib
+        override_hash = hashlib.md5(
+            json.dumps(config["graphuniverse_override"], sort_keys=True).encode()
+        ).hexdigest()[:6]
+        components.append(f"ov_{override_hash}")
+    
+    return "_".join(components)
+
+
+def print_grid_summary(configs: List[Dict[str, Any]]):
+    """Print a summary of the grid configuration."""
+    print("\n" + "=" * 80)
+    print("DOWNSTREAM EVALUATION GRID SUMMARY")
+    print("=" * 80)
+    
+    # Extract unique values
+    run_dirs = sorted(set(c["run_dir"] for c in configs))
+    n_trains = sorted(set(c["n_train"] for c in configs))
+    tasks = sorted(set(c["task"] for c in configs))
+    modes = sorted(set(c["mode"] for c in configs))
+    overrides = list(set(json.dumps(c["graphuniverse_override"], sort_keys=True) for c in configs))
+    readout_types = sorted(set(c["readout_type"] for c in configs))
+    p_nums = sorted(set(c["p_num"] for c in configs))
+    
+    print(f"\nRun Directories ({len(run_dirs)}):")
+    for i, run_dir in enumerate(run_dirs, 1):
+        print(f"  [{i}] {run_dir}")
+    
+    print(f"\nN_train values: {n_trains}")
+    print(f"Tasks: {tasks}")
+    print(f"Modes: {modes}")
+    print(f"Readout types: {readout_types}")
+    
+    if any(mode in ["gpf-plus", "gpf-plus-linear"] for mode in modes):
+        print(f"P_num values (for GPF-Plus): {p_nums}")
+    
+    print(f"\nGraphUniverse Overrides ({len(overrides)}):")
+    for i, override_str in enumerate(overrides, 1):
+        override = json.loads(override_str)
+        if override is None:
+            print(f"  [{i}] None (use pretraining config)")
+        else:
+            print(f"  [{i}] {json.dumps(override, indent=6)}")
+    
+    print(f"\nTotal experiments: {len(configs)}")
+    print("=" * 80)
+
+
+# =============================================================================
+# Execution
+# =============================================================================
+
+def run_single_experiment(
+    config: Dict[str, Any],
     device: str,
-    seed: int = 42,
-    wandb_project: str = "downstream_eval_unified",
-    p_num: int = 5,
-    lr_override: float = None,
-) -> dict:
+    seed: int,
+    wandb_project: str,
+    epochs: int,
+    lr: float,
+    batch_size: int,
+    patience: int,
+    classifier_dropout: float,
+    input_dropout: float | None,
+    enable_joint_basic_property_reconstruction: bool = False,
+    basic_properties_to_include: List[str] | None = None,
+    community_related_properties_to_include: List[str] | None = None,
+) -> Dict[str, Any]:
     """
     Run a single downstream evaluation experiment.
     
     Parameters
     ----------
-    run_metadata : dict
-        Metadata from pre-training run.
-    mode : str
-        Evaluation mode: "finetune" or "scratch".
-    n_train : int
-        Number of training graphs.
+    config : Dict[str, Any]
+        Experiment configuration.
     device : str
         Device to use.
     seed : int
         Random seed.
     wandb_project : str
         Wandb project for logging.
-    p_num : int
-        Number of basis vectors for GPF-Plus.
-    lr_override : float, optional
-        Override learning rate for this run (useful for hyperparameter search).
+    epochs : int
+        Training epochs.
+    lr : float
+        Learning rate.
+    batch_size : int
+        Batch size.
+    patience : int
+        Early stopping patience.
+    classifier_dropout : float
+        Dropout rate for classifier.
+    input_dropout : float | None
+        Dropout rate for encoder output.
+    enable_joint_basic_property_reconstruction : bool
+        For property reconstruction: use joint training (old behavior) vs consecutive (new default).
+    basic_properties_to_include : List[str] | None
+        Which basic properties to train for basic_property_reconstruction (None = all).
+    community_related_properties_to_include : List[str] | None
+        Which community-related properties to train for community_related_property_reconstruction (None = all).
     
     Returns
     -------
-    dict
+    Dict[str, Any]
         Results from downstream evaluation.
     """
-    # For wandb API runs, we need to download the checkpoint
-    checkpoint_path = run_metadata["checkpoint_path"]
+    run_dir = config["run_dir"]
     
-    # Create descriptive wandb run name
-    pretraining_method = run_metadata["pretraining_method"]
-    model_name = run_metadata["model_name"]
+    # Automatically get checkpoint from summary
+    checkpoint_path = get_checkpoint_path_from_summary(run_dir)
+    if checkpoint_path is None:
+        raise ValueError(f"No checkpoint found for {run_dir}")
     
-    # Add p_num to name if using prompt methods
-    if mode in ["gpf-plus"]:
-        run_name = f"{pretraining_method}_{model_name}_{mode}_p{p_num}_n{n_train}"
-    else:
-        run_name = f"{pretraining_method}_{model_name}_{mode}_n{n_train}"
+    # Generate experiment name
+    exp_name = get_experiment_name(config, run_dir)
     
     print("\n" + "=" * 80)
-    print(f"DOWNSTREAM EVALUATION: {run_name}")
+    print(f"EXPERIMENT: {exp_name}")
     print("=" * 80)
-    print(f"  Pre-training run: {run_metadata['run_id']}")
-    print(f"  Mode: {mode}")
-    print(f"  N_train: {n_train}")
-    print(f"  Device: {device}")
-    
-    # Initialize wandb with original config embedded
-    actual_lr = lr_override if lr_override is not None else LR
-    
-    wandb_config = {
-        # Downstream eval settings
-        "downstream_mode": mode,
-        "downstream_n_train": n_train,
-        "downstream_n_val": N_EVALUATION_VAL,
-        "downstream_n_test": N_EVALUATION_TEST,
-        "downstream_n_evaluation_total": N_EVALUATION_TOTAL,
-        "downstream_epochs": EPOCHS,
-        "downstream_lr": actual_lr,
-        "downstream_batch_size": BATCH_SIZE,
-        "downstream_patience": PATIENCE,
-        "downstream_seed": seed,
-        
-        # Pre-training metadata
-        "pretraining_run_id": run_metadata["run_id"],
-        "pretraining_run_name": run_metadata["run_name"],
-        "pretraining_method": pretraining_method,
-        "pretraining_model_name": model_name,
-        "pretraining_checkpoint": checkpoint_path,
-        
-        # Config hashes for grouping
-        "dataset_hash": run_metadata["dataset_hash"],
-        "base_model_hash": run_metadata["base_model_hash"],
-        "pretraining_hash": run_metadata["pretraining_hash"],
-        
-        # Prompt-specific settings (if applicable)
-        "downstream_p_num": p_num if mode in ["gpf-plus"] else None,
-        
-        # IMPORTANT: Include full original pre-training config
-        "pretraining_config": run_metadata["config"],
-    }
-    
-    wandb.init(
-        project=wandb_project,
-        name=run_name,
-        config=wandb_config,
-        tags=[
-            pretraining_method,
-            model_name,
-            mode,
-            f"n_train_{n_train}",
-            "graphuniverse",
-        ],
-        reinit=True,
-    )
+    print(f"  Run dir: {run_dir}")
+    print(f"  Checkpoint: {checkpoint_path}")
+    print(f"  Task: {config['task']}")
+    print(f"  Mode: {config['mode']}")
+    print(f"  N_train: {config['n_train']}")
+    print(f"  N_evaluation: {config['n_evaluation_graphs']}")
+    if config["task"] in ["triangle_counting", "basic_property_reconstruction"]:
+        print(f"  Readout type: {config['readout_type']}")
+    if config["mode"] in ["gpf-plus", "gpf-plus-linear"]:
+        print(f"  P_num: {config['p_num']}")
+    if config["graphuniverse_override"] is not None:
+        print(f"  GraphUniverse override: {json.dumps(config['graphuniverse_override'], indent=4)}")
+    print("=" * 80)
     
     try:
-        # Create a temporary directory structure to mimic local run_dir
-        # This allows downstream_eval to load the config
-        import tempfile
-        import shutil
+        results = run_downstream_evaluation(
+            run_dir=run_dir,
+            checkpoint_path=checkpoint_path,
+            n_evaluation_graphs=config["n_evaluation_graphs"],
+            n_train=config["n_train"],
+            mode=config["mode"],
+            downstream_task=config["task"],
+            readout_type=config["readout_type"],
+            p_num=config["p_num"],
+            graphuniverse_override=config["graphuniverse_override"],
+            epochs=epochs,
+            lr=lr,
+            batch_size=batch_size,
+            patience=patience,
+            device=device,
+            seed=seed,
+            use_wandb=True,
+            wandb_project=wandb_project,
+            classifier_dropout=classifier_dropout,
+            input_dropout=input_dropout,
+            enable_joint_basic_property_reconstruction=enable_joint_basic_property_reconstruction,
+            pretraining_config=config.get("pretrain_config"),  # NEW: Pass pretraining config
+            basic_properties_to_include=basic_properties_to_include,
+            community_related_properties_to_include=community_related_properties_to_include,
+        )
         
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            tmp_path = Path(tmp_dir)
-            files_dir = tmp_path / "files"
-            files_dir.mkdir()
-            
-            # Save config to temporary location
-            config_path = files_dir / "config.yaml"
-            import yaml
-            with open(config_path, "w") as f:
-                yaml.dump(run_metadata["config"], f)
-            
-            # Save summary with checkpoint path
-            summary_path = files_dir / "wandb-summary.json"
-            with open(summary_path, "w") as f:
-                json.dump({"best_epoch/checkpoint": checkpoint_path}, f)
-            
-            # Run downstream evaluation with FIXED eval set and ADDITIONAL train graphs
-            # Note: downstream_eval will handle its own wandb session
-            results = run_downstream_evaluation(
-                run_dir=str(tmp_path),
-                checkpoint_path=checkpoint_path,
-                n_evaluation_graphs=N_EVALUATION_TOTAL,
-                n_train=n_train,
-                mode=mode,
-                epochs=EPOCHS,
-                lr=actual_lr,
-                batch_size=BATCH_SIZE,
-                patience=PATIENCE,
-                device=device,
-                seed=seed,
-                use_wandb=False,  # Don't use wandb inside downstream_eval, we'll handle it here
-                wandb_project=wandb_project,
-                p_num=p_num,
-            )
+        results["success"] = True
+        results["experiment_name"] = exp_name
         
-        # Log summary metrics to our wandb run
-        if wandb.run is not None:
-            wandb.log({
-                "final/test_accuracy": results["test_accuracy"],
-                "final/num_nodes": results.get("num_nodes", 0),
-                "final/num_classes": results["num_classes"],
-                "final/best_val_acc": max(results["history"]["val_acc"]),
-                "final/best_train_acc": max(results["history"]["train_acc"]),
-            })
-        
-        success = True
+        # Print result
+        if config["task"] == "triangle_counting":
+            mae = results.get('test_mae', 'N/A')
+            if mae != 'N/A':
+                print(f"\n✓ Test MAE: {mae:.4f}")
+            else:
+                print(f"\n✓ Test MAE: {mae}")
+        elif config["task"] in ["basic_property_reconstruction", "community_related_property_reconstruction"]:
+            mae = results.get('test_mae_weighted', 'N/A')
+            if mae != 'N/A':
+                print(f"\n✓ Test Weighted MAE: {mae:.4f}")
+            else:
+                print(f"\n✓ Test Weighted MAE: {mae}")
+        else:
+            acc = results.get('test_accuracy', 'N/A')
+            if acc != 'N/A':
+                print(f"\n✓ Test Accuracy: {acc:.4f}")
+            else:
+                print(f"\n✓ Test Accuracy: {acc}")
         
     except Exception as e:
-        print(f"\n❌ ERROR in downstream evaluation: {e}")
+        print(f"\n❌ ERROR: {e}")
         import traceback
         traceback.print_exc()
         
-        # Only log error if wandb run is active
-        if wandb.run is not None:
-            try:
-                wandb.log({"error": str(e)})
-            except:
-                pass  # Ignore if logging fails
-        
-        results = {"error": str(e), "test_accuracy": None}
-        success = False
+        results = {
+            "success": False,
+            "error": str(e),
+            "experiment_name": exp_name,
+        }
     
     finally:
-        # Finish wandb run if it's still active
-        if wandb.run is not None:
-            wandb.finish()
+        # CRITICAL: Ensure wandb run is properly finished to reset step counter
+        try:
+            import wandb
+            if wandb.run is not None:
+                wandb.finish()
+                print("\n✓ Wandb run properly closed")
+        except:
+            pass
     
-    # Add metadata to results
-    results["run_metadata"] = run_metadata
-    results["downstream_config"] = {
-        "mode": mode,
-        "n_train": n_train,
-        "n_evaluation_graphs": N_EVALUATION_TOTAL,
-        "n_val": N_EVALUATION_VAL,
-        "n_test": N_EVALUATION_TEST,
-        "success": success,
-    }
+    # Add config to results
+    results["config"] = config
     
     return results
 
 
-def run_downstream_eval_grid(
-    wandb_project_path: str,
-    device: str = "cuda",
-    seed: int = 42,
-    max_runs: int = None,
-    downstream_wandb_project: str = "downstream_eval_unified",
-    num_workers: int = 1,
-    devices: list[int] = None,
-    enable_prompt_tuning: bool = False,
-) -> list[dict]:
+def run_grid(
+    configs: List[Dict[str, Any]],
+    device: str,
+    seed: int,
+    wandb_project: str,
+    epochs: int,
+    lr: float,
+    batch_size: int,
+    patience: int,
+    classifier_dropout: float,
+    input_dropout: float | None,
+    enable_joint_basic_property_reconstruction: bool = False,
+    save_results: bool = True,
+    basic_properties_to_include: List[str] | None = None,
+    community_related_properties_to_include: List[str] | None = None,
+) -> List[Dict[str, Any]]:
     """
-    Run downstream evaluation grid for runs from wandb project.
-    
-    Smart deduplication:
-    - Scratch: One per unique (dataset_config, base_model_config, n_train)
-    - Finetune: All pretraining variations per base configuration
-    
-    Parallelization:
-    - Uses ProcessPoolExecutor to run evaluations on multiple GPUs simultaneously
-    - Each worker gets assigned to a specific GPU device
+    Run the full grid of downstream evaluations.
     
     Parameters
     ----------
-    wandb_project_path : str
-        Wandb project path "entity/project-name".
+    configs : List[Dict[str, Any]]
+        List of experiment configurations.
     device : str
-        Device type to use (default: "cuda").
+        Device to use.
     seed : int
         Random seed.
-    max_runs : int, optional
-        Maximum number of runs to fetch from wandb.
-    downstream_wandb_project : str
-        Wandb project for logging downstream results.
-    num_workers : int
-        Number of parallel workers (default: 1 for sequential).
-    devices : list[int], optional
-        List of GPU device IDs to use (e.g., [0, 1, 2, 3]).
-        If None and num_workers > 1, will use devices [0, 1, ..., num_workers-1].
-    enable_prompt_tuning : bool
-        If True, also run prompt tuning methods (GPF, GPF-Plus) with hyperparameter grids.
+    wandb_project : str
+        Wandb project for logging.
+    epochs : int
+        Training epochs.
+    lr : float
+        Learning rate.
+    batch_size : int
+        Batch size.
+    patience : int
+        Early stopping patience.
+    classifier_dropout : float
+        Dropout rate for classifier.
+    input_dropout : float | None
+        Dropout rate for encoder output.
+    enable_joint_basic_property_reconstruction : bool
+        For property reconstruction: use joint training (old behavior) vs consecutive (new default).
+    save_results : bool
+        Whether to save results to JSON file.
     
     Returns
     -------
-    list[dict]
-        List of results from all downstream evaluations.
+    List[Dict[str, Any]]
+        List of results from all experiments.
     """
-    # Setup devices for parallel execution
-    if devices is None and num_workers > 1:
-        devices = list(range(num_workers))
-    elif devices is None:
-        devices = [0]  # Default single device
-    
-    print("\n" + "=" * 80)
-    print("DOWNSTREAM EVALUATION GRID (Wandb API)")
-    print("=" * 80)
-    print(f"Source wandb project: {wandb_project_path}")
-    print(f"Downstream wandb project: {downstream_wandb_project}")
-    print(f"Device type: {device}")
-    print(f"Parallel workers: {num_workers}")
-    print(f"GPU devices: {devices}")
-    print(f"Seed: {seed}")
-    print(f"Modes: {EVAL_MODES}")
-    if enable_prompt_tuning:
-        print(f"Prompt modes enabled: {list(PROMPT_MODES.keys())}")
-        for prompt_mode, params in PROMPT_MODES.items():
-            print(f"  {prompt_mode}: {params}")
-    print(f"N_train values: {N_TRAIN_VALUES}")
-    print(f"N_evaluation_total: {N_EVALUATION_TOTAL} (val: {N_EVALUATION_VAL}, test: {N_EVALUATION_TEST})")
-    print(f"Note: Training graphs generated ADDITIONALLY (not taken from evaluation set)")
-    print("=" * 80)
-    
-    # Fetch runs from wandb
-    run_metadata_list = fetch_runs_from_wandb(
-        wandb_project_path,
-        max_runs=max_runs,
-    )
-    
-    if len(run_metadata_list) == 0:
-        print("\nNo valid runs found!")
-        return []
-    
-    # Group runs by (dataset_hash, base_model_hash)
-    base_configs = {}
-    for metadata in run_metadata_list:
-        key = (metadata["dataset_hash"], metadata["base_model_hash"])
-        if key not in base_configs:
-            base_configs[key] = []
-        base_configs[key].append(metadata)
-    
-    print(f"\n{'=' * 80}")
-    print("CONFIGURATION ANALYSIS")
-    print(f"{'=' * 80}")
-    print(f"Total runs: {len(run_metadata_list)}")
-    print(f"Unique (dataset, base_model) combinations: {len(base_configs)}")
-    
-    for i, (key, runs) in enumerate(base_configs.items(), 1):
-        print(f"\n[{i}] Base config with {len(runs)} pretraining variations:")
-        example = runs[0]
-        print(f"  Dataset: {example['dataset_config'].get('family_params', {}).get('homophily_range', 'N/A')}")
-        print(f"  Model: {example['model_name']}")
-        print(f"  Pretraining methods: {set(r['pretraining_method'] for r in runs)}")
-    
-    # Calculate experiments
-    scratch_experiments = len(base_configs) * len(N_TRAIN_VALUES)
-    finetune_experiments = len(run_metadata_list) * len(N_TRAIN_VALUES)
-    
-    # Calculate prompt tuning experiments if enabled
-    prompt_experiments = 0
-    if enable_prompt_tuning:
-        for prompt_mode, param_grid in PROMPT_MODES.items():
-            # Number of hyperparameter combinations
-            num_combinations = len(param_grid.get("p_num", [1])) * len(param_grid.get("lr", [LR]))
-            prompt_experiments += len(run_metadata_list) * len(N_TRAIN_VALUES) * num_combinations
-    
-    total_experiments = scratch_experiments + finetune_experiments + prompt_experiments
-    
-    print(f"\n{'=' * 80}")
-    print(f"EXPERIMENT COUNT")
-    print(f"{'=' * 80}")
-    print(f"Scratch: {len(base_configs)} base configs × {len(N_TRAIN_VALUES)} n_train = {scratch_experiments}")
-    print(f"Finetune: {len(run_metadata_list)} runs × {len(N_TRAIN_VALUES)} n_train = {finetune_experiments}")
-    if enable_prompt_tuning:
-        print(f"Prompt tuning: {prompt_experiments} (with hyperparameter search)")
-    print(f"Total: {total_experiments}")
-    
-    # Confirm
-    response = input("\nProceed with downstream evaluation grid? [y/N]: ")
-    if response.lower() != 'y':
-        print("Aborted.")
-        return []
-    
-    # Build list of all tasks
-    print("\n" + "=" * 80)
-    print("BUILDING TASK LIST")
-    print("=" * 80)
-    
-    tasks = []
-    scratch_done = set()
-    skipped_scratch = 0
-    
-    # Standard modes (finetune, scratch)
-    for run_idx, run_metadata in enumerate(run_metadata_list, 1):
-        for mode in EVAL_MODES:
-            for n_train in N_TRAIN_VALUES:
-                # For scratch: skip if already done for this base config
-                if mode == "scratch":
-                    scratch_key = (
-                        run_metadata["dataset_hash"],
-                        run_metadata["base_model_hash"],
-                        n_train
-                    )
-                    
-                    if scratch_key in scratch_done:
-                        skipped_scratch += 1
-                        continue
-                    else:
-                        scratch_done.add(scratch_key)
-                
-                # Add task
-                tasks.append({
-                    "run_metadata": run_metadata,
-                    "mode": mode,
-                    "n_train": n_train,
-                    "seed": seed,
-                    "wandb_project": downstream_wandb_project,
-                    "p_num": 5,  # Default, not used for finetune/scratch
-                    "lr_override": None,
-                })
-    
-    # Prompt tuning modes (if enabled)
-    if enable_prompt_tuning:
-        for run_metadata in run_metadata_list:
-            for prompt_mode, param_grid in PROMPT_MODES.items():
-                for n_train in N_TRAIN_VALUES:
-                    # Grid search over hyperparameters
-                    for p_num in param_grid.get("p_num", [5]):
-                        for lr in param_grid.get("lr", [LR]):
-                            tasks.append({
-                                "run_metadata": run_metadata,
-                                "mode": prompt_mode,
-                                "n_train": n_train,
-                                "seed": seed,
-                                "wandb_project": downstream_wandb_project,
-                                "p_num": p_num,
-                                "lr_override": lr,
-                            })
-    
-    print(f"Total tasks to run: {len(tasks)}")
-    if skipped_scratch > 0:
-        print(f"Skipped scratch experiments (deduplicated): {skipped_scratch}")
-    
-    # Run grid (parallel or sequential)
-    print("\n" + "=" * 80)
-    print(f"STARTING DOWNSTREAM EVALUATION GRID ({'PARALLEL' if num_workers > 1 else 'SEQUENTIAL'})")
-    print("=" * 80)
-    
     start_time = datetime.now()
     all_results = []
     
-    if num_workers > 1:
-        # Parallel execution
-        print(f"Running {len(tasks)} tasks on {num_workers} workers across GPUs {devices}")
+    print("\n" + "=" * 80)
+    print("STARTING GRID EXECUTION")
+    print("=" * 80)
+    
+    for i, config in enumerate(configs, 1):
+        print(f"\n{'=' * 80}")
+        print(f"EXPERIMENT {i}/{len(configs)}")
+        print(f"{'=' * 80}")
         
-        # Use ProcessPoolExecutor for true parallelism
-        with ProcessPoolExecutor(max_workers=num_workers) as executor:
-            # Submit all tasks
-            future_to_task = {}
-            for task_idx, task in enumerate(tasks):
-                # Assign device in round-robin fashion
-                device_id = devices[task_idx % len(devices)]
-                device_str = f"cuda:{device_id}"
-                
-                future = executor.submit(
-                    run_single_downstream_eval,
-                    run_metadata=task["run_metadata"],
-                    mode=task["mode"],
-                    n_train=task["n_train"],
-                    device=device_str,
-                    seed=task["seed"],
-                    wandb_project=task["wandb_project"],
-                    p_num=task["p_num"],
-                    lr_override=task["lr_override"],
-                )
-                future_to_task[future] = {
-                    "task": task,
-                    "task_idx": task_idx + 1,
-                    "device": device_str,
-                }
+        try:
+            results = run_single_experiment(
+                config=config,
+                device=device,
+                seed=seed,
+                wandb_project=wandb_project,
+                epochs=epochs,
+                lr=lr,
+                batch_size=batch_size,
+                patience=patience,
+                classifier_dropout=classifier_dropout,
+                input_dropout=input_dropout,
+                enable_joint_basic_property_reconstruction=enable_joint_basic_property_reconstruction,
+                basic_properties_to_include=basic_properties_to_include,
+                community_related_properties_to_include=community_related_properties_to_include,
+            )
+            all_results.append(results)
+        
+        except KeyboardInterrupt:
+            print("\n\n⚠️  Interrupted by user")
+            break
+        
+        except Exception as e:
+            print(f"\n❌ CRITICAL ERROR: {e}")
+            import traceback
+            traceback.print_exc()
             
-            # Collect results as they complete
-            completed = 0
-            for future in as_completed(future_to_task):
-                completed += 1
-                task_info = future_to_task[future]
-                task = task_info["task"]
-                
-                try:
-                    results = future.result()
-                    all_results.append(results)
-                    
-                    acc = results.get("test_accuracy")
-                    status = f"✓ Acc: {acc:.4f}" if acc is not None else "✗ Failed"
-                    
-                    print(f"[{completed}/{len(tasks)}] {status} | "
-                          f"{task['run_metadata']['pretraining_method']} | "
-                          f"{task['mode']} | n_train={task['n_train']} | "
-                          f"device={task_info['device']}")
-                
-                except Exception as e:
-                    print(f"[{completed}/{len(tasks)}] ❌ ERROR: {e}")
-                    all_results.append({
-                        "error": str(e),
-                        "run_metadata": task["run_metadata"],
-                        "downstream_config": {
-                            "mode": task["mode"],
-                            "n_train": task["n_train"],
-                            "success": False,
-                        }
-                    })
-    else:
-        # Sequential execution (original behavior)
-        for task_idx, task in enumerate(tasks, 1):
-            run_metadata = task["run_metadata"]
-            
-            print(f"\n{'=' * 80}")
-            print(f"TASK {task_idx}/{len(tasks)}")
-            print(f"{'=' * 80}")
-            print(f"Run ID: {run_metadata['run_id']}")
-            print(f"Method: {run_metadata['pretraining_method']}")
-            print(f"Model: {run_metadata['model_name']}")
-            print(f"Mode: {task['mode']}, N_train: {task['n_train']}")
-            
-            try:
-                results = run_single_downstream_eval(
-                    run_metadata=run_metadata,
-                    mode=task["mode"],
-                    n_train=task["n_train"],
-                    device=device if device.startswith("cuda:") else f"{device}:0",
-                    seed=task["seed"],
-                    wandb_project=task["wandb_project"],
-                    p_num=task["p_num"],
-                    lr_override=task["lr_override"],
-                )
-                
-                all_results.append(results)
-                
-                if results.get("test_accuracy") is not None:
-                    print(f"\n✓ Test Accuracy: {results['test_accuracy']:.4f}")
-                else:
-                    print(f"\n✗ Experiment failed")
-            
-            except KeyboardInterrupt:
-                print("\n\n⚠️  Interrupted by user")
-                raise
-            
-            except Exception as e:
-                print(f"\n❌ ERROR: {e}")
-                import traceback
-                traceback.print_exc()
-                
-                all_results.append({
-                    "error": str(e),
-                    "run_metadata": run_metadata,
-                    "downstream_config": {
-                        "mode": task["mode"],
-                        "n_train": task["n_train"],
-                        "success": False,
-                    }
-                })
+            all_results.append({
+                "success": False,
+                "error": str(e),
+                "config": config,
+            })
     
     # Final summary
     total_duration = datetime.now() - start_time
-    
-    print("\n" + "=" * 80)
-    print("DOWNSTREAM EVALUATION GRID COMPLETE")
-    print("=" * 80)
-    print(f"Total time: {total_duration}")
-    print(f"Experiments run: {len(tasks)}")
-    
-    if skipped_scratch > 0:
-        print(f"Skipped scratch experiments (deduplicated): {skipped_scratch}")
-    
-    successful = sum(1 for r in all_results if r.get("downstream_config", {}).get("success", False))
+    successful = sum(1 for r in all_results if r.get("success", False))
     failed = len(all_results) - successful
     
+    print("\n" + "=" * 80)
+    print("GRID EXECUTION COMPLETE")
+    print("=" * 80)
+    print(f"Total time: {total_duration}")
+    print(f"Experiments completed: {len(all_results)}/{len(configs)}")
     print(f"  Successful: {successful}")
     print(f"  Failed: {failed}")
+    print("=" * 80)
     
-    # Save results summary
-    summary_path = Path("downstream_eval_grid_summary.json")
-    summary = {
-        "total_experiments": len(tasks),
-        "successful": successful,
-        "failed": failed,
-        "duration": str(total_duration),
-        "timestamp": datetime.now().isoformat(),
-        "source_project": wandb_project_path,
-        "parallelization": {
-            "num_workers": num_workers,
-            "devices": devices,
-        },
-        "config": {
-            "modes": EVAL_MODES,
-            "n_train_values": N_TRAIN_VALUES,
-            "n_evaluation_total": N_EVALUATION_TOTAL,
-            "n_evaluation_val": N_EVALUATION_VAL,
-            "n_evaluation_test": N_EVALUATION_TEST,
-            "epochs": EPOCHS,
-            "lr": LR,
-            "batch_size": BATCH_SIZE,
-            "patience": PATIENCE,
-        },
-    }
-    
-    with open(summary_path, "w") as f:
-        json.dump(summary, f, indent=2)
-    
-    print(f"\nSummary saved to {summary_path}")
+    # Save results
+    if save_results:
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        results_path = Path(f"downstream_eval_grid_results_{timestamp}.json")
+        
+        summary = {
+            "timestamp": datetime.now().isoformat(),
+            "total_experiments": len(configs),
+            "completed": len(all_results),
+            "successful": successful,
+            "failed": failed,
+            "duration": str(total_duration),
+            "results": all_results,
+        }
+        
+        with open(results_path, "w") as f:
+            json.dump(summary, f, indent=2, cls=NumpyEncoder)
+        
+        print(f"\nResults saved to {results_path}")
     
     return all_results
 
@@ -929,19 +772,122 @@ def run_downstream_eval_grid(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Automated downstream evaluation using wandb API."
+        description="Grid search for downstream evaluation with flexible parameter exploration.",
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    
+    # Run selection arguments (mutually exclusive)
+    run_selection = parser.add_mutually_exclusive_group(required=True)
+    run_selection.add_argument(
+        "--run_dirs",
+        type=str,
+        nargs="+",
+        help="List of pretrained model run directories"
+    )
+    run_selection.add_argument(
+        "--wandb_pretrain_project",
+        type=str,
+        help="Wandb project to fetch all runs from (format: 'entity/project' or 'project')"
+    )
+    
+    # Grid parameters
+    parser.add_argument(
+        "--n_train",
+        type=int,
+        nargs="+",
+        default=[10, 50, 100],
+        help="List of training set sizes to test (default: 10 50 100)"
     )
     parser.add_argument(
-        "--wandb_project",
+        "--tasks",
         type=str,
-        required=True,
-        help="Wandb project path (entity/project-name)"
+        nargs="+",
+        choices=["basic_property_reconstruction", "community_related_property_reconstruction"],
+        default=["community_related_property_reconstruction"],
+        help="List of tasks to evaluate (default: community_related_property_reconstruction)"
     )
+    parser.add_argument(
+        "--modes",
+        type=str,
+        nargs="+",
+        choices=["linear", "mlp", "finetune-linear", "finetune-mlp", "scratch", "gpf", "gpf-plus", 
+                 "gpf-linear", "gpf-plus-linear", "untrained_frozen"],
+        default=["linear", "finetune-linear", "scratch"],
+        help="List of evaluation modes (default: linear finetune-linear finetune-mlp scratch gpf-linear gpf-plus-linear)"
+    )
+    parser.add_argument(
+        "--graphuniverse_overrides",
+        type=str,
+        nargs="+",
+        default=None,
+        help="List of GraphUniverse override JSON strings. If not specified, uses DEFAULT_GRAPHUNIVERSE_OVERRIDES from script. Use 'null' for no override."
+    )
+    parser.add_argument(
+        "--readout_types",
+        type=str,
+        nargs="+",
+        choices=["mean", "max", "sum"],
+        default=["sum"],
+        help="List of readout types for graph-level tasks (default: sum)"
+    )
+    parser.add_argument(
+        "--p_nums",
+        type=int,
+        nargs="+",
+        default=[5],
+        help="List of p_num values for GPF-Plus (default: 5)"
+    )
+    
+    # Evaluation parameters
+    parser.add_argument(
+        "--n_evaluation_graphs",
+        type=int,
+        default=200,
+        help="Number of fixed evaluation graphs (default: 200)"
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        default=200,
+        help="Training epochs (default: 150)"
+    )
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=0.001,
+        help="Learning rate (default: 0.001)"
+    )
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=32,
+        help="Batch size (default: 32)"
+    )
+    parser.add_argument(
+        "--patience",
+        type=int,
+        default=30,
+        help="Early stopping patience (default: 50)"
+    )
+    parser.add_argument(
+        "--classifier_dropout",
+        type=float,
+        default=0.3,
+        help="Dropout rate for classifier (default: 0.3)"
+    )
+    parser.add_argument(
+        "--input_dropout",
+        type=float,
+        default=None,
+        help="Dropout rate for encoder output (default: None, uses classifier_dropout)"
+    )
+    
+    # System parameters
     parser.add_argument(
         "--device",
         type=str,
-        default="cuda",
-        help="Device to use (default: cuda)"
+        default="cuda:0",
+        help="Device to use (default: cuda:0)"
     )
     parser.add_argument(
         "--seed",
@@ -950,57 +896,142 @@ def main():
         help="Random seed (default: 42)"
     )
     parser.add_argument(
-        "--max_runs",
-        type=int,
-        default=None,
-        help="Maximum number of runs to fetch (for testing)"
-    )
-    parser.add_argument(
-        "--downstream_project",
+        "--wandb_project",
         type=str,
-        default=DOWNSTREAM_WANDB_PROJECT,
-        help=f"Wandb project for downstream results (default: {DOWNSTREAM_WANDB_PROJECT})"
+        default="tests",
+        help="Wandb project for logging (default: downstream_eval_grid)"
     )
     parser.add_argument(
-        "--num_workers",
-        type=int,
-        default=4,
-        help="Number of parallel workers (default: 1 for sequential)"
-    )
-    parser.add_argument(
-        "--devices",
-        type=int,
-        nargs="+",
-        default=[0, 1, 2, 3],
-        help="GPU device IDs to use (e.g., --devices 0 1 2 3). If not specified, uses [0, 1, ..., num_workers-1]"
-    )
-    parser.add_argument(
-        "--enable_prompt_tuning",
+        "--no_save",
         action="store_true",
-        help="Enable prompt tuning methods (GPF, GPF-Plus) with hyperparameter grids"
+        help="Don't save results to JSON file"
+    )
+    
+    parser.add_argument(
+        "--enable_joint_basic_property_reconstruction",
+        action="store_true",
+        help="For property reconstruction: use joint training with multi-head predictor (old behavior). "
+             "Default: False (consecutive training with individual heads - NEW DEFAULT)"
+    )
+    
+    parser.add_argument(
+        "--basic_properties_to_include",
+        type=str,
+        nargs="+",
+        default=None,
+        choices=["avg_degree", "size", "gini", "diameter"],
+        help="Which basic properties to train for basic_property_reconstruction (default: all)"
+    )
+    
+    parser.add_argument(
+        "--community_related_properties_to_include",
+        type=str,
+        nargs="+",
+        default=None,
+        choices=["homophily", "community_presence", "edge_prob_matrix", "community_detection"],
+        help="Which community-related properties to train for community_related_property_reconstruction (default: all)"
     )
     
     args = parser.parse_args()
     
-    results = run_downstream_eval_grid(
-        wandb_project_path=args.wandb_project,
+    # Determine run directories
+    if args.wandb_pretrain_project:
+        print(f"\n{'=' * 80}")
+        print("FETCHING RUNS FROM WANDB PROJECT")
+        print(f"{'=' * 80}")
+        print(f"Project: {args.wandb_pretrain_project}")
+        
+        run_infos = fetch_runs_from_wandb_project(
+            project_path=args.wandb_pretrain_project,
+            filters={"state": "finished"},
+            min_runs=1,
+        )
+        
+        # Extract run directories
+        run_dirs = [info["run_dir"] for info in run_infos]
+        
+        print(f"\n✓ Found {len(run_dirs)} runs with valid checkpoints")
+        print(f"  Run IDs: {[info['run_id'] for info in run_infos]}")
+    else:
+        run_dirs = args.run_dirs
+        print(f"\n✓ Using manually specified run directories ({len(run_dirs)} runs)")
+        
+        # Load configs for manually specified run_dirs
+        run_infos = []
+        for run_dir in run_dirs:
+            pretrain_config = load_wandb_config(run_dir)
+            run_infos.append({
+                "run_dir": run_dir,
+                "pretrain_config": pretrain_config,
+            })
+        print(f"  Loaded pretraining configs for {len(run_infos)} runs")
+    
+    # Parse GraphUniverse overrides
+    if args.graphuniverse_overrides is None:
+        # Use default from top of script
+        parsed_overrides = DEFAULT_GRAPHUNIVERSE_OVERRIDES
+        print(f"\n✓ Using DEFAULT_GRAPHUNIVERSE_OVERRIDES from script ({len(parsed_overrides)} configurations)")
+    else:
+        # Parse from command line arguments
+        parsed_overrides = []
+        for override_str in args.graphuniverse_overrides:
+            if override_str is None or override_str.lower() == "null" or override_str.lower() == "none":
+                parsed_overrides.append(None)
+            else:
+                try:
+                    parsed_overrides.append(json.loads(override_str))
+                except json.JSONDecodeError as e:
+                    print(f"ERROR: Invalid JSON in GraphUniverse override: {override_str}")
+                    print(f"  {e}")
+                    sys.exit(1)
+        print(f"\n✓ Using GraphUniverse overrides from command line ({len(parsed_overrides)} configurations)")
+    
+    # Generate grid configurations
+    configs = generate_grid_configs(
+        run_dirs=run_dirs,
+        n_train_values=args.n_train,
+        tasks=args.tasks,
+        modes=args.modes,
+        graphuniverse_overrides=parsed_overrides,
+        n_evaluation_graphs=args.n_evaluation_graphs,
+        readout_types=args.readout_types,
+        p_nums=args.p_nums,
+        run_infos=run_infos,  # NEW: Pass run_infos (always available now)
+    )
+    
+    # Print summary
+    print_grid_summary(configs)
+    
+    # Confirm
+    response = input("\nProceed with grid execution? [y/N]: ")
+    if response.lower() != 'y':
+        print("Aborted.")
+        return
+    
+    # Run grid
+    results = run_grid(
+        configs=configs,
         device=args.device,
         seed=args.seed,
-        max_runs=args.max_runs,
-        downstream_wandb_project=args.downstream_project,
-        num_workers=args.num_workers,
-        devices=args.devices,
-        enable_prompt_tuning=args.enable_prompt_tuning,
+        wandb_project=args.wandb_project,
+        epochs=args.epochs,
+        lr=args.lr,
+        batch_size=args.batch_size,
+        patience=args.patience,
+        classifier_dropout=args.classifier_dropout,
+        input_dropout=args.input_dropout,
+        enable_joint_basic_property_reconstruction=args.enable_joint_basic_property_reconstruction,
+        save_results=not args.no_save,
+        basic_properties_to_include=args.basic_properties_to_include,
+        community_related_properties_to_include=args.community_related_properties_to_include,
     )
     
     print("\n" + "=" * 80)
-    print("ALL DOWNSTREAM EVALUATIONS COMPLETE")
+    print("ALL EXPERIMENTS COMPLETE")
     print("=" * 80)
-    print(f"Total results: {len(results)}")
     
     return results
 
 
 if __name__ == "__main__":
     main()
-

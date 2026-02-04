@@ -23,15 +23,18 @@ class TBLoss(AbstractLoss):
         super().__init__()
         self.losses = []
         # Dataset loss
-        # Handle both dict (for default losses) and already-instantiated loss objects (for custom losses like GraphMAE)
-        if isinstance(dataset_loss, dict):
-            self.losses.append(DatasetLoss(dataset_loss))
-        else:
+        # Handle both dict/DictConfig (for default losses) and already-instantiated loss objects (for custom losses like GraphMAE)
+        if isinstance(dataset_loss, AbstractLoss):
             # Already instantiated loss object
             self.losses.append(dataset_loss)
+        else:
+            # Dict or DictConfig - instantiate DatasetLoss
+            self.losses.append(DatasetLoss(dataset_loss))
         # Model losses
+        # Filter out None values and non-instantiated DictConfig objects
         self.losses.extend(
-            [loss for loss in modules_losses.values() if loss is not None]
+            [loss for loss in modules_losses.values() 
+             if loss is not None and isinstance(loss, AbstractLoss)]
         )
 
     def __repr__(self) -> str:

@@ -40,6 +40,8 @@ def create_prompted_model(
     device: str = "cpu",
     classifier_type: str = "mlp",
     mode: str = "finetune",  # "finetune" or "scratch"
+    readout_type: str = "sum",  # For graph-level tasks
+    task_type: str = "classification",  # "classification" or "regression"
 ) -> tuple[nn.Module, dict]:
     """
     Create a prompted model for downstream evaluation.
@@ -64,6 +66,10 @@ def create_prompted_model(
         Type of classifier: "linear" or "mlp".
     mode : str
         "finetune" (use pre-trained weights) or "scratch" (random init).
+    readout_type : str
+        Pooling type for graph-level tasks: "mean", "max", "sum" (default: "sum").
+    task_type : str
+        Task type: "classification" or "regression" (default: "classification").
     
     Returns
     -------
@@ -129,20 +135,29 @@ def create_prompted_model(
                 self.prompted_encoder.train(mode)
                 return self
         
-        prompted_encoder = GraphLevelPromptedEncoder(feature_encoder, backbone, prompt, readout_type="mean")
-        print(f"  Using GraphLevelPromptedEncoder with mean pooling")
+        prompted_encoder = GraphLevelPromptedEncoder(feature_encoder, backbone, prompt, readout_type=readout_type)
+        print(f"  Using GraphLevelPromptedEncoder with {readout_type} pooling")
     else:
         # Node-level: just use the prompted encoder directly
         prompted_encoder = PromptedEncoder(feature_encoder, backbone, prompt)
         print(f"  Using PromptedEncoder (node-level)")
     
-    # Create classifier
-    from downstream_eval import LinearClassifier, MLPClassifier
+    # Create classifier or regressor
+    from downstream_eval import (
+        LinearClassifier, MLPClassifier, 
+        LinearRegressor, MLPRegressor
+    )
     
-    if classifier_type == "linear":
-        classifier = LinearClassifier(hidden_dim, num_classes)
-    else:  # mlp
-        classifier = MLPClassifier(hidden_dim, num_classes)
+    if task_type == "regression":
+        if classifier_type == "linear":
+            classifier = LinearRegressor(hidden_dim, num_classes)
+        else:  # mlp
+            classifier = MLPRegressor(hidden_dim, num_classes)
+    else:  # classification
+        if classifier_type == "linear":
+            classifier = LinearClassifier(hidden_dim, num_classes)
+        else:  # mlp
+            classifier = MLPClassifier(hidden_dim, num_classes)
     
     # Create complete downstream model
     # Note: freeze_encoder=True because PromptedEncoder already handles freezing
@@ -163,6 +178,7 @@ def create_prompted_model(
     
     info = {
         "prompt_type": prompt_type,
+        "classifier_type": classifier_type,
         "p_num": p_num if prompt_type == "gpf-plus" else 1,
         "hidden_dim": hidden_dim,
         "total_params": total_params,
@@ -178,8 +194,14 @@ def create_prompted_model(
     print(f"  Total params: {total_params:,}")
     print(f"  Trainable params: {trainable_params:,} ({100*trainable_params/total_params:.1f}%)")
     print(f"    - Encoder: {encoder_params:,} (frozen)")
-    print(f"    - Prompt: {prompt_params:,} (trainable)")
-    print(f"    - Classifier: {classifier_params:,} (trainable)")
+    print(f"    - Prompt ({prompt_type}): {prompt_params:,} (trainable)")
+    print(f"    - Classifier ({classifier_type}): {classifier_params:,} (trainable)")
+    
+    # Show the complexity difference
+    if classifier_type == "mlp":
+        linear_params = hidden_dim * num_classes
+        complexity_ratio = classifier_params / linear_params
+        print(f"  Note: MLP classifier is {complexity_ratio:.1f}x more complex than linear ({classifier_params:,} vs {linear_params:,} params)")
     
     return model, info
 
@@ -197,12 +219,12 @@ def get_prompt_hyperparams():
         "gpf": {
             "p_num": [1],  # Not used, but kept for consistency
             "lr": [0.001, 0.0001],  # Learning rates to try
-            "classifier_type": ["mlp"],  # linear or mlp
+            "classifier_type": ["linear", "mlp"],  # linear or mlp
         },
         "gpf-plus": {
             "p_num": [3, 5, 10],  # Number of basis vectors
             "lr": [0.001, 0.0001],  # Learning rates to try
-            "classifier_type": ["mlp"],  # linear or mlp
+            "classifier_type": ["linear", "mlp"],  # linear or mlp
         },
     }
 

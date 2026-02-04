@@ -7,15 +7,15 @@ feature_encoder:
   _target_: topobench.nn.encoders.${model.feature_encoder.encoder_name}
   encoder_name: AllCellFeatureEncoder
   in_channels: ${infer_in_channels:${dataset},${oc.select:transforms,null}}
-  out_channels: 64
-  proj_dropout: 0.0
+  out_channels: 128
+  proj_dropout: 0.1
 
 backbone:
   _target_: topobench.nn.backbones.GPSEncoder
   input_dim: ${model.feature_encoder.out_channels}
   hidden_dim: ${model.feature_encoder.out_channels}
   num_layers: 4
-  dropout: 0.2
+  dropout: 0.3
   heads: 4
   attn_type: multihead
   local_conv_type: gin
@@ -28,7 +28,7 @@ backbone_wrapper:
   out_channels: ${model.feature_encoder.out_channels}
   num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
   # DGI-specific parameters
-  corruption_type: random  # Options: shuffle, random
+  corruption_type: shuffle  # Options: shuffle, random
   readout_type: mean  # Options: mean, max, sum
 
 # DGIReadOut handles the discriminator
@@ -41,7 +41,7 @@ readout:
   task_level: ${dataset.parameters.task_level}
   pooling_type: sum
   # DGI readout specific parameters
-  discriminator_type: bilinear  # Options: bilinear, mlp
+  discriminator_type: mlp  # Options: bilinear, mlp
 
 # compile model for faster training with pytorch 2.0
 compile: false

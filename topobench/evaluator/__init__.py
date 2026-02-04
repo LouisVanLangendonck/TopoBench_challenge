@@ -42,6 +42,7 @@ from .graphcl_evaluator import GraphCLEvaluator
 from .linkpred_evaluator import LinkPredEvaluator
 from .s2gae_evaluator import S2GAEEvaluator
 from .higmae_evaluator import HiGMAEEvaluator
+from .dgmae_evaluator import DGMAEEvaluator
 
 __all__ = [
     "METRICS",
@@ -54,4 +55,5 @@ __all__ = [
     "LinkPredEvaluator",
     "S2GAEEvaluator",
     "HiGMAEEvaluator",
+    "DGMAEEvaluator",
 ]

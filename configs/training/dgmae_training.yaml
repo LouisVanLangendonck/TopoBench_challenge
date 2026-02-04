@@ -1,0 +1,49 @@
+# DGMAE Training Configuration
+
+defaults:
+  - override /dataset: graph/GraphUniverse_dgmae
+  - override /model: graph/gps_dgmae
+  - override /loss: dgmae
+  - override /transforms: model_defaults/gps_dgmae
+
+# Task specification
+task:
+  type: pretraining
+  method: dgmae
+
+# Training parameters
+trainer:
+  max_epochs: 500
+  check_val_every_n_epoch: 10
+  accelerator: auto
+  devices: auto
+
+# Optimizer
+optimizer:
+  _target_: torch.optim.Adam
+  lr: 0.001
+  weight_decay: 0.0
+
+# Scheduler
+scheduler:
+  _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+  mode: max
+  factor: 0.5
+  patience: 20
+  min_lr: 1.0e-6
+
+# Evaluator for DGMAE
+evaluator:
+  _target_: topobench.evaluator.DGMAEEvaluator
+  metrics:
+    - loss_f
+    - loss_d
+    - cosine_sim_f
+    - cosine_sim_d
+
+# Monitoring
+monitor:
+  metric: cosine_sim_f
+  mode: max
+
+

@@ -4,7 +4,7 @@ loader:
   parameters: 
     data_domain: graph
     data_type: GraphUniverse
-    data_name: GraphUniverse_GraphMAEv2
+    data_name: GraphUniverse_DGMAE
     data_dir: ${paths.data_dir}/${dataset.loader.parameters.data_domain}/${dataset.loader.parameters.data_type}
     generation_parameters:
       task: community_detection
@@ -21,7 +21,7 @@ loader:
         max_n_nodes: 150
         min_communities: 4
         max_communities: 6
-        homophily_range: [0.7, 0.9]
+        homophily_range: [0.4, 0.6]
         avg_degree_range: [1.0, 3.0]
         degree_separation_range: [0.5, 1.0]
         degree_distribution: power_law
@@ -32,9 +32,9 @@ loader:
 parameters:
   num_features: ${dataset.loader.parameters.generation_parameters.universe_parameters.feature_dim}
   num_classes: 1
-  task: graphmaev2
-  loss_type: sce  # Used internally by GraphMAEv2 loss
-  monitor_metric: cosine_sim  # Track cosine similarity
+  task: dgmae
+  loss_type: sce  # Used internally by DGMAE loss
+  monitor_metric: cosine_sim_f  # Track feature reconstruction cosine similarity
   task_level: node
 
 #splits
@@ -51,4 +51,5 @@ dataloader_params:
   batch_size: 32
   num_workers: 0
   pin_memory: False
+
 

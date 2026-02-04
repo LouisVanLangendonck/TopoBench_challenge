@@ -15,7 +15,7 @@ backbone:
   input_dim: ${model.feature_encoder.out_channels}
   hidden_dim: ${model.feature_encoder.out_channels}
   num_layers: 4
-  dropout: 0.5
+  dropout: 0.3
   heads: 4
   attn_type: multihead
   local_conv_type: gin
@@ -42,8 +42,8 @@ readout:
   task_level: node
   num_layers: ${model.backbone.num_layers}
   # S2GAE decoder parameters
-  decoder_hidden_dim: 256
-  decoder_layers: 2
+  decoder_hidden_dim: 128
+  decoder_layers: 1
 
 # compile model for faster training with pytorch 2.0
 compile: false
