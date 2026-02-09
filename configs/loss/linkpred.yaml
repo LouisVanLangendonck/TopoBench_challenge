@@ -1,0 +1,14 @@
+# Link Prediction Loss Configuration
+
+_target_: topobench.loss.TBLoss
+
+dataset_loss:
+  _target_: topobench.loss.dataset.LinkPredLoss
+  loss_type: bce  # Binary cross-entropy
+  pos_weight: 1.0  # Weight for positive samples (adjust if imbalanced)
+
+modules_losses:
+  feature_encoder: ${oc.select:model.feature_encoder.loss,null}
+  backbone: ${oc.select:model.backbone.loss,null}
+  readout: ${oc.select:model.readout.loss,null}
+

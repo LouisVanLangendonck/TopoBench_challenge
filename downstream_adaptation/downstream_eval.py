@@ -338,10 +338,10 @@ def load_pretrained_encoder(
     model_config = config["model"]
     pretraining_method = detect_pretraining_method(config)
     
-    if pretraining_method not in ["graphmaev2", "grace"]:
+    if pretraining_method not in ["graphmaev2", "grace", "linkpred"]:
         raise ValueError(
             f"Unsupported pretraining method '{pretraining_method}'. "
-            f"Only 'graphmaev2' and 'grace' are supported."
+            f"Only 'graphmaev2', 'grace', and 'linkpred' are supported."
         )
     
     # Build feature encoder

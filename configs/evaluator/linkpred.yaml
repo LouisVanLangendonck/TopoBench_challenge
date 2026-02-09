@@ -1,0 +1,15 @@
+# Link Prediction Evaluator Configuration
+
+_target_: topobench.evaluator.linkpred_evaluator.LinkPredEvaluator
+
+# Link prediction evaluator tracks:
+# - loss: Mean binary cross-entropy loss
+# - accuracy: Edge classification accuracy
+# - auroc: Area under ROC curve
+# - precision: Precision for positive edges
+# - recall: Recall for positive edges
+metrics:
+  - loss
+  - accuracy
+  - auroc
+

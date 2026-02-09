@@ -490,7 +490,7 @@ def main():
         "--n_train",
         type=int,
         nargs="+",
-        default=[5, 15, 25, 50, 100, 200],
+        default=[5, 15], #, 25, 50, 100, 200],
         help="List of training set sizes to test (default: 5 15 25 50 100 200)"
     )
     parser.add_argument(

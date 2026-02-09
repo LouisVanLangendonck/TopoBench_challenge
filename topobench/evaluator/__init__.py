@@ -35,27 +35,15 @@ METRICS = {
 
 from .base import AbstractEvaluator  # noqa: E402
 from .evaluator import TBEvaluator  # noqa: E402
-from .graphmae_evaluator import GraphMAEEvaluator
 from .graphmaev2_evaluator import GraphMAEv2Evaluator
-from .dgi_evaluator import DGIEvaluator
-from .graphcl_evaluator import GraphCLEvaluator
 from .grace_evaluator import GRACEEvaluator
 from .linkpred_evaluator import LinkPredEvaluator
-from .s2gae_evaluator import S2GAEEvaluator
-from .higmae_evaluator import HiGMAEEvaluator
-from .dgmae_evaluator import DGMAEEvaluator
 
 __all__ = [
     "METRICS",
     "AbstractEvaluator",
     "TBEvaluator",
-    "GraphMAEEvaluator",
     "GraphMAEv2Evaluator",
-    "DGIEvaluator",
-    "GraphCLEvaluator",
     "GRACEEvaluator",
     "LinkPredEvaluator",
-    "S2GAEEvaluator",
-    "HiGMAEEvaluator",
-    "DGMAEEvaluator",
 ]
