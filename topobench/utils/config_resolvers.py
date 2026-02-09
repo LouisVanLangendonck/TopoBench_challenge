@@ -140,7 +140,7 @@ def get_monitor_metric(task, metric):
     Parameters
     ----------
     task : str
-        Task, either "classification", "regression", "graphmae", "dgi", or "graphcl".
+        Task, either "classification", "regression", "graphmaev2", "grace", etc.
     metric : str
         Name of the metric function.
 
@@ -158,14 +158,7 @@ def get_monitor_metric(task, metric):
         task == "classification"
         or task == "regression"
         or task == "multilabel classification"
-        or task == "graphmae"
-        or task == "dgi"
-        or task == "graphcl"
-        or task == "graphmaev2"
-        or task == "linkpred"
-        or task == "s2gae"
-        or task == "higmae"
-        or task == "dgmae"
+        or task in ["graphmaev2", "grace"]
     ):
         return f"val/{metric}"
     else:
@@ -178,7 +171,7 @@ def get_monitor_mode(task):
     Parameters
     ----------
     task : str
-        Task, either "classification", "regression", "graphmae", "dgi", or "graphcl".
+        Task, either "classification", "regression", "graphmaev2", "grace", etc.
 
     Returns
     -------
@@ -193,19 +186,13 @@ def get_monitor_mode(task):
     if (
         task == "classification"
         or task == "multilabel classification"
-        or task == "dgi"  # DGI: maximize discrimination accuracy
         or task == "graphmaev2"  # GraphMAEv2: maximize cosine similarity
-        or task == "s2gae"  # S2GAE: maximize edge reconstruction accuracy
-        or task == "higmae"  # Hi-GMAE: maximize cosine similarity
-        or task == "dgmae"  # DGMAE: maximize cosine similarity (feature reconstruction)
         ):
         return "max"
 
     elif (
         task == "regression"
-        or task == "graphmae"
-        or task == "graphcl"  # GraphCL: minimize contrastive loss
-        or task == "linkpred"  # LinkPred: minimize link prediction loss
+        or task == "grace"  # GRACE: minimize contrastive loss
         ):
         return "min"
 
@@ -516,7 +503,7 @@ def get_default_metrics(task, metrics=None):
     Parameters
     ----------
     task : str
-        Task, either "classification", "regression", "graphmae", "dgi", or "graphcl".
+        Task, either "classification", "regression", "graphmaev2", or "grace".
     metrics : list, optional
         List of metrics to be used. If None, the default metrics will be used.
 
@@ -539,15 +526,7 @@ def get_default_metrics(task, metrics=None):
             return ["mse", "mae"]
         elif "graphmae" in task:
             return ["recon_loss", "cosine_sim"]
-        elif "dgi" in task:
-            return ["pos_score", "neg_score", "discrimination_acc"]
-        elif "graphcl" in task:
-            return ["contrastive_loss", "alignment", "cosine_sim"]
-        elif "s2gae" in task:
-            return ["edge_accuracy", "edge_reconstruction_loss"]
-        elif "higmae" in task:
-            return ["recon_loss", "cosine_sim"]
-        elif "dgmae" in task:
-            return ["loss_f", "loss_d", "cosine_sim_f", "cosine_sim_d"]
+        elif "grace" in task:
+            return ["loss", "loss_view1", "loss_view2"]
         else:
             raise ValueError(f"Invalid task {task}")

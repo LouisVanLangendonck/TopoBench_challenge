@@ -1,5 +1,0 @@
-_target_: topobench.evaluator.graphmae_evaluator.GraphMAEEvaluator
-
-# Metrics for GraphMAE pre-training
-# Available options: recon_loss, cosine_sim, mse
-metrics: [recon_loss, cosine_sim]

@@ -1,13 +1,13 @@
 _target_: topobench.model.TBModel
 
-model_name: gps_graphmaev2
+model_name: gps_grace
 model_domain: graph
 
 feature_encoder:
   _target_: topobench.nn.encoders.${model.feature_encoder.encoder_name}
   encoder_name: AllCellFeatureEncoder
   in_channels: ${infer_in_channels:${dataset},${oc.select:transforms,null}}
-  out_channels: 512
+  out_channels: 128
   proj_dropout: 0.1
 
 backbone:
@@ -20,37 +20,35 @@ backbone:
   attn_type: multihead
   local_conv_type: gin
 
-# Use GraphMAEv2GNNWrapper for masking, EMA encoder, and latent loss
+# Use GRACEGNNWrapper for adaptive augmentation and contrastive learning
 backbone_wrapper:
-  _target_: topobench.nn.wrappers.GraphMAEv2GNNWrapper 
+  _target_: topobench.nn.wrappers.GRACEGNNWrapper 
   _partial_: true
-  wrapper_name: GraphMAEv2GNNWrapper
+  wrapper_name: GRACEGNNWrapper
   out_channels: ${model.feature_encoder.out_channels}
   num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
-  # GraphMAEv2-specific parameters - challenging but trainable
-  mask_rate: 0.50  
-  replace_rate: 0.0  
-  drop_edge_rate: 0.4  
-  momentum: 0.996  
-  delayed_ema_epoch: 0  
-  lam: 1.0  # Balance between reconstruction and latent matching
+  # GRACE-specific parameters - adaptive augmentation with degree centrality
+  drop_edge_rate_1: 0.2  # View 1 edge drop rate
+  drop_edge_rate_2: 0.4  # View 2 edge drop rate (different for diversity)
+  drop_feature_rate_1: 0.1  # View 1 feature mask rate
+  drop_feature_rate_2: 0.0  # View 2 feature mask rate
+  centrality_measure: degree  # Options: degree, eigenvector, pagerank
+  drop_scheme: adaptive  # Options: adaptive, uniform
+  threshold: 0.7  # Maximum drop probability
 
-# GraphMAEv2ReadOut handles the decoder with re-masking
+# GRACEReadOut handles the projection head for contrastive learning
 readout:
   _target_: topobench.nn.readouts.${model.readout.readout_name}
-  readout_name: GraphMAEv2ReadOut
+  readout_name: GRACEReadOut
   num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
   hidden_dim: ${model.feature_encoder.out_channels}
-  out_channels: ${dataset.parameters.num_features}  # Reconstructs RAW features (not including PSEs)
+  out_channels: ${model.feature_encoder.out_channels}  # Projection output dimension
   task_level: ${dataset.parameters.task_level}
-  pooling_type: mean
-  # GraphMAEv2 readout specific parameters - aggressive for challenge
-  decoder_type: mlp  # MLP for non-linear reconstruction
-  decoder_hidden_dim: 128  # Large hidden for complex inverse mapping
-  num_remasking: 7  # More re-masks for robustness
-  remask_rate: 0.75  # Higher re-masking rate
-  remask_method: random  # Random keeps it challenging
+  pooling_type: sum
+  # GRACE readout specific parameters
+  proj_hidden_dim: 256  # Hidden dimension for projection head
 
 # compile model for faster training with pytorch 2.0
 compile: false
+
 

@@ -4,12 +4,12 @@
 # order of defaults determines the order in which configs override each other
 defaults:
   - _self_
-  - dataset: graph/GraphUniverse_dgi
-  - model: graph/gps_dgi
+  - dataset: graph/GraphUniverse_graphmaev2
+  - model: graph/gps_graphmaev2
   - transforms: ${get_default_transform:${dataset},${model}} #no_transform
   - optimizer: default
-  - loss: dgi
-  - evaluator: dgi
+  - loss: graphmaev2
+  - evaluator: graphmaev2
   - callbacks: default
   - logger: wandb # set logger here or use command line (e.g. `python train.py logger=tensorboard`)
   - trainer: ${get_default_trainer:} #default

@@ -285,4 +285,3 @@ class GraphMAEv2GNNWrapper(AbstractWrapper):
         self.current_epoch = epoch
         if self.training and epoch >= self.delayed_ema_epoch:
             self.ema_update()
-
