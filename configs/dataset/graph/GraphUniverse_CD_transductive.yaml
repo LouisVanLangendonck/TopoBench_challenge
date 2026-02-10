@@ -11,21 +11,21 @@ loader:
       universe_parameters:
         K: 10
         feature_dim: 15
-        center_variance: 0.1
-        cluster_variance: 1.0
-        edge_propensity_variance: 1.0
+        center_variance: 0.2
+        cluster_variance: 0.5
+        edge_propensity_variance: 0.5
         seed: 42
       family_parameters:
-        n_graphs: 100
-        min_n_nodes: 80
-        max_n_nodes: 100
-        min_communities: 4
-        max_communities: 6
-        homophily_range: [0.4, 0.7]
-        avg_degree_range: [1.0, 2.0]
-        degree_separation_range: [1.0, 1.0]
+        n_graphs: 1
+        min_n_nodes: 1000
+        max_n_nodes: 1000
+        min_communities: 10
+        max_communities: 10
+        homophily_range: [0.5, 0.5]
+        avg_degree_range: [2.5, 2.5]
+        degree_separation_range: [0.5, 0.5]
         degree_distribution: power_law
-        power_law_exponent_range: [1.5, 2.5]
+        power_law_exponent_range: [2.5, 2.5]
         seed: ${dataset.loader.parameters.generation_parameters.universe_parameters.seed}
     
 
@@ -40,7 +40,7 @@ parameters:
 
 #splits
 split_params:
-  learning_setting: inductive
+  learning_setting: transductive
   data_split_dir: ${dataset.loader.parameters.data_dir}/data_splits
   data_seed: 0
   split_type: random #'k-fold' # either "k-fold" or "random" strategies
@@ -49,6 +49,6 @@ split_params:
 
 # Dataloader parameters
 dataloader_params:
-  batch_size: 16 
+  batch_size: 1
   num_workers: 0
   pin_memory: False
