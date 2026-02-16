@@ -1,3 +1,14 @@
+"""Downstream evaluation for INDUCTIVE learning setting.
+
+This module handles evaluation on multiple graphs where entire graphs are split
+into train/val/test sets. For TRANSDUCTIVE evaluation (single graph with node
+masks), use downstream_eval_transductive.py instead.
+
+Key differences:
+- Inductive: Multiple graphs, graph-level splits, supports graph-level tasks
+- Transductive: Single graph, node-level masks, node-level tasks only
+"""
+
 # =============================================================================
 # GraphUniverse Override Configuration
 # =============================================================================
