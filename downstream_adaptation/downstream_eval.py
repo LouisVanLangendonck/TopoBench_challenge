@@ -349,10 +349,10 @@ def load_pretrained_encoder(
     model_config = config["model"]
     pretraining_method = detect_pretraining_method(config)
     
-    if pretraining_method not in ["graphmaev2", "grace", "linkpred"]:
+    if pretraining_method not in ["graphmaev2", "grace", "linkpred", "dgi"]:
         raise ValueError(
             f"Unsupported pretraining method '{pretraining_method}'. "
-            f"Only 'graphmaev2', 'grace', and 'linkpred' are supported."
+            f"Only 'graphmaev2', 'grace', 'linkpred', and 'dgi' are supported."
         )
     
     # Build feature encoder
@@ -798,7 +798,7 @@ def extract_normalization_scales_from_config(config: dict) -> dict:
         gen_params = dataset_config.get("loader", {}).get("parameters", {}).get("generation_parameters", {})
         family_params = gen_params.get("family_parameters", {})
         
-        max_n_nodes = family_params.get("max_n_nodes", 200)
+        max_n_nodes = family_params.get("n_nodes_range", [200, 200])[1]
         avg_degree_range = family_params.get("avg_degree_range", [2.0, 10.0])
         max_avg_degree = max(avg_degree_range)
         
@@ -2104,7 +2104,7 @@ def run_downstream_evaluation(
 def main():
     parser = argparse.ArgumentParser(description="Downstream evaluation pipeline.")
     parser.add_argument("--run_dir", type=str, required=True, help="Wandb run directory")
-    parser.add_argument("--downstream_task", type=str, default="basic_property_reconstruction",
+    parser.add_argument("--downstream_task", type=str, default="community_related_property_reconstruction",
                        choices=["basic_property_reconstruction", "community_related_property_reconstruction"])
     parser.add_argument("--n_evaluation_graphs", type=int, default=200)
     parser.add_argument("--n_train", type=int, default=50)

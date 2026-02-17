@@ -511,13 +511,10 @@ def create_graphuniverse_test_graphs(K: int = 3, n_graphs: int = 5) -> List[Data
     # Generate family with full parameter control
     family = GraphFamilyGenerator(
         universe=universe,
-        min_n_nodes=25, 
-        max_n_nodes=50,
-        min_communities=2,
-        max_communities=min(K, 7),  # Don't exceed K
+        n_nodes_range=[25, 50],
+        n_communities_range=[2, min(K, 7)],
         homophily_range=(0.2, 0.8),
         avg_degree_range=(2.0, 10.0),
-        degree_distribution="power_law",
         power_law_exponent_range=(2.0, 5.0),
         degree_separation_range=(0.1, 0.7),
         seed=42

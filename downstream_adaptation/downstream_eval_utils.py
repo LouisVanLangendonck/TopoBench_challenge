@@ -199,18 +199,12 @@ def detect_pretraining_method(config: dict) -> str:
             return "graphmaev2"
         elif "GRACE" in wrapper_target or "grace" in wrapper_target.lower():
             return "grace"
-        elif "DGMAE" in wrapper_target or "dgmae" in wrapper_target.lower():
-            return "dgmae"
         elif "GraphMAE" in wrapper_target:
             return "graphmae"
         elif "GraphCL" in wrapper_target:
             return "graphcl"
         elif "LinkPred" in wrapper_target:
             return "linkpred"
-        elif "S2GAE" in wrapper_target or "s2gae" in wrapper_target.lower():
-            return "s2gae"
-        elif "HiGMAE" in wrapper_target or "higmae" in wrapper_target.lower():
-            return "higmae"
     
     loss_config = config.get("loss", {})
     dataset_loss = loss_config.get("dataset_loss", {})
@@ -222,18 +216,10 @@ def detect_pretraining_method(config: dict) -> str:
         return "graphmaev2"
     elif "GRACE" in loss_target or "grace" in loss_target.lower():
         return "grace"
-    elif "DGMAE" in loss_target or "dgmae" in loss_target.lower():
-        return "dgmae"
     elif "GraphMAE" in loss_target:
         return "graphmae"
-    elif "GraphCL" in loss_target:
-        return "graphcl"
     elif "LinkPred" in loss_target:
         return "linkpred"
-    elif "S2GAE" in loss_target or "s2gae" in loss_target.lower():
-        return "s2gae"
-    elif "HiGMAE" in loss_target or "higmae" in loss_target.lower():
-        return "higmae"
     
     return "supervised"
 
@@ -330,10 +316,10 @@ def load_pretrained_encoder(
     model_config = config["model"]
     pretraining_method = detect_pretraining_method(config)
     
-    if pretraining_method not in ["graphmaev2", "grace", "linkpred"]:
+    if pretraining_method not in ["graphmaev2", "grace", "linkpred", "dgi"]:
         raise ValueError(
             f"Unsupported pretraining method '{pretraining_method}'. "
-            f"Only 'graphmaev2', 'grace', and 'linkpred' are supported."
+            f"Only 'graphmaev2', 'grace', 'linkpred', and 'dgi' are supported."
         )
     
     # Build feature encoder

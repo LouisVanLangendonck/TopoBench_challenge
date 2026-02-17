@@ -251,6 +251,15 @@ class TBModel(LightningModule):
         """
         # Get the correct mask
         if self.learning_setting == "transductive":
+            # Check if this is DGI or GRACE - these methods use ALL nodes for pretraining
+            # (GraphMAEv2 and LinkPred can use train/val/test splits for evaluation)
+            is_dgi = "x_0_corrupted" in model_out  # DGI
+            is_grace = "z_1" in model_out and "z_2" in model_out  # GRACE
+            
+            if is_dgi or is_grace:
+                # Skip masking for DGI/GRACE - use all nodes
+                return model_out
+            
             if self.state_str == "Training":
                 mask = batch.train_mask
             elif self.state_str == "Validation":

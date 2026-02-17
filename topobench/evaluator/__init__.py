@@ -38,6 +38,7 @@ from .evaluator import TBEvaluator  # noqa: E402
 from .graphmaev2_evaluator import GraphMAEv2Evaluator
 from .grace_evaluator import GRACEEvaluator
 from .linkpred_evaluator import LinkPredEvaluator
+from .dgi_evaluator import DGIEvaluator
 
 __all__ = [
     "METRICS",
@@ -46,4 +47,5 @@ __all__ = [
     "GraphMAEv2Evaluator",
     "GRACEEvaluator",
     "LinkPredEvaluator",
+    "DGIEvaluator",
 ]

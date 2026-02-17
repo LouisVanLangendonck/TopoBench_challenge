@@ -4,7 +4,7 @@ loader:
   parameters: 
     data_domain: graph
     data_type: GraphUniverse
-    data_name: GraphUniverse_LinkPred_Transductive
+    data_name: GraphUniverse_DGI_Transductive
     data_dir: ${paths.data_dir}/${dataset.loader.parameters.data_domain}/${dataset.loader.parameters.data_type}
     generation_parameters:
       task: community_detection
@@ -17,7 +17,7 @@ loader:
         seed: 42
       family_parameters:
         n_graphs: 1
-        n_nodes_range: [5000, 5000]
+        n_nodes_range: [2000, 2000]
         n_communities_range: [10, 10]
         homophily_range: [0.5, 0.5]
         avg_degree_range: [2.5, 2.5]
@@ -29,10 +29,10 @@ loader:
 # Dataset parameters
 parameters:
   num_features: ${dataset.loader.parameters.generation_parameters.universe_parameters.feature_dim}
-  num_classes: 1  # Binary classification (edge exists or not)
-  task: linkpred
-  monitor_metric: accuracy  # Track accuracy for link prediction
-  task_level: node  # Node-level embeddings, combined in readout for edge prediction
+  num_classes: 1  # Binary classification (positive vs negative samples)
+  task: dgi
+  monitor_metric: accuracy  # Track discrimination accuracy
+  task_level: node  # Node-level embeddings
 
 #splits
 split_params:
@@ -48,6 +48,5 @@ dataloader_params:
   batch_size: 1  # Single graph in transductive setting
   num_workers: 0
   pin_memory: False
-
 
 

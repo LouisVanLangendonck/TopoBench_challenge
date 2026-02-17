@@ -17,17 +17,13 @@ loader:
         seed: 42
       family_parameters:
         n_graphs: 100
-        min_n_nodes: 80
-        max_n_nodes: 100
-        min_communities: 4
-        max_communities: 6
+        n_nodes_range: [80, 100]
+        n_communities_range: [4, 6]
         homophily_range: [0.4, 0.7]
         avg_degree_range: [1.0, 2.0]
         degree_separation_range: [1.0, 1.0]
-        degree_distribution: power_law
         power_law_exponent_range: [1.5, 2.5]
         seed: ${dataset.loader.parameters.generation_parameters.universe_parameters.seed}
-        timeout_seconds: 120.0
     
 
 # Dataset parameters
