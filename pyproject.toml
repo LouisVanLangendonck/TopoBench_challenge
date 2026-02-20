@@ -48,12 +48,12 @@ dependencies=[
     "ipykernel",
     "notebook",
     "jupyterlab",
+    "graph-universe",
     "rich",
     "ogb",
     "rootutils",
     "topomodelx @ git+https://github.com/pyt-team/TopoModelX.git",
     "toponetx @ git+https://github.com/pyt-team/TopoNetX.git",
-    "graphuniverse @ git+https://github.com/LouisVanLangendonck/GraphUniverse.git",
     "lightning==2.4.0",
 ]
 

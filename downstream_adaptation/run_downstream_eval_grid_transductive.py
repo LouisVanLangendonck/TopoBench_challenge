@@ -142,6 +142,9 @@ def fetch_runs_from_wandb_project(
 def generate_grid_configs(
     run_dirs: List[str],
     modes: List[str],
+    n_train_values: List[int] | None = None,
+    n_evaluation: int = 500,
+    data_seed: int = 0,
     run_infos: List[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Generate all combinations of grid parameters for transductive setting."""
@@ -157,11 +160,27 @@ def generate_grid_configs(
         pretrain_config = run_dir_to_config.get(run_dir)
         
         for mode in modes:
-            configs.append({
-                "run_dir": run_dir,
-                "mode": mode,
-                "pretrain_config": pretrain_config,
-            })
+            if n_train_values is not None:
+                # Few-shot learning: iterate over n_train values
+                for n_train in n_train_values:
+                    configs.append({
+                        "run_dir": run_dir,
+                        "mode": mode,
+                        "n_train": n_train,
+                        "n_evaluation": n_evaluation,
+                        "data_seed": data_seed,
+                        "pretrain_config": pretrain_config,
+                    })
+            else:
+                # Standard setting: use all training data
+                configs.append({
+                    "run_dir": run_dir,
+                    "mode": mode,
+                    "n_train": None,
+                    "n_evaluation": None,
+                    "data_seed": data_seed,
+                    "pretrain_config": pretrain_config,
+                })
     
     return configs
 
@@ -176,6 +195,10 @@ def get_experiment_name(config: Dict[str, Any], run_dir: str) -> str:
         config["mode"],
     ]
     
+    # Add n_train if doing few-shot learning
+    if config.get("n_train") is not None:
+        components.append(f"n{config['n_train']}")
+    
     return "_".join(components)
 
 
@@ -187,12 +210,23 @@ def print_grid_summary(configs: List[Dict[str, Any]]):
     
     run_dirs = sorted(set(c["run_dir"] for c in configs))
     modes = sorted(set(c["mode"] for c in configs))
+    n_trains = sorted(set(c.get("n_train") for c in configs if c.get("n_train") is not None))
+    n_evaluation = configs[0].get("n_evaluation") if configs else None
+    data_seed = configs[0].get("data_seed", 0) if configs else 0
     
     print(f"\nRun Directories ({len(run_dirs)}):")
     for i, run_dir in enumerate(run_dirs, 1):
         print(f"  [{i}] {run_dir}")
     
     print(f"\nModes: {modes}")
+    
+    if n_trains:
+        print(f"N_train values (few-shot): {n_trains}")
+        print(f"N_evaluation (fixed val+test): {n_evaluation}")
+        print(f"Data seed: {data_seed}")
+    else:
+        print(f"Training mode: Standard (use all available training data)")
+    
     print(f"\nTask: Node-level community detection (transductive)")
     print(f"Total experiments: {len(configs)}")
     print("=" * 80)
@@ -230,6 +264,14 @@ def run_single_experiment(
     print(f"  Checkpoint: {checkpoint_path}")
     print(f"  Mode: {config['mode']}")
     print(f"  Task: Transductive node classification")
+    
+    if config.get("n_train") is not None:
+        print(f"  N_train: {config['n_train']} (few-shot)")
+        print(f"  N_evaluation: {config['n_evaluation']}")
+        print(f"  Data seed: {config['data_seed']}")
+    else:
+        print(f"  N_train: Use all available (standard)")
+    
     print("=" * 80)
     
     try:
@@ -245,6 +287,9 @@ def run_single_experiment(
             wandb_project=wandb_project,
             classifier_dropout=classifier_dropout,
             input_dropout=input_dropout,
+            n_train=config.get("n_train"),
+            n_evaluation=config.get("n_evaluation"),
+            data_seed=config.get("data_seed", 0),
             pretraining_config=config.get("pretrain_config"),
         )
         
@@ -406,6 +451,26 @@ def main():
     )
     
     parser.add_argument(
+        "--n_train",
+        type=int,
+        nargs="+",
+        default=None,
+        help="List of training set sizes for few-shot learning (default: None, use all available training data)"
+    )
+    parser.add_argument(
+        "--n_evaluation",
+        type=int,
+        default=500,
+        help="Number of evaluation nodes (val+test, max 50%% of total nodes). Only used with --n_train. Default: 500"
+    )
+    parser.add_argument(
+        "--data_seed",
+        type=int,
+        default=0,
+        help="Seed for data splitting (keeps val/test fixed across n_train values). Default: 0"
+    )
+    
+    parser.add_argument(
         "--epochs",
         type=int,
         default=300,
@@ -414,8 +479,8 @@ def main():
     parser.add_argument(
         "--lr",
         type=float,
-        default=0.01,
-        help="Learning rate (default: 0.01)"
+        default=0.001,
+        help="Learning rate (default: 0.001)"
     )
     parser.add_argument(
         "--patience",
@@ -496,6 +561,9 @@ def main():
     configs = generate_grid_configs(
         run_dirs=run_dirs,
         modes=args.modes,
+        n_train_values=args.n_train,
+        n_evaluation=args.n_evaluation,
+        data_seed=args.data_seed,
         run_infos=run_infos,
     )
     

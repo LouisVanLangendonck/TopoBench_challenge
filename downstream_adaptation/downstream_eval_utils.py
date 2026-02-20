@@ -541,3 +541,548 @@ class GraphLevelEncoder(nn.Module):
         else:
             return graph_features
 
+
+# =============================================================================
+# Downstream Classifiers
+# =============================================================================
+
+class LinearClassifier(nn.Module):
+    """Linear classifier for probing."""
+    
+    def __init__(self, input_dim: int, num_classes: int, dropout: float = 0.0):
+        super().__init__()
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+        self.linear = nn.Linear(input_dim, num_classes)
+        nn.init.xavier_uniform_(self.linear.weight, gain=0.01)
+        nn.init.zeros_(self.linear.bias)
+    
+    def forward(self, x):
+        x = self.dropout(x)
+        return self.linear(x)
+
+
+class MLPClassifier(nn.Module):
+    """MLP classifier with configurable layers."""
+    
+    def __init__(
+        self,
+        input_dim: int,
+        num_classes: int,
+        hidden_dims: list[int] = None,
+        dropout: float = 0.5,
+        input_dropout: float = None,
+    ):
+        super().__init__()
+        
+        if hidden_dims is None:
+            hidden_dims = [input_dim // 2, input_dim // 4]
+        
+        if input_dropout is None:
+            input_dropout = dropout
+        
+        layers = []
+        if input_dropout > 0:
+            layers.append(nn.Dropout(input_dropout))
+        
+        prev_dim = input_dim
+        for hidden_dim in hidden_dims:
+            layers.extend([
+                nn.Linear(prev_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+            ])
+            prev_dim = hidden_dim
+        
+        layers.append(nn.Linear(prev_dim, num_classes))
+        self.mlp = nn.Sequential(*layers)
+        self._init_weights()
+    
+    def _init_weights(self):
+        for module in self.mlp.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight, gain=0.1)
+                nn.init.zeros_(module.bias)
+    
+    def forward(self, x):
+        return self.mlp(x)
+
+
+# =============================================================================
+# Property Reconstruction Components
+# =============================================================================
+
+class MultiPropertyRegressor(nn.Module):
+    """Multi-head regressor for basic graph property reconstruction."""
+    
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int | None = None,
+        dropout: float = 0.3,
+        input_dropout: float = None,
+        use_mlp_heads: bool = True,
+    ):
+        super().__init__()
+        
+        if hidden_dim is None:
+            hidden_dim = max(input_dim // 2, 32)
+        
+        if input_dropout is None:
+            input_dropout = dropout
+        
+        self.input_dropout = nn.Dropout(input_dropout) if input_dropout > 0 else nn.Identity()
+        
+        if use_mlp_heads:
+            self.head_avg_degree = nn.Sequential(
+                nn.Linear(input_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, 1),
+            )
+            
+            self.head_gini = nn.Sequential(
+                nn.Linear(input_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, 1),
+                nn.Sigmoid()
+            )
+            
+            self.head_diameter = nn.Sequential(
+                nn.Linear(input_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, 1),
+            )
+        else:
+            self.head_avg_degree = nn.Linear(input_dim, 1)
+            self.head_gini = nn.Sequential(nn.Linear(input_dim, 1), nn.Sigmoid())
+            self.head_diameter = nn.Linear(input_dim, 1)
+        
+        self._init_weights()
+    
+    def _init_weights(self):
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight, gain=0.01)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+    
+    def forward(self, x):
+        """Predict all properties from graph-level embeddings."""
+        x = self.input_dropout(x)
+        
+        return {
+            'avg_degree': self.head_avg_degree(x),
+            'gini': self.head_gini(x),
+            'diameter': self.head_diameter(x),
+        }
+
+
+class CommunityPropertyRegressor(nn.Module):
+    """Multi-head regressor for community-related properties."""
+    
+    def __init__(
+        self,
+        input_dim: int,
+        hidden_dim: int | None = None,
+        dropout: float = 0.3,
+        input_dropout: float = None,
+        use_mlp_heads: bool = True,
+        K: int = 10,
+    ):
+        super().__init__()
+        
+        self.K = K
+        
+        if hidden_dim is None:
+            hidden_dim = max(input_dim // 2, 32)
+        
+        if input_dropout is None:
+            input_dropout = dropout
+        
+        self.input_dropout = nn.Dropout(input_dropout) if input_dropout > 0 else nn.Identity()
+        
+        if use_mlp_heads:
+            self.head_homophily = nn.Sequential(
+                nn.Linear(input_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, 1),
+                nn.Sigmoid()
+            )
+            
+            self.head_community_presence = nn.Sequential(
+                nn.Linear(input_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, K),
+            )
+            
+            self.head_community_detection = nn.Sequential(
+                nn.Linear(input_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(hidden_dim, K),
+            )
+        else:
+            self.head_homophily = nn.Sequential(nn.Linear(input_dim, 1), nn.Sigmoid())
+            self.head_community_presence = nn.Linear(input_dim, K)
+            self.head_community_detection = nn.Linear(input_dim, K)
+        
+        self._init_weights()
+    
+    def _init_weights(self):
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight, gain=0.01)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+    
+    def forward(self, x_graph=None, x_node=None):
+        """Predict community-related properties."""
+        result = {}
+        
+        if x_graph is not None:
+            x_graph_dropout = self.input_dropout(x_graph)
+            result['homophily'] = self.head_homophily(x_graph_dropout)
+            result['community_presence'] = self.head_community_presence(x_graph_dropout)
+        
+        if x_node is not None:
+            x_node_dropout = self.input_dropout(x_node)
+            result['community_detection'] = self.head_community_detection(x_node_dropout)
+        
+        return result
+
+
+def extract_normalization_scales_from_config(config: dict) -> dict:
+    """Extract normalization scales from GraphUniverse config."""
+    dataset_config = config.get("dataset", {})
+    loader_target = dataset_config.get("loader", {}).get("_target_", "")
+    
+    if "GraphUniverse" in loader_target:
+        gen_params = dataset_config.get("loader", {}).get("parameters", {}).get("generation_parameters", {})
+        family_params = gen_params.get("family_parameters", {})
+        
+        max_n_nodes = family_params.get("n_nodes_range", [200, 200])[1]
+        avg_degree_range = family_params.get("avg_degree_range", [2.0, 10.0])
+        max_avg_degree = max(avg_degree_range)
+        
+        return {
+            'homophily': 1.0,
+            'avg_degree': max_avg_degree,
+            'size': float(max_n_nodes),
+            'gini': 1.0,
+            'diameter': float(max_n_nodes),
+        }
+    else:
+        return {
+            'homophily': 1.0,
+            'avg_degree': 20.0,
+            'size': 200.0,
+            'gini': 1.0,
+            'diameter': 20.0,
+        }
+
+
+def extract_property_targets_from_batch(batch):
+    """Extract pre-computed property targets from batch."""
+    if not hasattr(batch, 'property_avg_degree'):
+        raise ValueError("Graph properties not found. Please pre-compute properties first.")
+    
+    properties = {}
+    for prop_name in ['avg_degree', 'gini', 'diameter']:
+        prop_tensor = getattr(batch, f'property_{prop_name}')
+        if prop_tensor.dim() == 1:
+            prop_tensor = prop_tensor.unsqueeze(1)
+        properties[prop_name] = prop_tensor
+    
+    return properties
+
+
+def extract_community_property_targets_from_batch(batch):
+    """Extract pre-computed community-related property targets from batch."""
+    if not hasattr(batch, 'property_homophily'):
+        raise ValueError("Graph properties not found. Please pre-compute properties first.")
+    
+    properties = {}
+    
+    homophily = batch.property_homophily
+    if homophily.dim() == 1:
+        homophily = homophily.unsqueeze(1)
+    properties['homophily'] = homophily
+    
+    if hasattr(batch, 'property_community_presence'):
+        properties['community_presence'] = batch.property_community_presence
+    
+    if hasattr(batch, 'y'):
+        properties['community_detection'] = batch.y
+    
+    return properties
+
+
+class CommunityPropertyReconstructionModel(nn.Module):
+    """Model for community-related property reconstruction."""
+    
+    def __init__(
+        self,
+        encoder: nn.Module,
+        property_regressor: CommunityPropertyRegressor,
+        freeze_encoder: bool = True,
+    ):
+        super().__init__()
+        self.encoder = encoder
+        self.property_regressor = property_regressor
+        self.freeze_encoder = freeze_encoder
+        self.task_level = "mixed"
+        
+        if freeze_encoder:
+            self._freeze_encoder()
+    
+    def _freeze_encoder(self):
+        """Freeze encoder parameters."""
+        for param in self.encoder.parameters():
+            param.requires_grad = False
+        self.encoder.eval()
+        
+        for module in self.encoder.modules():
+            if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+                module.eval()
+                module.track_running_stats = False
+    
+    def forward(self, batch):
+        """Forward pass."""
+        if self.freeze_encoder:
+            self.encoder.eval()
+            with torch.no_grad():
+                features = self.encoder(batch, return_node_features=True)
+        else:
+            features = self.encoder(batch, return_node_features=True)
+        
+        return self.property_regressor(
+            x_graph=features['graph'],
+            x_node=features['node'],
+        )
+    
+    def train(self, mode=True):
+        """Override train to keep frozen encoder in eval mode."""
+        super().train(mode)
+        if self.freeze_encoder:
+            self.encoder.eval()
+        return self
+    
+    def get_model_state_info(self) -> dict:
+        """Get diagnostic info about model state."""
+        encoder_params = sum(p.numel() for p in self.encoder.parameters())
+        encoder_trainable = sum(p.numel() for p in self.encoder.parameters() if p.requires_grad)
+        regressor_params = sum(p.numel() for p in self.property_regressor.parameters())
+        regressor_trainable = sum(p.numel() for p in self.property_regressor.parameters() if p.requires_grad)
+        
+        return {
+            "encoder_params": encoder_params,
+            "encoder_trainable": encoder_trainable,
+            "regressor_params": regressor_params,
+            "regressor_trainable": regressor_trainable,
+            "freeze_encoder": self.freeze_encoder,
+            "encoder_mode": "eval" if not self.encoder.training else "train",
+            "encoder_in_train_mode": self.encoder.training,
+        }
+
+
+class PropertyReconstructionModel(nn.Module):
+    """Model for multi-property reconstruction."""
+    
+    def __init__(
+        self,
+        encoder: nn.Module,
+        property_regressor: MultiPropertyRegressor,
+        freeze_encoder: bool = True,
+    ):
+        super().__init__()
+        self.encoder = encoder
+        self.property_regressor = property_regressor
+        self.freeze_encoder = freeze_encoder
+        self.task_level = "graph"
+        
+        if freeze_encoder:
+            self._freeze_encoder()
+    
+    def _freeze_encoder(self):
+        """Freeze encoder parameters."""
+        for param in self.encoder.parameters():
+            param.requires_grad = False
+        self.encoder.eval()
+        
+        for module in self.encoder.modules():
+            if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+                module.eval()
+                module.track_running_stats = False
+    
+    def forward(self, batch):
+        """Forward pass."""
+        if self.freeze_encoder:
+            self.encoder.eval()
+            with torch.no_grad():
+                graph_features = self.encoder(batch)
+        else:
+            graph_features = self.encoder(batch)
+        
+        return self.property_regressor(graph_features)
+    
+    def train(self, mode=True):
+        """Override train to keep frozen encoder in eval mode."""
+        super().train(mode)
+        if self.freeze_encoder:
+            self.encoder.eval()
+        return self
+    
+    def get_model_state_info(self) -> dict:
+        """Get diagnostic info about model state."""
+        encoder_params = sum(p.numel() for p in self.encoder.parameters())
+        encoder_trainable = sum(p.numel() for p in self.encoder.parameters() if p.requires_grad)
+        regressor_params = sum(p.numel() for p in self.property_regressor.parameters())
+        regressor_trainable = sum(p.numel() for p in self.property_regressor.parameters() if p.requires_grad)
+        
+        encoder_training = any(m.training for m in self.encoder.modules())
+        regressor_training = any(m.training for m in self.property_regressor.modules())
+        
+        return {
+            "encoder_params": encoder_params,
+            "encoder_trainable": encoder_trainable,
+            "encoder_frozen": self.freeze_encoder,
+            "encoder_in_train_mode": encoder_training,
+            "regressor_params": regressor_params,
+            "regressor_trainable": regressor_trainable,
+            "regressor_in_train_mode": regressor_training,
+        }
+
+
+class DownstreamModel(nn.Module):
+    """Complete downstream model: encoder + classifier."""
+    
+    def __init__(
+        self,
+        encoder: nn.Module,
+        classifier: nn.Module,
+        freeze_encoder: bool = True,
+        task_level: str = "node",
+    ):
+        super().__init__()
+        self.encoder = encoder
+        self.classifier = classifier
+        self.freeze_encoder = freeze_encoder
+        self.task_level = task_level
+        
+        if freeze_encoder:
+            self._freeze_encoder()
+    
+    def _freeze_encoder(self):
+        """Freeze encoder parameters."""
+        for param in self.encoder.parameters():
+            param.requires_grad = False
+        self.encoder.eval()
+        
+        for module in self.encoder.modules():
+            if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+                module.eval()
+                module.track_running_stats = False
+    
+    def forward(self, batch):
+        """Forward pass."""
+        if self.freeze_encoder:
+            self.encoder.eval()
+            with torch.no_grad():
+                features = self.encoder(batch)
+        else:
+            features = self.encoder(batch)
+        
+        return self.classifier(features)
+    
+    def train(self, mode=True):
+        """Override train to keep frozen encoder in eval mode."""
+        super().train(mode)
+        if self.freeze_encoder:
+            self.encoder.eval()
+        return self
+    
+    def get_model_state_info(self) -> dict:
+        """Get diagnostic info about model state."""
+        encoder_params = sum(p.numel() for p in self.encoder.parameters())
+        encoder_trainable = sum(p.numel() for p in self.encoder.parameters() if p.requires_grad)
+        classifier_params = sum(p.numel() for p in self.classifier.parameters())
+        classifier_trainable = sum(p.numel() for p in self.classifier.parameters() if p.requires_grad)
+        
+        encoder_training = any(m.training for m in self.encoder.modules())
+        classifier_training = any(m.training for m in self.classifier.modules())
+        
+        return {
+            "encoder_params": encoder_params,
+            "encoder_trainable": encoder_trainable,
+            "encoder_frozen": self.freeze_encoder,
+            "encoder_in_train_mode": encoder_training,
+            "classifier_params": classifier_params,
+            "classifier_trainable": classifier_trainable,
+            "classifier_in_train_mode": classifier_training,
+        }
+
+
+class LinearRegressor(nn.Module):
+    """Linear regressor for probing."""
+    
+    def __init__(self, input_dim: int, output_dim: int = 1, dropout: float = 0.0):
+        super().__init__()
+        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
+        self.linear = nn.Linear(input_dim, output_dim)
+        nn.init.xavier_uniform_(self.linear.weight, gain=0.01)
+        nn.init.zeros_(self.linear.bias)
+    
+    def forward(self, x):
+        x = self.dropout(x)
+        return self.linear(x)
+
+
+class MLPRegressor(nn.Module):
+    """MLP regressor with configurable layers."""
+    
+    def __init__(
+        self,
+        input_dim: int,
+        output_dim: int = 1,
+        hidden_dims: list[int] = None,
+        dropout: float = 0.5,
+        input_dropout: float = None,
+    ):
+        super().__init__()
+        
+        if hidden_dims is None:
+            hidden_dims = [input_dim // 2, input_dim // 4]
+        
+        if input_dropout is None:
+            input_dropout = dropout
+        
+        layers = []
+        if input_dropout > 0:
+            layers.append(nn.Dropout(input_dropout))
+        
+        prev_dim = input_dim
+        for hidden_dim in hidden_dims:
+            layers.extend([
+                nn.Linear(prev_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+            ])
+            prev_dim = hidden_dim
+        
+        layers.append(nn.Linear(prev_dim, output_dim))
+        self.mlp = nn.Sequential(*layers)
+        self._init_weights()
+    
+    def _init_weights(self):
+        for module in self.mlp.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight, gain=0.1)
+                nn.init.zeros_(module.bias)
+    
+    def forward(self, x):
+        return self.mlp(x)
+

@@ -59,16 +59,17 @@ class LinkPredGNNWrapper(AbstractWrapper):
     def sample_edges(self, edge_index, batch_indices, num_nodes, device):
         """Sample positive edges (to remove) and keep remaining edges for message passing.
         
-        This function ensures sampling is done within each graph separately.
+        Fast global sampling - since edges only exist within graphs (never between graphs),
+        we can sample globally without per-graph processing.
         
         Parameters
         ----------
         edge_index : torch.Tensor
             Full edge index of shape (2, num_edges).
         batch_indices : torch.Tensor
-            Batch assignment for each node.
+            Batch assignment for each node (unused, kept for API consistency).
         num_nodes : int
-            Total number of nodes across all graphs.
+            Total number of nodes across all graphs (unused, kept for API consistency).
         device : torch.device
             Device to use.
             
@@ -81,46 +82,20 @@ class LinkPredGNNWrapper(AbstractWrapper):
         """
         num_edges = edge_index.size(1)
         
-        # Get unique batch IDs
-        batch_ids = batch_indices.unique()
+        if num_edges == 0:
+            return (
+                torch.empty((2, 0), dtype=edge_index.dtype, device=device),
+                torch.empty((2, 0), dtype=edge_index.dtype, device=device)
+            )
         
-        remaining_edges_list = []
-        pos_edges_list = []
+        num_pos_samples = max(1, int(self.edge_sample_ratio * num_edges))
         
-        # Process each graph separately to ensure within-graph sampling
-        for batch_id in batch_ids:
-            # Get nodes and edges for this graph
-            graph_node_mask = (batch_indices == batch_id)
-            graph_nodes = torch.where(graph_node_mask)[0]
-            
-            # Find edges where both endpoints are in this graph
-            src_in_graph = torch.isin(edge_index[0], graph_nodes)
-            dst_in_graph = torch.isin(edge_index[1], graph_nodes)
-            graph_edge_mask = src_in_graph & dst_in_graph
-            graph_edge_indices = torch.where(graph_edge_mask)[0]
-            
-            if len(graph_edge_indices) == 0:
-                continue
-            
-            # Sample edges to remove (positive samples)
-            num_graph_edges = len(graph_edge_indices)
-            num_pos_samples = max(1, int(self.edge_sample_ratio * num_graph_edges))
-            
-            # Random permutation for this graph's edges
-            perm = torch.randperm(num_graph_edges, device=device)
-            pos_indices = graph_edge_indices[perm[:num_pos_samples]]
-            remain_indices = graph_edge_indices[perm[num_pos_samples:]]
-            
-            remaining_edges_list.append(edge_index[:, remain_indices])
-            pos_edges_list.append(edge_index[:, pos_indices])
+        perm = torch.randperm(num_edges, device=device)
+        pos_indices = perm[:num_pos_samples]
+        remain_indices = perm[num_pos_samples:]
         
-        # Concatenate all graphs
-        if len(remaining_edges_list) > 0:
-            remaining_edge_index = torch.cat(remaining_edges_list, dim=1)
-            pos_edge_index = torch.cat(pos_edges_list, dim=1)
-        else:
-            remaining_edge_index = torch.empty((2, 0), dtype=edge_index.dtype, device=device)
-            pos_edge_index = torch.empty((2, 0), dtype=edge_index.dtype, device=device)
+        remaining_edge_index = edge_index[:, remain_indices]
+        pos_edge_index = edge_index[:, pos_indices]
         
         return remaining_edge_index, pos_edge_index
     
@@ -154,6 +129,15 @@ class LinkPredGNNWrapper(AbstractWrapper):
         batch_ids = batch_indices.unique()
         neg_edges_list = []
         
+        # Calculate samples per graph proportionally
+        samples_per_graph = {}
+        total_nodes = 0
+        for batch_id in batch_ids:
+            graph_node_mask = (batch_indices == batch_id)
+            num_graph_nodes = graph_node_mask.sum().item()
+            samples_per_graph[batch_id.item()] = num_graph_nodes
+            total_nodes += num_graph_nodes
+        
         for batch_id in batch_ids:
             graph_node_mask = (batch_indices == batch_id)
             graph_nodes = torch.where(graph_node_mask)[0]
@@ -168,18 +152,34 @@ class LinkPredGNNWrapper(AbstractWrapper):
             graph_edge_mask = src_in_graph & dst_in_graph
             graph_edges = remaining_edge_index[:, graph_edge_mask]
             
-            # Create node index mapping for this graph (map to 0, 1, 2, ...)
-            node_mapping = torch.zeros(num_nodes, dtype=torch.long, device=device)
+            # Calculate max possible negative edges FIRST
+            # For directed graph: n*(n-1) - num_existing_edges
+            max_possible_negs = num_graph_nodes * (num_graph_nodes - 1) - graph_edges.size(1)
+            
+            # Calculate number of negative samples for this graph
+            graph_neg_samples = max(1, int(num_neg_samples * samples_per_graph[batch_id.item()] / total_nodes))
+            
+            # CRITICAL: Cap at what's actually possible BEFORE any sampling
+            graph_neg_samples = min(graph_neg_samples, max(1, max_possible_negs))
+            
+            # Create node index mapping BEFORE converting edges
+            node_mapping = torch.full((num_nodes,), -1, dtype=torch.long, device=device)
             node_mapping[graph_nodes] = torch.arange(num_graph_nodes, device=device)
             
-            # Map edges to local indices
+            # Map edges to local indices - verify they're valid
             local_edges = node_mapping[graph_edges]
             
-            # Calculate number of negative samples for this graph (proportional to graph size)
-            graph_neg_samples = max(1, int(num_neg_samples * num_graph_nodes / num_nodes))
+            # Verify no invalid indices before calling negative_sampling
+            if (local_edges < 0).any() or (local_edges >= num_graph_nodes).any():
+                # Fallback to random sampling
+                src_idx = torch.randint(0, num_graph_nodes, (graph_neg_samples,), device=device)
+                dst_idx = torch.randint(0, num_graph_nodes, (graph_neg_samples,), device=device)
+                global_neg_edges = torch.stack([graph_nodes[src_idx], graph_nodes[dst_idx]], dim=0)
+                neg_edges_list.append(global_neg_edges)
+                continue
             
-            # Sample negative edges in local index space
             try:
+                
                 local_neg_edges = negative_sampling(
                     edge_index=local_edges,
                     num_nodes=num_graph_nodes,
@@ -187,15 +187,32 @@ class LinkPredGNNWrapper(AbstractWrapper):
                     method=self.sampling_method,
                 )
                 
-                # Map back to global indices
-                global_neg_edges = graph_nodes[local_neg_edges]
+                # Validate indices are within bounds
+                if (local_neg_edges >= num_graph_nodes).any() or (local_neg_edges < 0).any():
+                    raise ValueError(f"Invalid local indices from negative_sampling")
+                
+                # Map back to global indices - index each row separately for safety
+                # local_neg_edges is (2, num_samples), so index source and dest separately
+                global_neg_edges = torch.stack([
+                    graph_nodes[local_neg_edges[0]],  # Map source nodes
+                    graph_nodes[local_neg_edges[1]]   # Map destination nodes
+                ], dim=0)
+                
+                # Final validation of global indices before adding to list
+                if (global_neg_edges >= num_nodes).any() or (global_neg_edges < 0).any():
+                    raise ValueError(f"Global negative edges out of bounds!")
+                
                 neg_edges_list.append(global_neg_edges)
+                
             except Exception as e:
-                # Fallback: random sampling within graph
+                # Fallback: safe random sampling
                 src_idx = torch.randint(0, num_graph_nodes, (graph_neg_samples,), device=device)
                 dst_idx = torch.randint(0, num_graph_nodes, (graph_neg_samples,), device=device)
-                global_neg_edges = torch.stack([graph_nodes[src_idx], graph_nodes[dst_idx]], dim=0)
-                neg_edges_list.append(global_neg_edges)
+                # Ensure src != dst
+                mask = src_idx != dst_idx
+                if mask.sum() > 0:
+                    global_neg_edges = torch.stack([graph_nodes[src_idx[mask]], graph_nodes[dst_idx[mask]]], dim=0)
+                    neg_edges_list.append(global_neg_edges)
         
         if len(neg_edges_list) > 0:
             neg_edge_index = torch.cat(neg_edges_list, dim=1)

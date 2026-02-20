@@ -40,8 +40,9 @@ from downstream_eval_utils import (
     prepare_batch_for_topobench,
     verify_encoder_outputs,
     PretrainedEncoder,
+    LinearClassifier,
+    MLPClassifier,
 )
-
 
 # =============================================================================
 # Transductive-specific Components
@@ -92,67 +93,6 @@ class TransductiveNodeClassifier(nn.Module):
         if self.freeze_encoder:
             self.encoder.eval()
         return self
-
-
-class LinearClassifier(nn.Module):
-    """Linear classifier for probing."""
-    
-    def __init__(self, input_dim: int, num_classes: int, dropout: float = 0.0):
-        super().__init__()
-        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
-        self.linear = nn.Linear(input_dim, num_classes)
-        nn.init.xavier_uniform_(self.linear.weight, gain=0.01)
-        nn.init.zeros_(self.linear.bias)
-    
-    def forward(self, x):
-        x = self.dropout(x)
-        return self.linear(x)
-
-
-class MLPClassifier(nn.Module):
-    """MLP classifier with configurable layers."""
-    
-    def __init__(
-        self,
-        input_dim: int,
-        num_classes: int,
-        hidden_dims: list[int] = None,
-        dropout: float = 0.5,
-        input_dropout: float = None,
-    ):
-        super().__init__()
-        
-        if hidden_dims is None:
-            hidden_dims = [input_dim // 2, input_dim // 4]
-        
-        if input_dropout is None:
-            input_dropout = dropout
-        
-        layers = []
-        if input_dropout > 0:
-            layers.append(nn.Dropout(input_dropout))
-        
-        prev_dim = input_dim
-        for hidden_dim in hidden_dims:
-            layers.extend([
-                nn.Linear(prev_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-            ])
-            prev_dim = hidden_dim
-        
-        layers.append(nn.Linear(prev_dim, num_classes))
-        self.mlp = nn.Sequential(*layers)
-        self._init_weights()
-    
-    def _init_weights(self):
-        for module in self.mlp.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight, gain=0.1)
-                nn.init.zeros_(module.bias)
-    
-    def forward(self, x):
-        return self.mlp(x)
 
 
 # =============================================================================
@@ -361,10 +301,10 @@ def run_downstream_evaluation_transductive(
     wandb_project: str = "downstream_eval_transductive",
     classifier_dropout: float = 0.5,
     input_dropout: float = None,
-    pretraining_config: dict | None = None,
     n_train: int | None = None,
     n_evaluation: int | None = None,
     data_seed: int = 0,
+    pretraining_config: dict | None = None,
 ) -> dict:
     """Run full downstream evaluation pipeline for transductive setting."""
     run_dir = Path(run_dir)
@@ -568,25 +508,25 @@ def run_downstream_evaluation_transductive(
             "few_shot": n_train is not None or n_evaluation is not None,
         }
         
-        if pretraining_config is not None:
-            def flatten_dict(d, parent_key='', sep='/'):
-                items = []
-                for k, v in d.items():
-                    new_key = f"{parent_key}{sep}{k}" if parent_key else k
-                    if isinstance(v, dict):
-                        items.extend(flatten_dict(v, new_key, sep=sep).items())
-                    else:
-                        items.append((new_key, v))
-                return dict(items)
-            
-            for key in ["dataset", "model", "optimizer", "trainer"]:
-                if key in pretraining_config:
-                    cfg = pretraining_config[key]
-                    if isinstance(cfg, dict) and "value" in cfg:
-                        cfg = cfg["value"]
-                    flattened = flatten_dict(cfg)
-                    for k, v in flattened.items():
-                        wandb_config[f"pretrain/{key}/{k}"] = v
+        # Add pretraining config
+        def flatten_dict(d, parent_key='', sep='/'):
+            items = []
+            for k, v in d.items():
+                new_key = f"{parent_key}{sep}{k}" if parent_key else k
+                if isinstance(v, dict):
+                    items.extend(flatten_dict(v, new_key, sep=sep).items())
+                else:
+                    items.append((new_key, v))
+            return dict(items)
+        
+        for key in ["dataset", "model", "optimizer", "trainer"]:
+            if key in config:
+                cfg = config[key]
+                if isinstance(cfg, dict) and "value" in cfg:
+                    cfg = cfg["value"]
+                flattened = flatten_dict(cfg)
+                for k, v in flattened.items():
+                    wandb_config[f"pretrain/{key}/{k}"] = v
         
         wandb.init(project=wandb_project, config=wandb_config)
     

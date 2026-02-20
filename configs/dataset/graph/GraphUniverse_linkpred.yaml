@@ -16,8 +16,8 @@ loader:
         edge_propensity_variance: 0.5
         seed: 42
       family_parameters:
-        n_graphs: 1500
-        n_nodes_range: [50, 200]
+        n_graphs: 500
+        n_nodes_range: [50, 150]
         n_communities_range: [4, 6]
         homophily_range: [0.3, 0.7]
         avg_degree_range: [1.0, 3.0]
