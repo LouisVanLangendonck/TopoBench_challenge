@@ -7,7 +7,7 @@ feature_encoder:
   _target_: topobench.nn.encoders.${model.feature_encoder.encoder_name}
   encoder_name: AllCellFeatureEncoder
   in_channels: ${infer_in_channels:${dataset},${oc.select:transforms,null}}
-  out_channels: 512
+  out_channels: 256
   proj_dropout: 0.1
 
 backbone:
@@ -28,7 +28,7 @@ backbone_wrapper:
   out_channels: ${model.feature_encoder.out_channels}
   num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
   # Link prediction specific parameters
-  edge_sample_ratio: 0.2  # Remove edge_sample_ratio% of edges as positive samples
+  edge_sample_ratio: 0.1  # Remove edge_sample_ratio% of edges as positive samples
   neg_sample_ratio: 1.0  # Equal number of negative and positive samples
   sampling_method: sparse  # Use sparse sampling for large graphs (choose between sparse and dense)
 

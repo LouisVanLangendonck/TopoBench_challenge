@@ -670,6 +670,80 @@ def create_hyperparam_comparison_plots(
             _create_hyperparam_plot(task_df, metrics, task_output_path, task_type, model_type, n_graphs)
 
 
+def create_ngraphs_comparison_plots(
+    df: pd.DataFrame,
+    output_path: str = "ngraphs_comparison.png",
+    wandb_project: str = None
+):
+    """
+    Create comparison plots varying n_graphs (pretraining graphs) on x-axis.
+    Creates separate plots for each unique (model_type, n_train) combination.
+    Uses publication-quality color, sizing, legend, and axis conventions.
+    """
+    # Create output directory based on wandb project name
+    if wandb_project:
+        plots_dir = Path("plots")
+        plots_dir.mkdir(exist_ok=True)
+        output_dir = Path(f"plots/{wandb_project}_ngraphs_plots")
+        output_dir.mkdir(exist_ok=True)
+        print(f"\n{'=' * 80}")
+        print(f"OUTPUT DIRECTORY FOR N_GRAPHS PLOTS: {output_dir}")
+        print(f"{'=' * 80}")
+    else:
+        plots_dir = Path("plots")
+        plots_dir.mkdir(exist_ok=True)
+        output_dir = Path("plots")
+    
+    # Get unique (model_type, n_train) combinations
+    model_n_train_combos = df[['model_type', 'n_train']].drop_duplicates()
+    
+    print(f"\n{'=' * 80}")
+    print(f"FOUND {len(model_n_train_combos)} UNIQUE (MODEL_TYPE, N_TRAIN) COMBINATIONS")
+    print(f"{'=' * 80}")
+    
+    # Iterate over each combination
+    for _, combo in model_n_train_combos.iterrows():
+        model_type = combo['model_type']
+        n_train = combo['n_train']
+        
+        combo_df = df[(df['model_type'] == model_type) & (df['n_train'] == n_train)]
+        
+        print(f"\n{'=' * 80}")
+        print(f"PROCESSING MODEL_TYPE={model_type}, N_TRAIN={n_train}")
+        print(f"  Found {len(combo_df)} rows")
+        print(f"{'=' * 80}")
+        
+        # Identify variable hyperparameters for this model_type
+        varying_hyperparams = identify_variable_hyperparams(combo_df, model_type)
+        
+        # Create hyperparam_id for each row
+        combo_df = combo_df.copy()
+        combo_df['hyperparam_id'] = combo_df.apply(
+            lambda row: create_hyperparam_id(row, varying_hyperparams), axis=1
+        )
+        
+        for task_type in combo_df['task_type'].unique():
+            task_df = combo_df[combo_df['task_type'] == task_type]
+            metrics = sorted(task_df['metric'].unique())
+            
+            # Special ordering for community_related: put community_detection at the end
+            if task_type == 'community_related_property_reconstruction' and 'community_detection' in metrics:
+                mae_metrics = [m for m in metrics if m != 'community_detection']
+                metrics = mae_metrics + ['community_detection']
+                print(f"  Reordered metrics for community_related: {metrics}")
+            
+            # Output file
+            base_name = output_path.rsplit('.', 1)[0]
+            ext = output_path.rsplit('.', 1)[1] if '.' in output_path else 'png'
+            model_clean = model_type.replace('gps_', '')
+            filename = f"{base_name}_{model_clean}_{task_type}_ntrain{int(n_train)}.{ext}"
+            task_output_path = str(output_dir / filename)
+            
+            print(f"\nCreating plot for {model_type}, task={task_type}, n_train={n_train}")
+            
+            _create_ngraphs_plot(task_df, metrics, task_output_path, task_type, model_type, n_train)
+
+
 def _create_hyperparam_plot(
     df: pd.DataFrame,
     metrics: List[str],
@@ -1019,6 +1093,664 @@ def _create_hyperparam_lineplot(
     plt.close()
 
 
+def _create_ngraphs_plot(
+    df: pd.DataFrame,
+    metrics: List[str],
+    output_path: str,
+    task_type: str,
+    model_type: str,
+    n_train: int
+):
+    """Create a publication-quality plot with n_graphs on x-axis."""
+    import matplotlib.pyplot as plt
+    from matplotlib.gridspec import GridSpec
+    
+    # Check if we should use bar plots or line plots
+    unique_n_graphs = df['n_graphs'].dropna().unique()
+    use_barplot = len(unique_n_graphs) == 1
+    
+    if use_barplot:
+        print(f"  Using bar plots (single n_graphs value: {unique_n_graphs[0]})")
+        _create_ngraphs_barplot(df, metrics, output_path, task_type, model_type, n_train)
+    else:
+        print(f"  Using line plots ({len(unique_n_graphs)} n_graphs values: {sorted(unique_n_graphs)})")
+        _create_ngraphs_lineplot(df, metrics, output_path, task_type, model_type, n_train)
+
+
+def _create_ngraphs_lineplot(
+    df: pd.DataFrame,
+    metrics: List[str],
+    output_path: str,
+    task_type: str,
+    model_type: str,
+    n_train: int
+):
+    """Create a publication-quality line plot with n_graphs on x-axis."""
+    import matplotlib.pyplot as plt
+    from matplotlib.gridspec import GridSpec
+    
+    # Publication quality settings
+    mpl.rcParams.update({
+        "axes.labelsize": 14,
+        "axes.titlesize": 16,
+        "xtick.labelsize": 12,
+        "ytick.labelsize": 11,
+        "legend.fontsize": 11,
+        "font.family": "DejaVu Serif",
+        "axes.linewidth": 1.1,
+        "xtick.direction": 'out',
+        "ytick.direction": 'out',
+        "axes.titleweight": 'bold',
+        "figure.titlesize": 22
+    })
+    
+    n_metrics = len(metrics)
+    has_community_detection = 'community_detection' in metrics
+    
+    if has_community_detection and len(metrics) > 1:
+        fig = plt.figure(figsize=(4.6 * n_metrics, 8.6))
+        gs = GridSpec(2, n_metrics, figure=fig, hspace=0.35, 
+                     width_ratios=[1]*n_metrics,
+                     wspace=0.21,
+                     left=0.08, right=0.78, top=0.89, bottom=0.15)
+        axes = []
+        for row in range(2):
+            row_axes = []
+            for col in range(n_metrics):
+                ax = fig.add_subplot(gs[row, col])
+                row_axes.append(ax)
+            axes.append(row_axes)
+        axes = np.array(axes)
+    else:
+        fig, axes = plt.subplots(2, n_metrics, figsize=(4.6 * n_metrics, 8.6), squeeze=False)
+        plt.subplots_adjust(hspace=0.35, wspace=0.21, left=0.08, right=0.78, top=0.89, bottom=0.15)
+    
+    # Get unique hyperparam configurations
+    unique_hyperparams = sorted(df['hyperparam_id'].unique())
+    
+    # Assign colors
+    n_configs = len(unique_hyperparams)
+    if n_configs <= 10:
+        colors = plt.cm.tab10(np.linspace(0, 1, 10))[:n_configs]
+    else:
+        colors = plt.cm.tab20(np.linspace(0, 1, min(20, n_configs)))
+    
+    hyperparam_colors = {hp: colors[i] for i, hp in enumerate(unique_hyperparams)}
+    
+    mode_rows = [
+        ('linear', 'scratch_frozen', 0, 'Frozen Encoder'),
+        ('finetune-linear', 'scratch', 1, 'Unfrozen Encoder')
+    ]
+    
+    # First pass: collect y-values for accuracy metrics
+    accuracy_y_ranges = {metric: {'all_y_vals': []} for metric in metrics if METRIC_CONFIGS.get(metric, {}).get('type') == 'accuracy'}
+    
+    for target_mode, scratch_mode, row_idx, row_title in mode_rows:
+        for metric_idx, metric in enumerate(metrics):
+            metric_config = METRIC_CONFIGS.get(metric, {})
+            metric_type = metric_config.get('type', 'mae')
+            is_accuracy = (metric_type == 'accuracy')
+            
+            if not is_accuracy:
+                continue
+            
+            mode_df = df[
+                (df['mode'] == target_mode) &
+                (df['metric'] == metric)
+            ]
+            
+            if len(mode_df) == 0:
+                continue
+            
+            for hp_id in unique_hyperparams:
+                hp_df = mode_df[mode_df['hyperparam_id'] == hp_id]
+                if len(hp_df) == 0:
+                    continue
+                
+                hp_df = hp_df.sort_values('n_graphs')
+                for _, row in hp_df.iterrows():
+                    val = row['test_value']
+                    if not is_effectively_nan(val):
+                        accuracy_y_ranges[metric]['all_y_vals'].append(val * 100)
+            
+            scratch_df = df[
+                (df['mode'] == scratch_mode) & 
+                (df['metric'] == metric)
+            ]
+            if len(scratch_df) > 0:
+                first_hp = scratch_df['hyperparam_id'].iloc[0]
+                scratch_df = scratch_df[scratch_df['hyperparam_id'] == first_hp]
+                scratch_df = scratch_df.sort_values('n_graphs')
+                for _, row in scratch_df.iterrows():
+                    val = row['test_value']
+                    if not is_effectively_nan(val):
+                        accuracy_y_ranges[metric]['all_y_vals'].append(val * 100)
+    
+    # Compute synchronized y-limits
+    for metric in accuracy_y_ranges:
+        all_vals = accuracy_y_ranges[metric]['all_y_vals']
+        if len(all_vals) > 0:
+            max_val = max(all_vals)
+            min_val = min(all_vals)
+            y_max = min(105, max_val + 10)
+            y_min = max(0, min_val - 5)
+        else:
+            y_max = 105
+            y_min = 0
+        accuracy_y_ranges[metric]['y_min'] = y_min
+        accuracy_y_ranges[metric]['y_max'] = y_max
+    
+    # Second pass: actual plotting
+    for target_mode, scratch_mode, row_idx, row_title in mode_rows:
+        for metric_idx, metric in enumerate(metrics):
+            ax = axes[row_idx, metric_idx]
+            
+            metric_config = METRIC_CONFIGS.get(metric, {})
+            metric_type = metric_config.get('type', 'mae')
+            is_accuracy = (metric_type == 'accuracy')
+            
+            mode_df = df[
+                (df['mode'] == target_mode) &
+                (df['metric'] == metric)
+            ]
+            
+            if len(mode_df) == 0:
+                ax.text(0.5, 0.5, f'No data for {target_mode}',
+                    ha='center', va='center', transform=ax.transAxes,
+                    fontsize=15
+                )
+                continue
+            
+            # Plot curves for each hyperparam configuration
+            for hp_id in unique_hyperparams:
+                hp_df = mode_df[mode_df['hyperparam_id'] == hp_id]
+                if len(hp_df) == 0:
+                    continue
+                
+                hp_df = hp_df.sort_values('n_graphs')
+                
+                x_vals = []
+                y_vals = []
+                y_errs = []
+                
+                for _, row in hp_df.iterrows():
+                    n_graphs_val = row['n_graphs']
+                    if is_accuracy:
+                        val = row['test_value']
+                        val_std = row.get('test_value_std', 0.0)
+                        if not is_effectively_nan(val):
+                            x_vals.append(n_graphs_val)
+                            y_vals.append(val * 100)
+                            y_errs.append(val_std * 100 if not is_effectively_nan(val_std) else 0.0)
+                    else:
+                        val = row['test_improvement']
+                        val_std = row.get('test_improvement_std', 0.0)
+                        if not is_effectively_nan(val):
+                            x_vals.append(n_graphs_val)
+                            y_vals.append(np.clip(val, -100, 100))
+                            y_errs.append(val_std if not is_effectively_nan(val_std) else 0.0)
+                
+                if len(x_vals) > 0:
+                    color = hyperparam_colors[hp_id]
+                    
+                    ax.errorbar(
+                        x_vals, y_vals, yerr=y_errs,
+                        color=color, alpha=0.85,
+                        linewidth=2.5, marker='o', markersize=8,
+                        capsize=5, capthick=1.5,
+                        label=hp_id
+                    )
+            
+            # Plot from-scratch curve
+            scratch_df = df[
+                (df['mode'] == scratch_mode) & 
+                (df['metric'] == metric)
+            ]
+            if len(scratch_df) > 0:
+                first_hp = scratch_df['hyperparam_id'].iloc[0]
+                scratch_df = scratch_df[scratch_df['hyperparam_id'] == first_hp]
+                scratch_df = scratch_df.sort_values('n_graphs')
+                
+                scratch_x = []
+                scratch_y = []
+                scratch_err = []
+                
+                for _, row in scratch_df.iterrows():
+                    n_graphs_val = row['n_graphs']
+                    if is_accuracy:
+                        val = row['test_value']
+                        val_std = row.get('test_value_std', 0.0)
+                        if not is_effectively_nan(val):
+                            scratch_x.append(n_graphs_val)
+                            scratch_y.append(val * 100)
+                            scratch_err.append(val_std * 100 if not is_effectively_nan(val_std) else 0.0)
+                    else:
+                        val = row['test_improvement']
+                        val_std = row.get('test_improvement_std', 0.0)
+                        if not is_effectively_nan(val):
+                            scratch_x.append(n_graphs_val)
+                            scratch_y.append(np.clip(val, -100, 100))
+                            scratch_err.append(val_std if not is_effectively_nan(val_std) else 0.0)
+                
+                if len(scratch_x) > 0:
+                    ax.errorbar(
+                        scratch_x, scratch_y, yerr=scratch_err,
+                        color='black', alpha=0.85,
+                        linewidth=2.5, marker='s', markersize=8,
+                        linestyle=(0, (7, 4)),
+                        capsize=5, capthick=1.5,
+                        label='From Scratch'
+                    )
+            
+            # Labels and formatting
+            if row_idx == 1:
+                ax.set_xlabel('# Pretraining Graphs', fontsize=14)
+            else:
+                ax.set_xlabel('')
+            
+            if metric_idx == 0:
+                ax.set_ylabel('Test Improvement\nover baseline (%)', fontsize=14)
+            elif is_accuracy and metric_idx > 0:
+                ax.set_ylabel('Test Accuracy (%)', fontsize=14)
+            else:
+                ax.set_ylabel('')
+            
+            if row_idx == 0:
+                metric_display = metric.replace("_", " ").capitalize()
+                if metric == "community_detection":
+                    metric_display += " (node)"
+                
+                ax.text(0.5, 1.15, metric_display, 
+                       transform=ax.transAxes, ha='center', va='bottom',
+                       fontweight='bold', fontsize=16)
+                ax.text(0.5, 1.02, row_title,
+                       transform=ax.transAxes, ha='center', va='bottom',
+                       fontweight='normal', fontsize=14)
+                ax.set_title('')
+            else:
+                ax.set_title(f'{row_title}', pad=8, fontweight='normal', fontsize=14)
+            
+            # Log scale for x-axis if needed
+            all_n_graphs = df['n_graphs'].dropna().unique()
+            if len(all_n_graphs) > 0 and max(all_n_graphs) / min(all_n_graphs) > 10:
+                ax.set_xscale('log')
+                ax.set_xticks(sorted(all_n_graphs))
+                ax.get_xaxis().set_major_formatter(plt.ScalarFormatter())
+                ax.get_xaxis().set_minor_formatter(plt.NullFormatter())
+            
+            # Y-axis limits and styling
+            if is_accuracy:
+                if metric in accuracy_y_ranges:
+                    y_min = accuracy_y_ranges[metric]['y_min']
+                    y_max = accuracy_y_ranges[metric]['y_max']
+                else:
+                    y_max = 105
+                    y_min = 0
+                
+                ax.set_ylim(y_min, y_max)
+                if y_max - y_min <= 60:
+                    tick_spacing = 10
+                else:
+                    tick_spacing = 25
+                ax.set_yticks(np.arange(y_min, y_max + 1, tick_spacing))
+                
+                if y_max > 75:
+                    ax.axhspan(max(y_min, 0), 50, facecolor='lightcoral', alpha=0.08, zorder=0)
+                    ax.axhspan(50, 75, facecolor='lightyellow', alpha=0.08, zorder=0)
+                    ax.axhspan(75, y_max, facecolor='palegreen', alpha=0.08, zorder=0)
+                elif y_max > 50:
+                    ax.axhspan(max(y_min, 0), 50, facecolor='lightcoral', alpha=0.08, zorder=0)
+                    ax.axhspan(50, y_max, facecolor='lightyellow', alpha=0.08, zorder=0)
+                else:
+                    ax.axhspan(max(y_min, 0), y_max, facecolor='lightcoral', alpha=0.08, zorder=0)
+            else:
+                ax.axhline(y=0, color='grey', linestyle='-', linewidth=1.1, alpha=0.65)
+                ax.set_ylim(-110, 110)
+                ax.set_yticks(np.arange(-100, 125, 50))
+                ax.axhspan(-110, 0, facecolor='lightgray', alpha=0.08, zorder=0)
+                ax.axhspan(0, 110, facecolor='palegreen', alpha=0.06, zorder=0)
+            
+            ax.grid(axis='both', alpha=0.20, zorder=0, linestyle=':', linewidth=1.0)
+            
+            # Add legend to top-right subplot
+            if row_idx == 0 and metric_idx == len(metrics) - 1:
+                ax.legend(loc='upper left', bbox_to_anchor=(1.05, 1), fontsize=10, frameon=True, 
+                         fancybox=True, shadow=True)
+    
+    # Add extra spacing before community_detection column if present
+    if has_community_detection and len(metrics) > 1:
+        extra_gap = 0.04
+        for row_idx in range(2):
+            for col_idx in range(n_metrics):
+                ax = axes[row_idx, col_idx]
+                pos = ax.get_position()
+                if col_idx < n_metrics - 1:
+                    ax.set_position([pos.x0 - extra_gap * 0.5, pos.y0, pos.width, pos.height])
+                else:
+                    ax.set_position([pos.x0 + extra_gap * 0.5, pos.y0, pos.width, pos.height])
+    
+    # Overall title
+    model_display = model_type.replace('gps_', '').upper()
+    title_text = f"{model_display}: {task_type.replace('_', ' ').title()} (Finetuned on {int(n_train)} graphs)"
+    fig.suptitle(title_text, fontweight='bold', fontsize=22, y=0.995)
+    
+    plt.tight_layout(rect=[0, 0.05, 0.98, 0.97])
+    plt.savefig(output_path, dpi=450, bbox_inches='tight')
+    print(f"✓ Plot saved to {output_path}")
+    plt.close()
+
+
+def _create_ngraphs_barplot(
+    df: pd.DataFrame,
+    metrics: List[str],
+    output_path: str,
+    task_type: str,
+    model_type: str,
+    n_train: int
+):
+    """Create a publication-quality bar plot with single n_graphs value."""
+    import matplotlib.pyplot as plt
+    from matplotlib.gridspec import GridSpec
+    
+    # Publication quality settings
+    mpl.rcParams.update({
+        "axes.labelsize": 14,
+        "axes.titlesize": 16,
+        "xtick.labelsize": 12,
+        "ytick.labelsize": 11,
+        "legend.fontsize": 11,
+        "font.family": "DejaVu Serif",
+        "axes.linewidth": 1.1,
+        "xtick.direction": 'out',
+        "ytick.direction": 'out',
+        "axes.titleweight": 'bold',
+        "figure.titlesize": 22
+    })
+    
+    n_metrics = len(metrics)
+    has_community_detection = 'community_detection' in metrics
+    
+    if has_community_detection and len(metrics) > 1:
+        fig = plt.figure(figsize=(4.6 * n_metrics, 8.6))
+        gs = GridSpec(2, n_metrics, figure=fig, hspace=0.35, 
+                     width_ratios=[1]*n_metrics,
+                     wspace=0.21,
+                     left=0.08, right=0.78, top=0.89, bottom=0.15)
+        axes = []
+        for row in range(2):
+            row_axes = []
+            for col in range(n_metrics):
+                ax = fig.add_subplot(gs[row, col])
+                row_axes.append(ax)
+            axes.append(row_axes)
+        axes = np.array(axes)
+    else:
+        fig, axes = plt.subplots(2, n_metrics, figsize=(4.6 * n_metrics, 8.6), squeeze=False)
+        plt.subplots_adjust(hspace=0.35, wspace=0.21, left=0.08, right=0.78, top=0.89, bottom=0.15)
+    
+    # Get unique hyperparam configurations
+    unique_hyperparams = sorted(df['hyperparam_id'].unique())
+    
+    # Assign colors
+    n_configs = len(unique_hyperparams)
+    if n_configs <= 10:
+        colors = plt.cm.tab10(np.linspace(0, 1, 10))[:n_configs]
+    else:
+        colors = plt.cm.tab20(np.linspace(0, 1, min(20, n_configs)))
+    
+    hyperparam_colors = {hp: colors[i] for i, hp in enumerate(unique_hyperparams)}
+    
+    mode_rows = [
+        ('linear', 'scratch_frozen', 0, 'Frozen Encoder'),
+        ('finetune-linear', 'scratch', 1, 'Unfrozen Encoder')
+    ]
+    
+    # First pass: collect y-values for accuracy metrics
+    accuracy_y_ranges = {metric: {'all_y_vals': []} for metric in metrics if METRIC_CONFIGS.get(metric, {}).get('type') == 'accuracy'}
+    
+    for target_mode, scratch_mode, row_idx, row_title in mode_rows:
+        for metric_idx, metric in enumerate(metrics):
+            metric_config = METRIC_CONFIGS.get(metric, {})
+            metric_type = metric_config.get('type', 'mae')
+            is_accuracy = (metric_type == 'accuracy')
+            
+            if not is_accuracy:
+                continue
+            
+            mode_df = df[
+                (df['mode'] == target_mode) &
+                (df['metric'] == metric)
+            ]
+            
+            if len(mode_df) == 0:
+                continue
+            
+            for hp_id in unique_hyperparams:
+                hp_df = mode_df[mode_df['hyperparam_id'] == hp_id]
+                if len(hp_df) == 0:
+                    continue
+                
+                for _, row in hp_df.iterrows():
+                    val = row['test_value']
+                    if not is_effectively_nan(val):
+                        accuracy_y_ranges[metric]['all_y_vals'].append(val * 100)
+            
+            scratch_df = df[
+                (df['mode'] == scratch_mode) & 
+                (df['metric'] == metric)
+            ]
+            if len(scratch_df) > 0:
+                first_hp = scratch_df['hyperparam_id'].iloc[0]
+                scratch_df = scratch_df[scratch_df['hyperparam_id'] == first_hp]
+                for _, row in scratch_df.iterrows():
+                    val = row['test_value']
+                    if not is_effectively_nan(val):
+                        accuracy_y_ranges[metric]['all_y_vals'].append(val * 100)
+    
+    # Compute synchronized y-limits
+    for metric in accuracy_y_ranges:
+        all_vals = accuracy_y_ranges[metric]['all_y_vals']
+        if len(all_vals) > 0:
+            max_val = max(all_vals)
+            min_val = min(all_vals)
+            y_max = min(105, max_val + 10)
+            y_min = max(0, min_val - 5)
+        else:
+            y_max = 105
+            y_min = 0
+        accuracy_y_ranges[metric]['y_min'] = y_min
+        accuracy_y_ranges[metric]['y_max'] = y_max
+    
+    # Second pass: actual plotting
+    for target_mode, scratch_mode, row_idx, row_title in mode_rows:
+        for metric_idx, metric in enumerate(metrics):
+            ax = axes[row_idx, metric_idx]
+            
+            metric_config = METRIC_CONFIGS.get(metric, {})
+            metric_type = metric_config.get('type', 'mae')
+            is_accuracy = (metric_type == 'accuracy')
+            
+            mode_df = df[
+                (df['mode'] == target_mode) &
+                (df['metric'] == metric)
+            ]
+            
+            if len(mode_df) == 0:
+                ax.text(0.5, 0.5, f'No data for {target_mode}',
+                    ha='center', va='center', transform=ax.transAxes,
+                    fontsize=15
+                )
+                continue
+            
+            # Prepare data for bar plot
+            bar_data = []
+            bar_labels = []
+            bar_errors = []
+            bar_colors = []
+            
+            # Add bars for each hyperparam configuration
+            for hp_id in unique_hyperparams:
+                hp_df = mode_df[mode_df['hyperparam_id'] == hp_id]
+                if len(hp_df) == 0:
+                    continue
+                
+                if is_accuracy:
+                    val = hp_df['test_value'].mean()
+                    val_std = hp_df.get('test_value_std', pd.Series([0.0])).mean()
+                    if not is_effectively_nan(val):
+                        bar_data.append(val * 100)
+                        bar_errors.append(val_std * 100 if not is_effectively_nan(val_std) else 0.0)
+                        bar_labels.append(hp_id)
+                        bar_colors.append(hyperparam_colors[hp_id])
+                else:
+                    val = hp_df['test_improvement'].mean()
+                    val_std = hp_df.get('test_improvement_std', pd.Series([0.0])).mean()
+                    if not is_effectively_nan(val):
+                        bar_data.append(np.clip(val, -100, 100))
+                        bar_errors.append(val_std if not is_effectively_nan(val_std) else 0.0)
+                        bar_labels.append(hp_id)
+                        bar_colors.append(hyperparam_colors[hp_id])
+            
+            # Add from-scratch bar
+            scratch_df = df[
+                (df['mode'] == scratch_mode) & 
+                (df['metric'] == metric)
+            ]
+            if len(scratch_df) > 0:
+                first_hp = scratch_df['hyperparam_id'].iloc[0]
+                scratch_df = scratch_df[scratch_df['hyperparam_id'] == first_hp]
+                
+                if is_accuracy:
+                    val = scratch_df['test_value'].mean()
+                    val_std = scratch_df.get('test_value_std', pd.Series([0.0])).mean()
+                    if not is_effectively_nan(val):
+                        bar_data.append(val * 100)
+                        bar_errors.append(val_std * 100 if not is_effectively_nan(val_std) else 0.0)
+                        bar_labels.append('From Scratch')
+                        bar_colors.append('black')
+                else:
+                    val = scratch_df['test_improvement'].mean()
+                    val_std = scratch_df.get('test_improvement_std', pd.Series([0.0])).mean()
+                    if not is_effectively_nan(val):
+                        bar_data.append(np.clip(val, -100, 100))
+                        bar_errors.append(val_std if not is_effectively_nan(val_std) else 0.0)
+                        bar_labels.append('From Scratch')
+                        bar_colors.append('black')
+            
+            # Create bar plot
+            if len(bar_data) > 0:
+                x_pos = np.arange(len(bar_data))
+                bars = ax.bar(x_pos, bar_data, yerr=bar_errors, 
+                             color=bar_colors, alpha=0.85,
+                             capsize=5, error_kw={'linewidth': 2, 'capthick': 2},
+                             label=bar_labels)
+                
+                # Add hatching to from-scratch bar
+                if 'From Scratch' in bar_labels:
+                    scratch_idx = bar_labels.index('From Scratch')
+                    bars[scratch_idx].set_hatch('///')
+                
+                # Remove x-axis labels
+                ax.set_xticks(x_pos)
+                ax.set_xticklabels([])
+                
+                # Add legend only to top-right subplot
+                if row_idx == 0 and metric_idx == len(metrics) - 1:
+                    from matplotlib.patches import Patch
+                    legend_handles = []
+                    for i, (label, color) in enumerate(zip(bar_labels, bar_colors)):
+                        if label == 'From Scratch':
+                            patch = Patch(facecolor=color, edgecolor='black', label=label, hatch='///', alpha=0.85)
+                        else:
+                            patch = Patch(facecolor=color, edgecolor='black', label=label, alpha=0.85)
+                        legend_handles.append(patch)
+                    
+                    ax.legend(handles=legend_handles, loc='upper left', bbox_to_anchor=(1.05, 1), 
+                             fontsize=10, frameon=True, fancybox=True, shadow=True)
+            
+            # Labels and formatting
+            ax.set_xlabel('')
+            
+            if metric_idx == 0:
+                ax.set_ylabel('Test Improvement\nover baseline (%)', fontsize=14)
+            elif is_accuracy and metric_idx > 0:
+                ax.set_ylabel('Test Accuracy (%)', fontsize=14)
+            else:
+                ax.set_ylabel('')
+            
+            if row_idx == 0:
+                metric_display = metric.replace("_", " ").capitalize()
+                if metric == "community_detection":
+                    metric_display += " (node)"
+                
+                ax.text(0.5, 1.15, metric_display, 
+                       transform=ax.transAxes, ha='center', va='bottom',
+                       fontweight='bold', fontsize=16)
+                ax.text(0.5, 1.02, row_title,
+                       transform=ax.transAxes, ha='center', va='bottom',
+                       fontweight='normal', fontsize=14)
+                ax.set_title('')
+            else:
+                ax.set_title(f'{row_title}', pad=8, fontweight='normal', fontsize=14)
+            
+            # Y-axis limits and styling
+            if is_accuracy:
+                if metric in accuracy_y_ranges:
+                    y_min = accuracy_y_ranges[metric]['y_min']
+                    y_max = accuracy_y_ranges[metric]['y_max']
+                else:
+                    y_max = 105
+                    y_min = 0
+                
+                ax.set_ylim(y_min, y_max)
+                if y_max - y_min <= 60:
+                    tick_spacing = 10
+                else:
+                    tick_spacing = 25
+                ax.set_yticks(np.arange(y_min, y_max + 1, tick_spacing))
+                
+                if y_max > 75:
+                    ax.axhspan(max(y_min, 0), 50, facecolor='lightcoral', alpha=0.08, zorder=0)
+                    ax.axhspan(50, 75, facecolor='lightyellow', alpha=0.08, zorder=0)
+                    ax.axhspan(75, y_max, facecolor='palegreen', alpha=0.08, zorder=0)
+                elif y_max > 50:
+                    ax.axhspan(max(y_min, 0), 50, facecolor='lightcoral', alpha=0.08, zorder=0)
+                    ax.axhspan(50, y_max, facecolor='lightyellow', alpha=0.08, zorder=0)
+                else:
+                    ax.axhspan(max(y_min, 0), y_max, facecolor='lightcoral', alpha=0.08, zorder=0)
+            else:
+                ax.axhline(y=0, color='grey', linestyle='-', linewidth=1.1, alpha=0.65)
+                ax.set_ylim(-110, 110)
+                ax.set_yticks(np.arange(-100, 125, 50))
+                ax.axhspan(-110, 0, facecolor='lightgray', alpha=0.08, zorder=0)
+                ax.axhspan(0, 110, facecolor='palegreen', alpha=0.06, zorder=0)
+            
+            ax.grid(axis='y', alpha=0.20, zorder=0, linestyle=':', linewidth=1.0)
+    
+    # Add extra spacing before community_detection column if present
+    if has_community_detection and len(metrics) > 1:
+        extra_gap = 0.04
+        for row_idx in range(2):
+            for col_idx in range(n_metrics):
+                ax = axes[row_idx, col_idx]
+                pos = ax.get_position()
+                if col_idx < n_metrics - 1:
+                    ax.set_position([pos.x0 - extra_gap * 0.5, pos.y0, pos.width, pos.height])
+                else:
+                    ax.set_position([pos.x0 + extra_gap * 0.5, pos.y0, pos.width, pos.height])
+    
+    # Overall title
+    model_display = model_type.replace('gps_', '').upper()
+    n_graphs_val = df['n_graphs'].iloc[0]
+    title_text = f"{model_display}: {task_type.replace('_', ' ').title()} (Pretrained on {int(n_graphs_val)} graphs, n_train={int(n_train)})"
+    fig.suptitle(title_text, fontweight='bold', fontsize=22, y=0.995)
+    
+    plt.tight_layout(rect=[0, 0.05, 0.98, 0.97])
+    plt.savefig(output_path, dpi=450, bbox_inches='tight')
+    print(f"✓ Plot saved to {output_path}")
+    plt.close()
+
+
 def _create_hyperparam_barplot(
     df: pd.DataFrame,
     metrics: List[str],
@@ -1341,7 +2073,8 @@ def _create_hyperparam_barplot(
 def main():
     parser = argparse.ArgumentParser(description="Analyze hyperparameter comparison for pretraining models")
     parser.add_argument('--wandb_project', type=str, required=True, help='Wandb project name')
-    parser.add_argument('--output', type=str, default='hyperparam_comp.png', help='Output filename')
+    parser.add_argument('--output', type=str, default='hyperparam_comp.png', help='Output filename for hyperparameter comparison')
+    parser.add_argument('--output_ngraphs', type=str, default='ngraphs_comp.png', help='Output filename for n_graphs comparison')
     parser.add_argument('--save_csv', action='store_true', help='Save processed dataframe to CSV')
     
     args = parser.parse_args()
@@ -1365,8 +2098,17 @@ def main():
         best_df.to_csv(csv_path, index=False)
         print(f"\n✓ Dataframe saved to {csv_path}")
     
-    # Create plots
+    # Create plots - varying n_train (finetuning graphs) on x-axis
+    print(f"\n{'=' * 80}")
+    print("CREATING HYPERPARAMETER COMPARISON PLOTS (n_train on x-axis)")
+    print(f"{'=' * 80}")
     create_hyperparam_comparison_plots(best_df, args.output, wandb_project=args.wandb_project)
+    
+    # Create plots - varying n_graphs (pretraining graphs) on x-axis
+    print(f"\n{'=' * 80}")
+    print("CREATING N_GRAPHS COMPARISON PLOTS (n_graphs on x-axis)")
+    print(f"{'=' * 80}")
+    create_ngraphs_comparison_plots(best_df, args.output_ngraphs, wandb_project=args.wandb_project)
     
     print(f"\n{'=' * 80}")
     print("ANALYSIS COMPLETE")
