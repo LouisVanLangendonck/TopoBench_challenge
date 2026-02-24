@@ -1,0 +1,51 @@
+
+loader:
+  _target_: topobench.data.loaders.GraphUniverseDatasetLoader
+  parameters: 
+    data_domain: graph
+    data_type: GraphUniverse
+    data_name: GraphUniverse_DGI
+    data_dir: ${paths.data_dir}/${dataset.loader.parameters.data_domain}/${dataset.loader.parameters.data_type}
+    generation_parameters:
+      task: community_detection
+      universe_parameters:
+        K: 10
+        feature_dim: 15
+        center_variance: 0.2
+        cluster_variance: 0.4
+        edge_propensity_variance: 0.5
+        seed: 42
+      family_parameters:
+        n_graphs: 500
+        n_nodes_range: [50, 150]
+        n_communities_range: [4, 6]
+        homophily_range: [0.3, 0.7]
+        avg_degree_range: [1.0, 3.0]
+        degree_separation_range: [0.5, 1.0]
+        power_law_exponent_range: [1.5, 2.5]
+        seed: ${dataset.loader.parameters.generation_parameters.universe_parameters.seed}
+
+# Dataset parameters
+parameters:
+  num_features: ${dataset.loader.parameters.generation_parameters.universe_parameters.feature_dim}
+  num_classes: 1  # Binary classification (positive vs negative samples)
+  task: dgi
+  monitor_metric: accuracy  # Track discrimination accuracy
+  task_level: node  # Node-level embeddings
+
+#splits
+split_params:
+  learning_setting: inductive
+  data_split_dir: ${dataset.loader.parameters.data_dir}/data_splits
+  data_seed: 0
+  split_type: random #'k-fold' # either "k-fold" or "random" strategies
+  k: 10 # for "k-fold" Cross-Validation
+  train_prop: 0.7 # for "random" strategy splitting
+
+# Dataloader parameters
+dataloader_params:
+  batch_size: 32  # Multiple graphs for graph_diffusion corruption
+  num_workers: 0
+  pin_memory: False
+
+

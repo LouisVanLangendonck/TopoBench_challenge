@@ -159,7 +159,7 @@ class LinkPredGNNWrapper(AbstractWrapper):
             # Calculate number of negative samples for this graph
             graph_neg_samples = max(1, int(num_neg_samples * samples_per_graph[batch_id.item()] / total_nodes))
             
-            # CRITICAL: Cap at what's actually possible BEFORE any sampling
+            # Cap at what's actually possible BEFORE any sampling
             graph_neg_samples = min(graph_neg_samples, max(1, max_possible_negs))
             
             # Create node index mapping BEFORE converting edges

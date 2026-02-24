@@ -117,8 +117,9 @@ class DGIReadOut(AbstractZeroCellReadOut):
         model_out : dict
             Dictionary containing:
             - x_0: Positive node embeddings (from original graph)
-            - x_0_corrupted: Negative node embeddings (from corrupted graph)
-            - batch_0: Batch indices
+            - x_0_corrupted: Negative node embeddings (from corrupted/different graph)
+            - batch_0: Batch indices for positive samples
+            - batch_0_corrupted: Batch indices for negative samples (for graph_diffusion)
         batch : torch_geometric.data.Data
             Batch object containing the batched domain data.
 
@@ -132,44 +133,48 @@ class DGIReadOut(AbstractZeroCellReadOut):
             - num_positive: Number of positive samples
             - num_negative: Number of negative samples
         """
-        h_positive = model_out["x_0"]  # (num_nodes, hidden_dim)
-        h_negative = model_out["x_0_corrupted"]  # (num_nodes, hidden_dim)
-        batch_indices = model_out["batch_0"]
+        h_positive = model_out["x_0"]  # (num_positive_nodes, hidden_dim)
+        h_negative = model_out["x_0_corrupted"]  # (num_negative_nodes, hidden_dim)
+        batch_positive = model_out["batch_0"]
+        batch_negative = model_out.get("batch_0_corrupted", batch_positive)  # For compatibility
         
-        num_nodes = h_positive.size(0)
+        num_positive_nodes = h_positive.size(0)
+        num_negative_nodes = h_negative.size(0)
         
         # Compute graph-level summary from positive embeddings
         # Shape: (num_graphs, hidden_dim)
-        graph_summary = self.graph_readout(h_positive, batch_indices)
+        graph_summary = self.graph_readout(h_positive, batch_positive)
         
         # Apply sigmoid to summary (as in original DGI paper)
         graph_summary = self.sigmoid(graph_summary)
         
         # Expand summary to match each node with its graph's summary
-        # Shape: (num_nodes, hidden_dim)
-        node_summaries = graph_summary[batch_indices]
+        # For positive samples: use batch_positive
+        # For negative samples: use batch_negative (may be different for graph_diffusion)
+        node_summaries_positive = graph_summary[batch_positive]
+        node_summaries_negative = graph_summary[batch_negative]
         
         # Compute discrimination scores using bilinear function
         # Positive samples: real node embeddings with real summaries
-        scores_positive = self.discriminator(h_positive, node_summaries).squeeze(-1)
+        scores_positive = self.discriminator(h_positive, node_summaries_positive).squeeze(-1)
         
-        # Negative samples: corrupted node embeddings with real summaries
-        scores_negative = self.discriminator(h_negative, node_summaries).squeeze(-1)
+        # Negative samples: corrupted/different node embeddings with real summaries
+        scores_negative = self.discriminator(h_negative, node_summaries_negative).squeeze(-1)
         
         # Concatenate positive and negative scores
         logits = torch.cat([scores_positive, scores_negative], dim=0)
         
         # Create labels (1 for positive, 0 for negative)
-        labels_positive = torch.ones(num_nodes, dtype=torch.float, device=h_positive.device)
-        labels_negative = torch.zeros(num_nodes, dtype=torch.float, device=h_positive.device)
+        labels_positive = torch.ones(num_positive_nodes, dtype=torch.float, device=h_positive.device)
+        labels_negative = torch.zeros(num_negative_nodes, dtype=torch.float, device=h_positive.device)
         labels = torch.cat([labels_positive, labels_negative], dim=0)
         
         # Update model output
         model_out["logits"] = logits
         model_out["labels"] = labels
         model_out["summary"] = graph_summary
-        model_out["num_positive"] = num_nodes
-        model_out["num_negative"] = num_nodes
+        model_out["num_positive"] = num_positive_nodes
+        model_out["num_negative"] = num_negative_nodes
         
         return model_out
     

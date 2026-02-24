@@ -28,7 +28,9 @@ backbone_wrapper:
   out_channels: ${model.feature_encoder.out_channels}
   num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
   # DGI specific parameters
-  corruption_type: feature_shuffle  # Shuffle node features for negative samples
+  corruption_type: graph_diffusion  
+  # Options: feature_shuffle (transductive or inductive), graph_diffusion (inductive) (Graph diffusion is just shuffling graphs. We now do it within batch always random but might need to revisit at some point.. )
+  verbose: false  # Set to true to see detailed graph pairing logs for all batches
 
 # DGIReadOut handles graph summary and discrimination
 readout:
@@ -38,7 +40,7 @@ readout:
   hidden_dim: ${model.feature_encoder.out_channels}
   out_channels: 1  # Binary discrimination
   task_level: ${dataset.parameters.task_level}
-  pooling_type: sum
+  pooling_type: mean
   # DGI readout specific parameters
   readout_type: mean  # Options: mean, sum, max
 
