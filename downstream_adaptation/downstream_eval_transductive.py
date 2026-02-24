@@ -599,13 +599,13 @@ def main():
     parser.add_argument("--mode", type=str, default="linear",
                        choices=["linear", "mlp", "finetune-linear", "finetune-mlp", "scratch", "scratch_frozen"])
     parser.add_argument("--epochs", type=int, default=300)
-    parser.add_argument("--lr", type=float, default=0.01)
-    parser.add_argument("--patience", type=int, default=50)
+    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--patience", type=int, default=100)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--wandb_project", type=str, default="downstream_eval_transductive")
-    parser.add_argument("--classifier_dropout", type=float, default=0.3)
+    parser.add_argument("--classifier_dropout", type=float, default=0.0)
     parser.add_argument("--input_dropout", type=float, default=None)
     
     # Few-shot learning parameters
