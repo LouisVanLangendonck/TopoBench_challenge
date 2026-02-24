@@ -21,7 +21,7 @@ class GraphMAEv2GNNWrapper(AbstractWrapper):
 
     GraphMAEv2 improves upon GraphMAE with:
     1. EMA (Exponential Moving Average) encoder as teacher
-    2. Latent representation loss (BYOL-style)
+    2. Latent representation loss
     3. Re-masking strategy during decoding (handled in readout)
 
     Parameters
@@ -217,7 +217,7 @@ class GraphMAEv2GNNWrapper(AbstractWrapper):
         device = x_0.device
         
         # Store ORIGINAL RAW features for reconstruction
-        if hasattr(batch, 'x_raw'):
+        if hasattr(batch, 'x_raw'): # Normally we have this cause I added it as pre-transform
             x_raw_original = batch.x_raw.clone()
         else:
             # Fallback
@@ -275,7 +275,8 @@ class GraphMAEv2GNNWrapper(AbstractWrapper):
             "latent_loss": latent_loss,  # Latent representation loss
             "labels": batch.y if hasattr(batch, 'y') else None,
             "batch_0": batch_indices,
-            "edge_index": edge_index,  # For decoder
+            "edge_index": edge_index,  # For GNN decoder (re-masking requires message passing)
+            "edge_weight": edge_weight,  # For GNN decoder (if available)
         }
         
         return model_out

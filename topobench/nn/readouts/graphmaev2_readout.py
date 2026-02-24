@@ -1,4 +1,5 @@
-"""GraphMAEv2 Readout for reconstruction-based pre-training with re-masking."""
+"""GraphMAEv2 Readout for reconstruction-based pre-training with re-masking.
+"""
 
 import torch
 import torch.nn as nn
@@ -80,7 +81,11 @@ class GraphMAEv2ReadOut(AbstractZeroCellReadOut):
         out_dim: int, 
         hidden_dim: int
     ) -> nn.Module:
-        """Build the decoder module."""
+        """Build the decoder module.
+        
+        Note: GNN decoders (gat, gcn) support re-masking via message passing.
+              MLP/linear decoders should NOT use re-masking (set num_remasking=1).
+        """
         if decoder_type == "linear":
             return nn.Linear(in_dim, out_dim)
         elif decoder_type == "mlp":
@@ -90,10 +95,18 @@ class GraphMAEv2ReadOut(AbstractZeroCellReadOut):
                 nn.Dropout(0.2),
                 nn.Linear(hidden_dim * 2, out_dim)
             )
+        elif decoder_type == "gat":
+            # Single-layer GAT as in GraphMAEv2 paper
+            from torch_geometric.nn import GATConv
+            return GATConv(in_dim, out_dim, heads=1, concat=False)
+        elif decoder_type == "gcn":
+            # Alternative: Single-layer GCN
+            from torch_geometric.nn import GCNConv
+            return GCNConv(in_dim, out_dim)
         else:
             raise ValueError(
                 f"Unknown decoder type: {decoder_type}. "
-                "Available options: 'linear', 'mlp'"
+                "Available options: 'linear', 'mlp', 'gat', 'gcn'"
             )
     
     def random_remask(self, rep, num_nodes, device):
@@ -150,6 +163,9 @@ class GraphMAEv2ReadOut(AbstractZeroCellReadOut):
     ) -> dict:
         r"""Forward pass for GraphMAEv2 reconstruction with re-masking.
 
+        The wrapper provides all necessary information via model_out, including
+        edge_index for GNN decoders that need message passing during re-masking.
+
         Parameters
         ----------
         model_out : dict
@@ -157,6 +173,8 @@ class GraphMAEv2ReadOut(AbstractZeroCellReadOut):
             - x_0: Encoded node features from GNN
             - x_raw_original: Original RAW node features
             - mask_nodes: Indices of masked nodes
+            - edge_index: Edge indices (required for GNN decoders)
+            - edge_weight: Edge weights (optional, for weighted graphs)
         batch : torch_geometric.data.Data
             Batch object containing the batched domain data.
 
@@ -168,6 +186,8 @@ class GraphMAEv2ReadOut(AbstractZeroCellReadOut):
         enc_rep = model_out["x_0"]
         x_raw_original = model_out.get("x_raw_original", model_out.get("x_original"))
         mask_nodes = model_out["mask_nodes"]
+        edge_index = model_out.get("edge_index")
+        edge_weight = model_out.get("edge_weight")
         
         num_nodes = enc_rep.size(0)
         device = enc_rep.device
@@ -175,16 +195,38 @@ class GraphMAEv2ReadOut(AbstractZeroCellReadOut):
         # Project from encoder to decoder space
         origin_rep = self.encoder_to_decoder(enc_rep)
         
+        # Check if decoder is GNN-based (supports message passing)
+        is_gnn_decoder = self.decoder_type in ["gat", "gcn"]
+        
         # Apply re-masking strategy
         all_reconstructed = []
         
         if self.remask_method == "random":
-            # Multiple random re-masks
-            for i in range(self.num_remasking):
-                rep_remasked, remask_nodes, rekeep_nodes = self.random_remask(origin_rep, num_nodes, device)
+            # For GNN decoders: use multi-view re-masking (as in paper)
+            # For MLP decoders: skip re-masking (doesn't make sense without message passing)
+            num_remasking_iterations = self.num_remasking if is_gnn_decoder else 1
+            
+            for i in range(num_remasking_iterations):
+                if is_gnn_decoder and num_remasking_iterations > 1:
+                    # Re-mask for GNN decoder (different mask each iteration)
+                    rep_remasked, remask_nodes, rekeep_nodes = self.random_remask(origin_rep, num_nodes, device)
+                else:
+                    # No re-masking for MLP decoder
+                    rep_remasked = origin_rep
                 
                 # Decode to reconstruct RAW features
-                recon_full = self.decoder(rep_remasked)
+                if is_gnn_decoder:
+                    # GNN decoder needs edge_index
+                    if edge_index is None:
+                        raise ValueError("GNN decoder requires edge_index in model_out")
+                    if edge_weight is not None:
+                        recon_full = self.decoder(rep_remasked, edge_index, edge_weight=edge_weight)
+                    else:
+                        recon_full = self.decoder(rep_remasked, edge_index)
+                else:
+                    # MLP/Linear decoder
+                    recon_full = self.decoder(rep_remasked)
+                
                 all_reconstructed.append(recon_full[mask_nodes])
             
             # Average reconstructions across different re-masks
@@ -192,8 +234,21 @@ class GraphMAEv2ReadOut(AbstractZeroCellReadOut):
             
         elif self.remask_method == "fixed":
             # Fixed re-masking at original positions
-            rep_remasked = self.fixed_remask(origin_rep, mask_nodes)
-            recon_full = self.decoder(rep_remasked)
+            if is_gnn_decoder:
+                rep_remasked = self.fixed_remask(origin_rep, mask_nodes)
+            else:
+                rep_remasked = origin_rep  # No re-masking for MLP
+            
+            if is_gnn_decoder:
+                if edge_index is None:
+                    raise ValueError("GNN decoder requires edge_index in model_out")
+                if edge_weight is not None:
+                    recon_full = self.decoder(rep_remasked, edge_index, edge_weight=edge_weight)
+                else:
+                    recon_full = self.decoder(rep_remasked, edge_index)
+            else:
+                recon_full = self.decoder(rep_remasked)
+            
             x_reconstructed = recon_full[mask_nodes]
             
         else:
@@ -202,15 +257,17 @@ class GraphMAEv2ReadOut(AbstractZeroCellReadOut):
         # Update model output with RAW feature reconstruction
         model_out["x_reconstructed"] = x_reconstructed  # Reconstructed RAW features
         model_out["x_original"] = x_raw_original[mask_nodes]  # Original RAW features at masked positions
-        model_out["num_remasking"] = self.num_remasking
+        model_out["num_remasking"] = self.num_remasking if is_gnn_decoder else 1
         
         return model_out
     
     def __repr__(self) -> str:
+        is_gnn = self.decoder_type in ["gat", "gcn"]
+        remask_info = f"num_remasking={self.num_remasking}" if is_gnn else "num_remasking=1 (disabled for non-GNN)"
         return (
             f"{self.__class__.__name__}("
             f"decoder_type={self.decoder_type}, "
-            f"num_remasking={self.num_remasking}, "
+            f"{remask_info}, "
             f"remask_rate={self.remask_rate}, "
             f"remask_method={self.remask_method})"
         )

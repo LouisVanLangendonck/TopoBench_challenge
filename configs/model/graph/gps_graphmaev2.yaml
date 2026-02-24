@@ -27,10 +27,9 @@ backbone_wrapper:
   wrapper_name: GraphMAEv2GNNWrapper
   out_channels: ${model.feature_encoder.out_channels}
   num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
-  # GraphMAEv2-specific parameters - challenging but trainable
   mask_rate: 0.50  
   replace_rate: 0.0  
-  drop_edge_rate: 0.4  
+  drop_edge_rate: 0.2 
   momentum: 0.996  
   delayed_ema_epoch: 0  
   lam: 1.0  # Balance between reconstruction and latent matching
@@ -45,11 +44,12 @@ readout:
   task_level: ${dataset.parameters.task_level}
   pooling_type: mean
   # GraphMAEv2 readout specific parameters - aggressive for challenge
-  decoder_type: mlp  # MLP for non-linear reconstruction
-  decoder_hidden_dim: 128  # Large hidden for complex inverse mapping
-  num_remasking: 7  # More re-masks for robustness
-  remask_rate: 0.75  # Higher re-masking rate
-  remask_method: random  # Random keeps it challenging
+  decoder_type: gat  # GNN-based decoder as in GraphMAEv2 paper (supports re-masking via message passing). Options: gat, gcn, mlp, linear.
+  # ! If selecting an mlp decoder, set the num_remasking to 1 and remask rate to 0, because none-message passing decoders do not benefit from re-masking!!
+  decoder_hidden_dim: 128 
+  num_remasking: 5  # Number of different random re-masks to average (multi-view decoding). Only used with GNN decoders.
+  remask_rate: 0.75  # Percentage of nodes to mask in each re-masking iteration
+  remask_method: random 
 
 # compile model for faster training with pytorch 2.0
 compile: false
