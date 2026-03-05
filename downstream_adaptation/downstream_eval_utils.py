@@ -221,6 +221,19 @@ def detect_pretraining_method(config: dict) -> str:
     elif "LinkPred" in loss_target:
         return "linkpred"
     
+    # Check if it's supervised community detection
+    dataset_config = config.get("dataset", {})
+    dataset_params = dataset_config.get("parameters", {})
+    task = dataset_params.get("task", "")
+    loss_type = dataset_params.get("loss_type", "")
+    
+    # If it's supervised with classification task, check if it's CD
+    if loss_type in ["cross_entropy", "classification"]:
+        gen_params = dataset_config.get("loader", {}).get("parameters", {}).get("generation_parameters", {})
+        task_name = gen_params.get("task", "")
+        if task_name == "community_detection":
+            return "supervised_cd"
+    
     return "supervised"
 
 
@@ -310,16 +323,20 @@ def load_pretrained_encoder(
     checkpoint_path: str | Path,
     device: str = "cpu",
 ) -> tuple[nn.Module, nn.Module, int]:
-    """Load pre-trained encoder from checkpoint."""
+    """Load pre-trained encoder from checkpoint.
+    
+    For all pretraining methods (including supervised CD), we only load the encoder
+    (feature_encoder + backbone) and always create fresh downstream heads.
+    """
     from topobench.nn.wrappers.graph.gnn_wrapper import GNNWrapper
     
     model_config = config["model"]
     pretraining_method = detect_pretraining_method(config)
     
-    if pretraining_method not in ["graphmaev2", "grace", "linkpred", "dgi"]:
+    if pretraining_method not in ["graphmaev2", "grace", "linkpred", "dgi", "supervised_cd"]:
         raise ValueError(
             f"Unsupported pretraining method '{pretraining_method}'. "
-            f"Only 'graphmaev2', 'grace', 'linkpred', and 'dgi' are supported."
+            f"Supported methods: 'graphmaev2', 'grace', 'linkpred', 'dgi', 'supervised_cd'."
         )
     
     # Build feature encoder
@@ -340,7 +357,11 @@ def load_pretrained_encoder(
         wrapper_config_copy.pop("_partial_", None)
         wrapper = instantiate_from_config(wrapper_config_copy, backbone=backbone)
     else:
-        raise ValueError(f"No wrapper config found for {pretraining_method}")
+        # For supervised CD, wrapper might not exist
+        if pretraining_method == "supervised_cd":
+            wrapper = None
+        else:
+            raise ValueError(f"No wrapper config found for {pretraining_method}")
     
     # Get hidden dimension
     hidden_dim = (
@@ -364,17 +385,22 @@ def load_pretrained_encoder(
     if encoder_state:
         feature_encoder.load_state_dict(encoder_state, strict=True)
     
-    # Load wrapper weights
-    wrapper_state = {k.replace("backbone.", ""): v for k, v in state_dict.items() if k.startswith("backbone.")}
-    if wrapper_state:
-        wrapper.load_state_dict(wrapper_state, strict=False)
-    
-    # Extract backbone
-    pretrained_backbone = wrapper.backbone
+    # Load wrapper/backbone weights
+    if wrapper is not None:
+        wrapper_state = {k.replace("backbone.", ""): v for k, v in state_dict.items() if k.startswith("backbone.")}
+        if wrapper_state:
+            wrapper.load_state_dict(wrapper_state, strict=False)
+        pretrained_backbone = wrapper.backbone
+    else:
+        # For supervised CD without wrapper, load backbone directly
+        backbone_state = {k.replace("backbone.", ""): v for k, v in state_dict.items() if k.startswith("backbone.")}
+        if backbone_state:
+            backbone.load_state_dict(backbone_state, strict=False)
+        pretrained_backbone = backbone
     
     # Create clean GNNWrapper
-    num_cell_dimensions = wrapper_config.get("num_cell_dimensions", 1)
-    out_channels = wrapper_config.get("out_channels", hidden_dim)
+    num_cell_dimensions = wrapper_config.get("num_cell_dimensions", 1) if wrapper_config else 0
+    out_channels = wrapper_config.get("out_channels", hidden_dim) if wrapper_config else hidden_dim
     
     clean_wrapper = GNNWrapper(
         backbone=pretrained_backbone,

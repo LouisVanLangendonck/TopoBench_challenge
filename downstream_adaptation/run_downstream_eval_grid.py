@@ -138,9 +138,24 @@ def fetch_runs_from_wandb_project(
 # =============================================================================
 
 DEFAULT_GRAPHUNIVERSE_OVERRIDES = [
-    None
+    {'family_parameters': {'homophily_range': [0.0, 0.1]}},
+    {'family_parameters': {'homophily_range': [0.4, 0.6]}},
+    {'family_parameters': {'homophily_range': [0.9, 1.0]}},
+    {'family_parameters': {'avg_degree_range': [1.0,2.0]}},
+    {'family_parameters': {'avg_degree_range': [2.0,3.0]}},
+    {'family_parameters': {'avg_degree_range': [4.0,5.0]}},
+    {'family_parameters': {'power_law_exponent_range': [1.0,1.0]}},
+    {'family_parameters': {'power_law_exponent_range': [2.5,2.5]}},
+    {'family_parameters': {'power_law_exponent_range': [5.0,5.0]}},
+    {'universe_parameters': {'cluster_variance': 0.2}},
+    {'universe_parameters': {'cluster_variance': 0.4}},
+    {'universe_parameters': {'edge_propensity_variance': 0.1}},
+    {'universe_parameters': {'edge_propensity_variance': 0.5}},
+    {'universe_parameters': {'edge_propensity_variance': 0.9}},
+    {'family_parameters': {'degree_separation_range': [0.1,0.1]}},
+    {'family_parameters': {'degree_separation_range': [0.5,0.5]}},
+    {'family_parameters': {'degree_separation_range': [0.9,0.9]}},
 ]
-
 
 # =============================================================================
 # Grid Configuration

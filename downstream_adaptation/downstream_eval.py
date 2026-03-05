@@ -968,6 +968,7 @@ def run_downstream_evaluation(
             "classifier_dropout": classifier_dropout,
             "input_dropout": input_dropout,
             "hidden_dim": hidden_dim,
+            "graphuniverse_override": graphuniverse_override,
         }
         
         # Add pretraining config
