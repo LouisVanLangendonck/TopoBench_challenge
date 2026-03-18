@@ -8,14 +8,14 @@ feature_encoder:
   encoder_name: AllCellFeatureEncoder
   in_channels: ${infer_in_channels:${dataset},${oc.select:transforms,null}}
   out_channels: 256
-  proj_dropout: 0.2
+  proj_dropout: 0.0
 
 backbone:
   _target_: torch_geometric.nn.models.GCN
   in_channels: ${model.feature_encoder.out_channels}
   hidden_channels: ${model.feature_encoder.out_channels}
   num_layers: 3
-  dropout: 0.2
+  dropout: 0.0
   act: relu
 
 # Use GraphCLGNNWrapper for augmentation and encoding
@@ -28,9 +28,13 @@ backbone_wrapper:
   # GraphCL-specific parameters
   aug1: drop_edge  # Options: none, drop_node, drop_edge, mask_attr, subgraph
   aug2: mask_attr  # Options: none, drop_node, drop_edge, mask_attr, subgraph
-  aug_ratio1: 0.2  # Ratio of augmentation for view 1
-  aug_ratio2: 0.2  # Ratio of augmentation for view 2
+  aug_ratio1: 0.2
+  aug_ratio2: 0.2
   readout_type: sum  # Options: mean, max, sum
+  # Augmentation variant knobs (match official repo sub-directory)
+  mask_attr_strategy: gaussian    # gaussian | zeros | mean
+  edge_perturbation_mode: drop_only  # drop_only | drop_and_add
+  subgraph_ratio_meaning: keep    # keep | drop
 
 # GraphCLReadOut handles the projection head
 readout:

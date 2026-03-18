@@ -10,18 +10,22 @@ from topobench.loss.base import AbstractLoss
 class GraphCLLoss(AbstractLoss):
     r"""NT-Xent loss for Graph Contrastive Learning (GraphCL) pre-training.
 
-    Builds the full 2N x 2N cosine-similarity matrix from two augmented views,
-    masks out self-similarities, and applies cross-entropy so that each sample's
-    positive (its other view) is pulled closer while all 2(N-1) negatives are
-    pushed apart.
+    Builds an N x N cross-view cosine-similarity matrix (z1 vs z2), masks out
+    the positive pair on the diagonal, and computes:
+
+        loss_i = -sim(z1_i, z2_i)/tau + log(sum_{j!=i} exp(sim(z1_i, z2_j)/tau))
+
+    matching the official GraphCL implementation and paper Eq. 3.  The
+    denominator contains only the N-1 cross-view negatives (excluding the
+    positive).  The loss is asymmetric (z1 anchors, z2 targets).
 
     Parameters
     ----------
     temperature : float, optional
-        Temperature parameter for scaling similarities (default: 0.1).
+        Temperature parameter for scaling similarities (default: 0.2).
     """
 
-    def __init__(self, temperature: float = 0.1):
+    def __init__(self, temperature: float = 0.2):
         super().__init__()
         self.temperature = temperature
 
@@ -29,19 +33,18 @@ class GraphCLLoss(AbstractLoss):
         return f"{self.__class__.__name__}(temperature={self.temperature})"
 
     def nt_xent_loss(self, z1, z2):
-        """Compute NT-Xent loss between two views using the full 2N x 2N matrix.
+        """Compute NT-Xent loss using the N x N cross-view-only matrix.
 
-        Follows the SimCLR/GraphCL formulation: concatenates both views into a
-        2N-sized set, builds the full similarity matrix, masks out
-        self-similarities, and treats the matching cross-view sample as the
-        positive while all other 2(N-1) samples are negatives.
+        Matches the official GraphCL ``loss_cal`` and paper Eq. 3: builds an
+        N x N similarity matrix between the two views, excludes the positive
+        (diagonal) from the denominator, and averages across the batch.
 
         Parameters
         ----------
         z1 : torch.Tensor
-            Embeddings from first view, shape (batch_size, dim).
+            Embeddings from first view (anchor), shape ``(N, d)``.
         z2 : torch.Tensor
-            Embeddings from second view, shape (batch_size, dim).
+            Embeddings from second view (target), shape ``(N, d)``.
 
         Returns
         -------
@@ -53,22 +56,17 @@ class GraphCLLoss(AbstractLoss):
         z1_norm = F.normalize(z1, p=2, dim=1)
         z2_norm = F.normalize(z2, p=2, dim=1)
 
-        representations = torch.cat([z1_norm, z2_norm], dim=0)  # (2N, dim)
+        sim_matrix = torch.mm(z1_norm, z2_norm.t()) / self.temperature  # (N, N)
 
-        sim_matrix = torch.mm(representations, representations.t()) / self.temperature  # (2N, 2N)
+        pos_sim = sim_matrix.diag()  # (N,)
 
-        # Positive pair labels: (i, i+N) and (i+N, i)
-        labels = torch.cat([
-            torch.arange(batch_size, device=z1.device) + batch_size,
-            torch.arange(batch_size, device=z1.device),
-        ], dim=0)
+        # Mask diagonal (positive pairs) so they are excluded from the denominator
+        diag_mask = torch.eye(batch_size, device=z1.device, dtype=torch.bool)
+        neg_sim = sim_matrix.masked_fill(diag_mask, float('-inf'))
 
-        # Mask out self-similarities (diagonal)
-        self_mask = torch.eye(2 * batch_size, device=z1.device, dtype=torch.bool)
-        sim_matrix = sim_matrix.masked_fill(self_mask, float('-inf'))
-
-        loss = F.cross_entropy(sim_matrix, labels)
-        return loss
+        # -log( exp(pos) / sum_neg ) = -pos + logsumexp(neg)
+        loss = -pos_sim + torch.logsumexp(neg_sim, dim=1)
+        return loss.mean()
 
     def forward(self, model_out: dict, batch: torch_geometric.data.Data):
         r"""Compute the GraphCL contrastive loss.

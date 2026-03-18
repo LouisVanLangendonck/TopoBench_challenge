@@ -15,6 +15,16 @@ class GraphCLGNNWrapper(AbstractWrapper):
     self-supervised pre-training on graphs. GraphCL maximizes agreement
     between two augmented views of the same graph.
 
+    The official GraphCL repo has several experiment directories with
+    inconsistent augmentation implementations.  Three parameters let users
+    select the variant they want:
+
+    * ``mask_attr_strategy`` -- how masked node features are replaced.
+    * ``edge_perturbation_mode`` -- whether edge perturbation only drops
+      edges or both drops and adds.
+    * ``subgraph_ratio_meaning`` -- whether ``aug_ratio`` for the subgraph
+      augmentation denotes the fraction of nodes to *keep* or to *drop*.
+
     Parameters
     ----------
     backbone : torch.nn.Module
@@ -31,9 +41,29 @@ class GraphCLGNNWrapper(AbstractWrapper):
         Ratio for second augmentation (default: 0.2).
     readout_type : str, optional
         Type of graph-level pooling (default: "mean").
+    mask_attr_strategy : str, optional
+        How masked node features are replaced (default: "gaussian").
+        * ``"gaussian"``  -- Gaussian noise N(0.5, 0.5)  (``unsupervised_TU``)
+        * ``"zeros"``     -- zero vector  (``semisupervised_MNIST_CIFAR10``)
+        * ``"mean"``      -- per-batch mean feature vector  (``semisupervised_TU``)
+    edge_perturbation_mode : str, optional
+        Edge perturbation behaviour (default: "drop_only").
+        * ``"drop_only"``   -- only drop edges  (``unsupervised_TU``)
+        * ``"drop_and_add"`` -- drop some edges and add random ones  (all others)
+    subgraph_ratio_meaning : str, optional
+        Semantics of ``aug_ratio`` for the subgraph augmentation
+        (default: "keep").
+        * ``"keep"`` -- ratio = fraction of nodes to keep
+          (``unsupervised_TU``, ``semisupervised_TU``)
+        * ``"drop"`` -- ratio = fraction of nodes to drop
+          (``semisupervised_MNIST_CIFAR10``)
     **kwargs : dict
         Additional arguments for the AbstractWrapper base class.
     """
+
+    _VALID_MASK_STRATEGIES = {"gaussian", "zeros", "mean"}
+    _VALID_EDGE_MODES = {"drop_only", "drop_and_add"}
+    _VALID_SUBGRAPH_RATIO = {"keep", "drop"}
 
     def __init__(
         self,
@@ -43,8 +73,12 @@ class GraphCLGNNWrapper(AbstractWrapper):
         aug_ratio1: float = 0.2,
         aug_ratio2: float = 0.2,
         readout_type: str = "mean",
+        mask_attr_strategy: str = "gaussian",
+        edge_perturbation_mode: str = "drop_only",
+        subgraph_ratio_meaning: str = "keep",
         **kwargs
     ):
+        kwargs["residual_connections"] = False
         super().__init__(backbone, **kwargs)
         
         self.aug1 = aug1
@@ -52,6 +86,26 @@ class GraphCLGNNWrapper(AbstractWrapper):
         self.aug_ratio1 = aug_ratio1
         self.aug_ratio2 = aug_ratio2
         self.readout_type = readout_type
+
+        if mask_attr_strategy not in self._VALID_MASK_STRATEGIES:
+            raise ValueError(
+                f"Unknown mask_attr_strategy '{mask_attr_strategy}'. "
+                f"Choose from {self._VALID_MASK_STRATEGIES}."
+            )
+        if edge_perturbation_mode not in self._VALID_EDGE_MODES:
+            raise ValueError(
+                f"Unknown edge_perturbation_mode '{edge_perturbation_mode}'. "
+                f"Choose from {self._VALID_EDGE_MODES}."
+            )
+        if subgraph_ratio_meaning not in self._VALID_SUBGRAPH_RATIO:
+            raise ValueError(
+                f"Unknown subgraph_ratio_meaning '{subgraph_ratio_meaning}'. "
+                f"Choose from {self._VALID_SUBGRAPH_RATIO}."
+            )
+
+        self.mask_attr_strategy = mask_attr_strategy
+        self.edge_perturbation_mode = edge_perturbation_mode
+        self.subgraph_ratio_meaning = subgraph_ratio_meaning
         
         # Get feature dimension from kwargs
         self.feature_dim = kwargs.get('out_channels', None)
@@ -109,21 +163,52 @@ class GraphCLGNNWrapper(AbstractWrapper):
             return aug_x, aug_edge_index, new_batch_indices
         
         elif aug_type == "drop_edge":
-            # Randomly drop edges using torch_geometric's dropout_edge
-            aug_edge_index, _ = dropout_edge(edge_index, p=aug_ratio, training=True)
+            if self.edge_perturbation_mode == "drop_only":
+                aug_edge_index, _ = dropout_edge(edge_index, p=aug_ratio, training=True)
+            else:
+                # Drop some edges and add random ones (semisupervised variants)
+                num_edges = edge_index.size(1)
+                permute_num = int(num_edges * aug_ratio)
+                keep_num = num_edges - permute_num
+
+                keep_idx = torch.randperm(num_edges, device=device)[:keep_num]
+                kept_edges = edge_index[:, keep_idx]
+
+                num_nodes = x.size(0)
+                new_src = torch.randint(0, num_nodes, (permute_num,), device=device)
+                new_dst = torch.randint(0, num_nodes, (permute_num,), device=device)
+                added_edges = torch.stack([new_src, new_dst], dim=0)
+
+                aug_edge_index = torch.cat([kept_edges, added_edges], dim=1)
             return x, aug_edge_index, batch_indices
         
         elif aug_type == "mask_attr":
-            # Independently mask each feature dimension of each node
-            mask = torch.rand_like(x) < aug_ratio
+            num_nodes = x.size(0)
+            num_mask = max(int(num_nodes * aug_ratio), 1)
+            perm = torch.randperm(num_nodes, device=device)
+            idx_mask = perm[:num_mask]
             aug_x = x.clone()
-            aug_x[mask] = 0.0
+
+            if self.mask_attr_strategy == "gaussian":
+                aug_x[idx_mask] = torch.normal(
+                    mean=0.5, std=0.5,
+                    size=(num_mask, x.size(1)),
+                    device=device, dtype=x.dtype,
+                )
+            elif self.mask_attr_strategy == "zeros":
+                aug_x[idx_mask] = 0.0
+            else:  # "mean"
+                aug_x[idx_mask] = x.mean(dim=0)
+
             return aug_x, edge_index, batch_indices
         
         elif aug_type == "subgraph":
             # Random-walk-based subgraph sampling (per graph in the batch)
             num_nodes = x.size(0)
-            keep_ratio = 1.0 - aug_ratio
+            if self.subgraph_ratio_meaning == "keep":
+                keep_ratio = aug_ratio
+            else:
+                keep_ratio = 1.0 - aug_ratio
             keep_mask = torch.zeros(num_nodes, dtype=torch.bool, device=device)
 
             unique_batches = torch.unique(batch_indices)
