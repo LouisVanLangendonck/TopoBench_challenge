@@ -609,9 +609,9 @@ def main():
     parser.add_argument("--input_dropout", type=float, default=None)
     
     # Few-shot learning parameters
-    parser.add_argument("--n_train", type=int, default=None,
+    parser.add_argument("--n_train", type=int, default=20,
                        help="Number of training nodes for few-shot learning (default: use all available)")
-    parser.add_argument("--n_evaluation", type=int, default=500,
+    parser.add_argument("--n_evaluation", type=int, default=200,
                        help="Number of evaluation nodes (val+test, max 50%% of total). Default: 400 nodes")
     parser.add_argument("--data_seed", type=int, default=0,
                        help="Seed for data splitting (keeps val/test fixed across n_train values)")

@@ -199,6 +199,8 @@ def detect_pretraining_method(config: dict) -> str:
             return "graphmaev2"
         elif "GRACE" in wrapper_target or "grace" in wrapper_target.lower():
             return "grace"
+        elif "BGRL" in wrapper_target or "bgrl" in wrapper_target.lower():
+            return "bgrl"
         elif "GraphMAE" in wrapper_target:
             return "graphmae"
         elif "GraphCL" in wrapper_target:
@@ -216,6 +218,8 @@ def detect_pretraining_method(config: dict) -> str:
         return "graphmaev2"
     elif "GRACE" in loss_target or "grace" in loss_target.lower():
         return "grace"
+    elif "BGRL" in loss_target or "bgrl" in loss_target.lower():
+        return "bgrl"
     elif "GraphMAE" in loss_target:
         return "graphmae"
     elif "LinkPred" in loss_target:
@@ -333,10 +337,10 @@ def load_pretrained_encoder(
     model_config = config["model"]
     pretraining_method = detect_pretraining_method(config)
     
-    if pretraining_method not in ["graphmaev2", "grace", "linkpred", "dgi", "supervised_cd"]:
+    if pretraining_method not in ["graphmaev2", "grace", "bgrl", "linkpred", "dgi", "supervised_cd"]:
         raise ValueError(
             f"Unsupported pretraining method '{pretraining_method}'. "
-            f"Supported methods: 'graphmaev2', 'grace', 'linkpred', 'dgi', 'supervised_cd'."
+            f"Supported methods: 'graphmaev2', 'grace', 'bgrl', 'linkpred', 'dgi', 'supervised_cd'."
         )
     
     # Build feature encoder

@@ -1,0 +1,51 @@
+_target_: topobench.model.TBModel
+
+model_name: gps_bgrl
+model_domain: graph
+
+feature_encoder:
+  _target_: topobench.nn.encoders.${model.feature_encoder.encoder_name}
+  encoder_name: AllCellFeatureEncoder
+  in_channels: ${infer_in_channels:${dataset},${oc.select:transforms,null}}
+  out_channels: 512
+  proj_dropout: 0.1
+
+backbone:
+  _target_: topobench.nn.backbones.GPSEncoder
+  input_dim: ${model.feature_encoder.out_channels}
+  hidden_dim: ${model.feature_encoder.out_channels}
+  num_layers: 4
+  dropout: 0.3
+  heads: 4
+  attn_type: multihead
+  local_conv_type: gin
+
+# BGRL wrapper manages augmentations + online/target encoders + EMA update
+backbone_wrapper:
+  _target_: topobench.nn.wrappers.BGRLGNNWrapper
+  _partial_: true
+  wrapper_name: BGRLGNNWrapper
+  out_channels: ${model.feature_encoder.out_channels}
+  num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
+  # BGRL augmentation hyperparameters (inductive setting)
+  drop_edge_rate_1: 0.3
+  drop_edge_rate_2: 0.2
+  drop_feature_rate_1: 0.25
+  drop_feature_rate_2: 0.0
+  momentum: 0.99
+  # Thing Claude added to be able to turn off when having a directed graph, that edge deletion can be done in a directed way! Keep True normally
+  force_undirected: true
+
+# BGRL readout contains only the online predictor p_theta
+readout:
+  _target_: topobench.nn.readouts.${model.readout.readout_name}
+  readout_name: BGRLReadOut
+  num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
+  hidden_dim: ${model.feature_encoder.out_channels}
+  out_channels: ${model.feature_encoder.out_channels}
+  task_level: ${dataset.parameters.task_level}
+  pooling_type: mean
+  predictor_hidden_dim: 512
+
+# compile model for faster training with pytorch 2.0
+compile: false
