@@ -53,9 +53,8 @@ class DGMAEReadOut(AbstractZeroCellReadOut):
         
         self.decoder_type = decoder_type
         
-        # Encoder to decoder projection (as in original GraphMAE/DGMAE)
+        # Encoder to decoder projection (uses PyTorch default init as in original DGMAE)
         self.encoder_to_decoder = nn.Linear(hidden_dim, hidden_dim, bias=False)
-        nn.init.xavier_uniform_(self.encoder_to_decoder.weight)
         
         # Build decoder
         self.decoder = self._build_decoder(

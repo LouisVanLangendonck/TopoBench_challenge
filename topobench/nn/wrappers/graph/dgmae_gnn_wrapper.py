@@ -14,7 +14,7 @@ from torch_geometric.nn.dense.linear import Linear
 from topobench.nn.wrappers.base import AbstractWrapper
 
 
-def sce_loss(x, y, alpha=3):
+def sce_loss(x, y, alpha=2):
     """Scaled Cosine Error loss for reconstruction."""
     x = F.normalize(x, p=2, dim=-1)
     y = F.normalize(y, p=2, dim=-1)
@@ -110,7 +110,7 @@ class DGMAEGNNWrapper(AbstractWrapper):
         # Input dimension for MLP output (original feature space)
         self.in_channels = in_channels if in_channels is not None else self.feature_dim
 
-        # Create learnable mask token
+        # Create learnable mask token (initialized to zeros, learned during training)
         self.enc_mask_token = nn.Parameter(torch.zeros(1, self.feature_dim))
 
         # MLP for high-frequency prediction (DGMAE-specific)

@@ -11,7 +11,7 @@ import torch_geometric
 from topobench.loss.base import AbstractLoss
 
 
-def sce_loss(x, y, alpha=3):
+def sce_loss(x, y, alpha=2):
     """Scaled Cosine Error loss."""
     x = F.normalize(x, p=2, dim=-1)
     y = F.normalize(y, p=2, dim=-1)
