@@ -3,6 +3,10 @@
 This module handles evaluation on a single large graph where nodes are split
 into train/val/test masks, as opposed to the inductive setting where entire
 graphs are split.
+
+Downstream modes (``--mode``):
+- ``linear-probe`` / ``random-init-linear-probe``: frozen feature encoder + backbone.
+- ``full-finetune`` / ``random-init-full-finetune``: all trainable; random-init skips checkpoint.
 """
 
 import argparse
@@ -15,6 +19,7 @@ _REPO_ROOT = _THIS_DIR.parent
 if (_REPO_ROOT / "topobench").exists():
     sys.path.insert(0, str(_REPO_ROOT))
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.optim import Adam
@@ -28,25 +33,27 @@ except ImportError:
     WANDB_AVAILABLE = False
 
 from downstream_eval_utils import (
-    load_wandb_config,
-    get_checkpoint_path_from_summary,
-    create_dataset_from_config,
     apply_transforms,
-    detect_pretraining_method,
-    detect_task_level,
+    build_tb_model_for_downstream,
+    create_dataset_from_config,
     detect_learning_setting,
-    create_random_encoder,
-    load_pretrained_encoder,
-    prepare_batch_for_topobench,
-    verify_encoder_outputs,
-    PretrainedEncoder,
+    detect_task_level,
+    downstream_mode_freezes_encoder,
+    downstream_mode_requires_checkpoint,
+    freeze_batchnorm_eval_no_track,
+    get_checkpoint_path_from_summary,
+    hidden_dim_from_downstream_config,
     LinearClassifier,
-    MLPClassifier,
+    load_wandb_config,
+    prepare_batch_for_topobench,
+    SupervisedCDDownstreamModel,
+    TBModelNodeEncoder,
+    use_supervised_cd_full_tbmodel,
+    verify_downstream_logits,
+    verify_encoder_outputs,
+    DOWNSTREAM_MODES,
 )
 
-# =============================================================================
-# Transductive-specific Components
-# =============================================================================
 
 class TransductiveNodeClassifier(nn.Module):
     """Node classifier for transductive learning."""
@@ -66,15 +73,10 @@ class TransductiveNodeClassifier(nn.Module):
             self._freeze_encoder()
     
     def _freeze_encoder(self):
-        """Freeze encoder parameters."""
         for param in self.encoder.parameters():
             param.requires_grad = False
         self.encoder.eval()
-        
-        for module in self.encoder.modules():
-            if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
-                module.eval()
-                module.track_running_stats = False
+        freeze_batchnorm_eval_no_track(self.encoder)
     
     def forward(self, batch):
         """Forward pass - returns logits for ALL nodes."""
@@ -95,10 +97,6 @@ class TransductiveNodeClassifier(nn.Module):
         return self
 
 
-# =============================================================================
-# Training & Evaluation
-# =============================================================================
-
 def train_transductive(
     model: TransductiveNodeClassifier,
     data,
@@ -111,8 +109,6 @@ def train_transductive(
     use_wandb: bool = False,
 ):
     """Train transductive node classification model."""
-    import torch
-    
     model = model.to(device)
     data = data.to(device)
     data = prepare_batch_for_topobench(data)
@@ -222,8 +218,6 @@ def evaluate_transductive(
     use_wandb: bool = False,
 ) -> dict:
     """Evaluate transductive model on test set."""
-    import torch
-    
     model = model.to(device)
     model.eval()
     data = data.to(device)
@@ -285,13 +279,9 @@ def evaluate_transductive(
     return result
 
 
-# =============================================================================
-# Main Pipeline
-# =============================================================================
-
 def run_downstream_evaluation_transductive(
     run_dir: str | Path,
-    mode: str = "linear",
+    mode: str = "linear-probe",
     epochs: int = 100,
     lr: float = 0.001,
     patience: int = 20,
@@ -305,186 +295,164 @@ def run_downstream_evaluation_transductive(
     n_evaluation: int | None = None,
     data_seed: int = 0,
     pretraining_config: dict | None = None,
+    graphuniverse_override: dict | None = None,
 ) -> dict:
     """Run full downstream evaluation pipeline for transductive setting."""
     run_dir = Path(run_dir)
-    
-    # Load config
+
+    if mode not in DOWNSTREAM_MODES:
+        raise ValueError(f"Unknown mode {mode!r}; expected one of {DOWNSTREAM_MODES}")
+
     config = load_wandb_config(run_dir)
     task_level = detect_task_level(config)
     learning_setting = detect_learning_setting(config)
-    
-    # Verify transductive setting
+
     if learning_setting != "transductive":
         raise ValueError(
             f"Config indicates '{learning_setting}' setting, but this script is for transductive evaluation. "
             f"Please use downstream_eval.py for inductive evaluation."
         )
     
-    # Get checkpoint
-    checkpoint_path = get_checkpoint_path_from_summary(run_dir)
-    if checkpoint_path is None:
-        raise ValueError("No checkpoint path found in wandb-summary.json")
+    checkpoint_path = None
+    if downstream_mode_requires_checkpoint(mode):
+        checkpoint_path = get_checkpoint_path_from_summary(run_dir)
+        if checkpoint_path is None:
+            raise ValueError("No checkpoint path found in wandb-summary.json")
     
-    # Extract parameters
-    dataset_params = config["dataset"]["parameters"]
-    # NOTE: Don't use num_classes from pretraining config (it's 1 for GraphMAEv2)
-    # We'll infer it from the actual labels after loading the data
-    num_classes_from_config = dataset_params.get("num_classes", 10)
-    
-    # Get universe parameters for consistent seed
     gen_params = config["dataset"]["loader"]["parameters"].get("generation_parameters", {})
     family_params = gen_params.get("family_parameters", {})
     universe_params = gen_params.get("universe_parameters", {})
     pretraining_universe_seed = universe_params["seed"]
     pretraining_family_seed = family_params["seed"]
     
-    # For transductive downstream, use SAME graph (same seeds) as pretraining
-    # This is the key difference from inductive setting
-    # IMPORTANT: Don't override downstream_task to keep the EXACT same graph generation
-    # The labels (community detection) are always generated regardless of task type
-    dataset, data_dir, dataset_info = create_dataset_from_config(
+    # Same universe/family seeds as pretraining; do not override downstream_task (keeps graph identical).
+    dataset, data_dir, _ = create_dataset_from_config(
         config,
-        n_graphs=1,  # Single graph for transductive
-        universe_seed=pretraining_universe_seed,  # SAME universe
-        family_seed=pretraining_family_seed,  # SAME family seed
+        n_graphs=1,
+        universe_seed=pretraining_universe_seed,
+        family_seed=pretraining_family_seed,
         dataset_purpose="downstream_transductive",
-        downstream_task=None,  # Don't override task - use pretraining task to get same features
+        downstream_task=None,
+        graphuniverse_override=graphuniverse_override,
     )
-    
-    # Apply transforms
+
     transforms_config = config.get("transforms")
     preprocessor = apply_transforms(dataset, data_dir, transforms_config)
     data_list = preprocessor.data_list
     
-    # Should have exactly one graph
     assert len(data_list) == 1, f"Expected 1 graph for transductive setting, got {len(data_list)}"
-    
-    # Load transductive splits (creates train/val/test masks)
+
     from topobench.data.utils.split_utils import load_transductive_splits
     from topobench.dataloader import DataloadDataset
     from omegaconf import OmegaConf
     
-    # Extract the single graph (without splits yet if doing few-shot)
     data = data_list[0]
-    
-    # Few-shot learning: custom split logic
+
     if n_train is not None or n_evaluation is not None:
-        import numpy as np
-        import torch
-        
         num_nodes = data.num_nodes
-        
-        # Validate n_evaluation
+
         if n_evaluation is not None:
             assert n_evaluation <= num_nodes // 2, (
                 f"n_evaluation ({n_evaluation}) must be at most 50% of total nodes ({num_nodes})"
             )
         else:
-            # Default: use 30% for evaluation
             n_evaluation = int(0.3 * num_nodes)
-        
-        # Step 1: Select FIXED evaluation nodes using data_seed
-        # This ensures val+test are the same across different n_train values
+
         np.random.seed(data_seed)
         all_indices = np.arange(num_nodes)
         np.random.shuffle(all_indices)
         
-        # First n_evaluation nodes are for evaluation (val + test)
         eval_indices = all_indices[:n_evaluation]
         remaining_indices = all_indices[n_evaluation:]
-        
-        # Split evaluation into val and test (50/50)
+
         n_val = n_evaluation // 2
         n_test = n_evaluation - n_val
         val_indices = eval_indices[:n_val]
         test_indices = eval_indices[n_val:]
         
-        # Step 2: Select training nodes from remaining nodes
-        # Use deterministic ordering so n_train=5 is subset of n_train=15
         if n_train is not None:
             assert n_train <= len(remaining_indices), (
                 f"n_train ({n_train}) must be at most {len(remaining_indices)} "
                 f"(total nodes {num_nodes} - evaluation nodes {n_evaluation})"
             )
-            # Use data_seed to create deterministic ordering
-            # The first n_train nodes will always be the same
-            np.random.seed(data_seed + 1)  # Different seed from evaluation split
+            np.random.seed(data_seed + 1)
             np.random.shuffle(remaining_indices)
             train_indices = remaining_indices[:n_train]
         else:
-            # Use all remaining nodes for training
             train_indices = remaining_indices
-        
-        # Convert to torch tensors (indices, not boolean masks)
+
         data.train_mask = torch.from_numpy(train_indices).long()
         data.val_mask = torch.from_numpy(val_indices).long()
         data.test_mask = torch.from_numpy(test_indices).long()
-        
-        print(f"\n{'='*60}")
-        print(f"Few-Shot Split (data_seed={data_seed}):")
-        print(f"  Total nodes: {num_nodes}")
-        print(f"  Evaluation nodes (fixed): {n_evaluation} (val: {n_val}, test: {n_test})")
-        print(f"  Training nodes: {len(train_indices)}")
-        print(f"  Remaining available for training: {len(remaining_indices)}")
-        print(f"{'='*60}\n")
+
+        print(
+            f"Few-shot split (data_seed={data_seed}): nodes={num_nodes}, "
+            f"train={len(train_indices)}, val={n_val}, test={n_test}"
+        )
     else:
-        # Standard split using config
         wrapped_dataset = DataloadDataset(data_list)
         split_params = config["dataset"]["split_params"]
         split_params_omega = OmegaConf.create(split_params)
         
-        # Load splits - this adds train_mask, val_mask, test_mask to the data
         train_dataset, _, _ = load_transductive_splits(wrapped_dataset, split_params_omega)
-        
-        # Extract the single graph with masks
         data = train_dataset.data_lst[0]
-        
-        # Verify masks exist
+
         if not hasattr(data, 'train_mask') or not hasattr(data, 'val_mask') or not hasattr(data, 'test_mask'):
             raise ValueError(
                 "Data does not have train_mask, val_mask, test_mask. "
                 "Make sure the dataset config has split_params.learning_setting='transductive'"
             )
     
-    # Infer num_classes from actual labels (not from pretraining config which may be 1)
     num_classes = int(data.y.max().item()) + 1
-    print(f"Inferred num_classes from labels: {num_classes}")
-    
-    # For transductive setting, add batch indices (all nodes in same graph)
-    import torch
+    print(f"num_classes (from labels): {num_classes}")
+
     data.batch = torch.zeros(data.num_nodes, dtype=torch.long)
     data.batch_0 = data.batch
     
-    # Print graph size for debugging
-    print(f"\n{'='*60}")
-    print(f"Graph Statistics:")
-    print(f"  Nodes: {data.num_nodes}")
-    print(f"  Edges: {data.num_edges}")
-    print(f"  Features: {data.x.shape}")
-    print(f"  Train nodes: {len(data.train_mask)}")
-    print(f"  Val nodes: {len(data.val_mask)}")
-    print(f"  Test nodes: {len(data.test_mask)}")
-    print(f"{'='*60}\n")
-    
-    # Load or create encoder
-    if mode == "scratch" or mode == "scratch_frozen":
-        feature_encoder, backbone, hidden_dim = create_random_encoder(config, device=device)
-    else:
-        feature_encoder, backbone, hidden_dim = load_pretrained_encoder(config, checkpoint_path, device=device)
-    
-    # Wrap encoder for node-level features
-    encoder = PretrainedEncoder(feature_encoder, backbone)
-    
-    # Verify encoder (create a dummy loader for verification)
+    print(
+        f"Graph: nodes={data.num_nodes}, edges={data.num_edges}, x={tuple(data.x.shape)}, "
+        f"train/val/test={len(data.train_mask)}/{len(data.val_mask)}/{len(data.test_mask)}"
+    )
+
     from torch_geometric.loader import DataLoader
     dummy_loader = DataLoader([data], batch_size=1, shuffle=False)
-    verify_result = verify_encoder_outputs(encoder, dummy_loader, device=device)
-    print(f"Encoder verification: {verify_result['status']}")
-    if verify_result['status'] != "OK":
-        print(f"  Issues: {verify_result.get('issues', [])}")
+
+    freeze_encoder = downstream_mode_freezes_encoder(mode)
+    use_full_supervised = use_supervised_cd_full_tbmodel(
+        config, downstream_task=None, task_level=task_level
+    )
+
+    hidden_dim = hidden_dim_from_downstream_config(config)
+
+    if use_full_supervised:
+        tb_model, _, _ = build_tb_model_for_downstream(
+            config,
+            device,
+            checkpoint_path,
+            load_checkpoint=downstream_mode_requires_checkpoint(mode),
+            verbose=True,
+        )
+        downstream_model = SupervisedCDDownstreamModel(
+            tb_model, freeze_encoder=freeze_encoder
+        )
+        verify_result = verify_downstream_logits(downstream_model, dummy_loader, device=device)
+        print(f"Downstream model verification: {verify_result['status']}")
+        if verify_result["status"] != "OK":
+            print(f"  Issues: {verify_result.get('issues', [])}")
+    else:
+        tb_model, hidden_dim, _ = build_tb_model_for_downstream(
+            config,
+            device,
+            checkpoint_path,
+            load_checkpoint=downstream_mode_requires_checkpoint(mode),
+            verbose=True,
+        )
+        encoder = TBModelNodeEncoder(tb_model)
+        verify_result = verify_encoder_outputs(encoder, dummy_loader, device=device)
+        print(f"Encoder verification: {verify_result['status']}")
+        if verify_result["status"] != "OK":
+            print(f"  Issues: {verify_result.get('issues', [])}")
     
-    # Initialize wandb
     if use_wandb and WANDB_AVAILABLE:
         wandb_config = {
             "mode": mode,
@@ -506,9 +474,9 @@ def run_downstream_evaluation_transductive(
             "n_train": n_train,
             "n_evaluation": n_evaluation,
             "few_shot": n_train is not None or n_evaluation is not None,
+            "graphuniverse_override": graphuniverse_override,
         }
         
-        # Add pretraining config
         def flatten_dict(d, parent_key='', sep='/'):
             items = []
             for k, v in d.items():
@@ -530,29 +498,14 @@ def run_downstream_evaluation_transductive(
         
         wandb.init(project=wandb_project, config=wandb_config)
     
-    # Create downstream model
-    freeze_encoder = mode in ["linear", "mlp", "scratch_frozen"]
-    
-    if mode in ["linear", "finetune-linear", "scratch_frozen"]:
+    if not use_full_supervised:
         classifier = LinearClassifier(
             input_dim=hidden_dim,
             num_classes=num_classes,
             dropout=classifier_dropout if classifier_dropout else 0.0,
         )
-    elif mode in ["mlp", "finetune-mlp", "scratch"]:
-        classifier = MLPClassifier(
-            input_dim=hidden_dim,
-            num_classes=num_classes,
-            hidden_dims=[hidden_dim // 2, hidden_dim // 4],
-            dropout=classifier_dropout,
-            input_dropout=input_dropout,
-        )
-    else:
-        raise ValueError(f"Unknown mode: {mode}")
+        downstream_model = TransductiveNodeClassifier(encoder, classifier, freeze_encoder)
     
-    downstream_model = TransductiveNodeClassifier(encoder, classifier, freeze_encoder)
-    
-    # Train
     history = train_transductive(
         model=downstream_model,
         data=data,
@@ -564,7 +517,6 @@ def run_downstream_evaluation_transductive(
         use_wandb=use_wandb,
     )
     
-    # Evaluate
     results = evaluate_transductive(
         model=downstream_model,
         data=data,
@@ -573,11 +525,9 @@ def run_downstream_evaluation_transductive(
         use_wandb=use_wandb,
     )
     
-    # Cleanup wandb
     if use_wandb and WANDB_AVAILABLE:
         wandb.finish()
     
-    # Add metadata
     results["mode"] = mode
     results["task_type"] = "classification"
     results["task_level"] = "node"
@@ -589,15 +539,15 @@ def run_downstream_evaluation_transductive(
     return results
 
 
-# =============================================================================
-# CLI
-# =============================================================================
-
 def main():
     parser = argparse.ArgumentParser(description="Transductive downstream evaluation pipeline.")
     parser.add_argument("--run_dir", type=str, required=True, help="Wandb run directory")
-    parser.add_argument("--mode", type=str, default="linear",
-                       choices=["linear", "mlp", "finetune-linear", "finetune-mlp", "scratch", "scratch_frozen"])
+    parser.add_argument(
+        "--mode",
+        type=str,
+        default="linear-probe",
+        choices=list(DOWNSTREAM_MODES),
+    )
     parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--patience", type=int, default=100)
@@ -605,13 +555,13 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument("--wandb_project", type=str, default="downstream_eval_transductive")
-    parser.add_argument("--classifier_dropout", type=float, default=0.0)
+    parser.add_argument("--classifier_dropout", type=float, default=0.3)
     parser.add_argument("--input_dropout", type=float, default=None)
     
     # Few-shot learning parameters
-    parser.add_argument("--n_train", type=int, default=None,
-                       help="Number of training nodes for few-shot learning (default: use all available)")
-    parser.add_argument("--n_evaluation", type=int, default=500,
+    parser.add_argument("--n_train", type=int, default=30,
+                       help="Number of training nodes for few-shot learning (default: 30)")
+    parser.add_argument("--n_evaluation", type=int, default=200,
                        help="Number of evaluation nodes (val+test, max 50%% of total). Default: 400 nodes")
     parser.add_argument("--data_seed", type=int, default=0,
                        help="Seed for data splitting (keeps val/test fixed across n_train values)")
@@ -635,7 +585,6 @@ def main():
         data_seed=args.data_seed,
     )
     
-    # Print results
     print("\n" + "=" * 60)
     print("TRANSDUCTIVE NODE CLASSIFICATION RESULTS")
     print("=" * 60)

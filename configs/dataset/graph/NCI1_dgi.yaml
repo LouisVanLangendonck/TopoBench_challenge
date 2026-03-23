@@ -9,24 +9,22 @@ loader:
 # Dataset parameters
 parameters:
   num_features: 37
-  num_classes: 1  # Not used for GraphMAE reconstruction
+  num_classes: 1  # Binary classification (positive vs negative samples)
   task: dgi
-  loss_type: bce # Options: nt_xent, infonce
-  monitor_metric: discrimination_acc
-  task_level: node  # GraphMAE does node-level reconstruction
+  monitor_metric: accuracy  # Track discrimination accuracy
+  task_level: node  # Node-level embeddings
 
 #splits
 split_params:
   learning_setting: inductive
-  data_split_dir: ${paths.data_dir}/data_splits/${dataset.loader.parameters.data_name}
+  data_split_dir: ${dataset.loader.parameters.data_dir}/data_splits
   data_seed: 0
   split_type: random #'k-fold' # either "k-fold" or "random" strategies
   k: 10 # for "k-fold" Cross-Validation
-  train_prop: 0.5 # for "random" strategy splitting
+  train_prop: 0.7 # for "random" strategy splitting
 
 # Dataloader parameters
 dataloader_params:
-  batch_size: 64 
+  batch_size: 32  # Multiple graphs for graph_diffusion corruption
   num_workers: 0
   pin_memory: False
-

@@ -1,0 +1,14 @@
+# BGRL Evaluator Configuration
+
+_target_: topobench.evaluator.bgrl_evaluator.BGRLEvaluator
+
+# BGRL evaluator tracks:
+# - loss: total symmetric BGRL loss
+# - loss_12: view1-online predicts view2-target
+# - loss_21: view2-online predicts view1-target
+# - cosine_sim: average cosine similarity (higher is better)
+metrics:
+  - loss
+  - loss_12
+  - loss_21
+  - cosine_sim

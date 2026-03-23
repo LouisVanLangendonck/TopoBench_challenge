@@ -256,9 +256,10 @@ class TBModel(LightningModule):
             is_dgi = "x_0_corrupted" in model_out  # DGI
             is_grace = "z_1" in model_out and "z_2" in model_out  # GRACE
             is_linkpred = "pos_edge_index" in model_out and "neg_edge_index" in model_out  # LinkPred
+            is_bgrl = "pred_h_1" in model_out and "target_h_2" in model_out  # BGRL
             
-            if is_dgi or is_grace or is_linkpred:
-                # Skip masking for DGI/GRACE/LinkPred - they don't use node-level masks
+            if is_dgi or is_grace or is_linkpred or is_bgrl:
+                # Skip masking for self-supervised pre-training outputs
                 return model_out
             
             if self.state_str == "Training":

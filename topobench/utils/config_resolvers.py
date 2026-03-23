@@ -158,7 +158,7 @@ def get_monitor_metric(task, metric):
         task == "classification"
         or task == "regression"
         or task == "multilabel classification"
-        or task in ["graphmaev2", "grace", "linkpred", "dgi", "graphcl"]
+        or task in ["graphmaev2", "grace", "linkpred", "dgi", "graphcl", "bgrl"]
     ):
         return f"val/{metric}"
     else:
@@ -189,6 +189,7 @@ def get_monitor_mode(task):
         or task == "graphmaev2"  # GraphMAEv2: maximize cosine similarity
         or task == "linkpred"  # LinkPred: maximize accuracy/auroc
         or task == "dgi"  # DGI: maximize discrimination accuracy
+        or task == "bgrl"  # BGRL: maximize cosine similarity
         ):
         return "max"
 
@@ -537,5 +538,7 @@ def get_default_metrics(task, metrics=None):
             return ["loss", "loss_positive", "loss_negative", "accuracy"]
         elif "graphcl" in task:
             return ["contrastive_loss", "alignment", "cosine_sim"]
+        elif "bgrl" in task:
+            return ["loss", "loss_12", "loss_21", "cosine_sim"]
         else:
             raise ValueError(f"Invalid task {task}")

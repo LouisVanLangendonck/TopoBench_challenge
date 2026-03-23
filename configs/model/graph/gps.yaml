@@ -5,10 +5,10 @@ model_domain: graph
 
 feature_encoder:
   _target_: topobench.nn.encoders.${model.feature_encoder.encoder_name}
-  encoder_name: AllCellFeatureEncoder
-  in_channels: ${infer_in_channels:${dataset},${oc.select:transforms,null}} 
-  out_channels: 128
-  proj_dropout: 0.2
+  encoder_name: LinearFeatureEncoder
+  in_channels: ${infer_in_channels:${dataset},${oc.select:transforms,null}}
+  out_channels: 512
+  proj_dropout: 0.1
 
 backbone:
   _target_: topobench.nn.backbones.GPSEncoder

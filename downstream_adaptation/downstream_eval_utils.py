@@ -14,7 +14,9 @@ import torch
 import torch.nn as nn
 import yaml
 from omegaconf import OmegaConf
-from torch_geometric.nn import global_mean_pool, global_max_pool, global_add_pool
+from torch_geometric.nn import global_add_pool, global_max_pool, global_mean_pool
+
+_GLOBAL_POOL = {"mean": global_mean_pool, "max": global_max_pool, "sum": global_add_pool}
 
 from topobench.data.preprocessor import PreProcessor
 from graph_universe import GraphUniverseDataset
@@ -77,13 +79,12 @@ def create_dataset_from_config(
 ) -> tuple:
     """Create/load GraphUniverse dataset with optional overrides."""
     dataset_config = deepcopy(config["dataset"])
-    loader_target = dataset_config["loader"]["_target_"]
     params = dataset_config["loader"]["parameters"]
     gen_params = deepcopy(params["generation_parameters"])
     
-    # Override task if specified
     if downstream_task is not None:
-        if downstream_task in ["basic_property_reconstruction", "community_related_property_reconstruction"]:
+        # Presence is derived from node community labels; GraphUniverse generates CD graphs.
+        if downstream_task == "community_presence":
             gen_params["task"] = "community_detection"
         else:
             gen_params["task"] = downstream_task
@@ -138,54 +139,6 @@ def apply_transforms(
     return preprocessor
 
 
-# =============================================================================
-# Model Loading & Feature Extraction
-# =============================================================================
-
-def get_class_from_target(target: str):
-    """Get class from Hydra _target_ string."""
-    from topobench.nn.backbones import MODEL_CLASSES as BACKBONE_CLASSES
-    from topobench.nn.encoders import FEATURE_ENCODERS
-    from topobench.nn.readouts import READOUT_CLASSES
-    from topobench.nn.wrappers import WRAPPER_CLASSES
-    
-    parts = target.split(".")
-    class_name = parts[-1]
-    
-    if class_name in BACKBONE_CLASSES:
-        return BACKBONE_CLASSES[class_name]
-    if class_name in FEATURE_ENCODERS:
-        return FEATURE_ENCODERS[class_name]
-    if class_name in READOUT_CLASSES:
-        return READOUT_CLASSES[class_name]
-    if class_name in WRAPPER_CLASSES:
-        return WRAPPER_CLASSES[class_name]
-    
-    import importlib
-    module_path = ".".join(parts[:-1])
-    module = importlib.import_module(module_path)
-    return getattr(module, class_name)
-
-
-def instantiate_from_config(config: dict, **override_kwargs):
-    """Instantiate a class from Hydra-style config."""
-    from functools import partial
-    
-    if config is None:
-        return None
-    
-    config = dict(config)
-    target = config.pop("_target_")
-    is_partial = config.pop("_partial_", False)
-    config.update(override_kwargs)
-    
-    cls = get_class_from_target(target)
-    
-    if is_partial:
-        return partial(cls, **config)
-    return cls(**config)
-
-
 def detect_pretraining_method(config: dict) -> str:
     """Detect pre-training method from config."""
     model_config = config.get("model", {})
@@ -199,6 +152,8 @@ def detect_pretraining_method(config: dict) -> str:
             return "graphmaev2"
         elif "GRACE" in wrapper_target or "grace" in wrapper_target.lower():
             return "grace"
+        elif "BGRL" in wrapper_target or "bgrl" in wrapper_target.lower():
+            return "bgrl"
         elif "GraphMAE" in wrapper_target:
             return "graphmae"
         elif "GraphCL" in wrapper_target:
@@ -216,11 +171,18 @@ def detect_pretraining_method(config: dict) -> str:
         return "graphmaev2"
     elif "GRACE" in loss_target or "grace" in loss_target.lower():
         return "grace"
+    elif "BGRL" in loss_target or "bgrl" in loss_target.lower():
+        return "bgrl"
     elif "GraphMAE" in loss_target:
         return "graphmae"
     elif "LinkPred" in loss_target:
         return "linkpred"
     
+    # Fallback: detect directly from dataset task when wrapper/loss metadata is missing.
+    dataset_task = str(config.get("dataset", {}).get("parameters", {}).get("task", "")).lower()
+    if dataset_task == "bgrl":
+        return "bgrl"
+
     # Check if it's supervised community detection
     dataset_config = config.get("dataset", {})
     dataset_params = dataset_config.get("parameters", {})
@@ -251,176 +213,266 @@ def detect_learning_setting(config: dict) -> str:
     return learning_setting
 
 
-def create_random_encoder(
-    config: dict,
-    device: str = "cpu",
-) -> tuple[nn.Module, nn.Module, int]:
-    """Create encoder with random initialization."""
-    import torch.nn.init as init
-    
-    model_config = config["model"]
-    
-    # Build feature encoder
-    feature_encoder_config = model_config.get("feature_encoder")
-    if feature_encoder_config:
-        feature_encoder = instantiate_from_config(feature_encoder_config)
-    else:
-        feature_encoder = nn.Identity()
-    
-    # Build backbone
-    backbone_config = model_config["backbone"]
-    backbone = instantiate_from_config(backbone_config)
-    
-    # Get hidden dimension
-    hidden_dim = (
-        backbone_config.get("hidden_dim") or 
-        backbone_config.get("hidden_channels") or 
-        backbone_config.get("out_channels") or
-        model_config.get("feature_encoder", {}).get("out_channels") or
-        64
-    )
-    
-    # Re-initialize all weights
-    def reinitialize_weights(module):
-        if hasattr(module, 'reset_parameters'):
-            module.reset_parameters()
-        else:
-            for name, param in module.named_parameters(recurse=False):
-                if param.requires_grad:
-                    if 'weight' in name:
-                        if param.ndim >= 2:
-                            init.xavier_uniform_(param)
-                        else:
-                            init.uniform_(param, -0.1, 0.1)
-                    elif 'bias' in name:
-                        init.zeros_(param)
-    
-    feature_encoder.apply(reinitialize_weights)
-    backbone.apply(reinitialize_weights)
-    
-    # Move to device
-    feature_encoder = feature_encoder.to(device)
-    backbone = backbone.to(device)
-    
-    # Wrap backbone in GNNWrapper
-    from topobench.nn.wrappers.graph.gnn_wrapper import GNNWrapper
-    
-    wrapper_config = model_config.get("backbone_wrapper", {})
-    out_channels = wrapper_config.get("out_channels", hidden_dim)
-    num_cell_dimensions = wrapper_config.get("num_cell_dimensions", 0)
-    
-    wrapped_backbone = GNNWrapper(
-        backbone=backbone,
-        out_channels=out_channels,
-        num_cell_dimensions=num_cell_dimensions,
-    ).to(device)
-    
-    return feature_encoder, wrapped_backbone, hidden_dim
+# =============================================================================
+# Downstream evaluation modes (CLI / pipelines)
+# =============================================================================
+
+DOWNSTREAM_MODES = (
+    "full-finetune",
+    "random-init-full-finetune",
+    "linear-probe",
+    "random-init-linear-probe",
+)
 
 
-def load_pretrained_encoder(
+def downstream_mode_requires_checkpoint(mode: str) -> bool:
+    """Random-init modes do not load a pretrained checkpoint."""
+    return mode not in ("random-init-full-finetune", "random-init-linear-probe")
+
+
+def downstream_mode_freezes_encoder(mode: str) -> bool:
+    """Whether feature encoder + backbone stay frozen (readout / head still trains when applicable)."""
+    return mode in ("linear-probe", "random-init-linear-probe")
+
+
+def use_supervised_cd_full_tbmodel(
     config: dict,
-    checkpoint_path: str | Path,
-    device: str = "cpu",
-) -> tuple[nn.Module, nn.Module, int]:
-    """Load pre-trained encoder from checkpoint.
-    
-    For all pretraining methods (including supervised CD), we only load the encoder
-    (feature_encoder + backbone) and always create fresh downstream heads.
-    """
-    from topobench.nn.wrappers.graph.gnn_wrapper import GNNWrapper
-    
-    model_config = config["model"]
-    pretraining_method = detect_pretraining_method(config)
-    
-    if pretraining_method not in ["graphmaev2", "grace", "linkpred", "dgi", "supervised_cd"]:
-        raise ValueError(
-            f"Unsupported pretraining method '{pretraining_method}'. "
-            f"Supported methods: 'graphmaev2', 'grace', 'linkpred', 'dgi', 'supervised_cd'."
-        )
-    
-    # Build feature encoder
-    feature_encoder_config = model_config.get("feature_encoder")
-    if feature_encoder_config:
-        feature_encoder = instantiate_from_config(feature_encoder_config)
-    else:
-        feature_encoder = nn.Identity()
-    
-    # Build backbone
-    backbone_config = model_config["backbone"]
-    backbone = instantiate_from_config(backbone_config)
-    
-    # Build wrapper
-    wrapper_config = model_config.get("backbone_wrapper", {})
-    if wrapper_config:
-        wrapper_config_copy = dict(wrapper_config)
-        wrapper_config_copy.pop("_partial_", None)
-        wrapper = instantiate_from_config(wrapper_config_copy, backbone=backbone)
-    else:
-        # For supervised CD, wrapper might not exist
-        if pretraining_method == "supervised_cd":
-            wrapper = None
-        else:
-            raise ValueError(f"No wrapper config found for {pretraining_method}")
-    
-    # Get hidden dimension
-    hidden_dim = (
-        backbone_config.get("hidden_dim") or 
-        backbone_config.get("hidden_channels") or 
-        backbone_config.get("out_channels") or
-        model_config.get("feature_encoder", {}).get("out_channels") or
-        128
+    *,
+    downstream_task: str | None = None,
+    task_level: str | None = None,
+) -> bool:
+    """Use full TBModel + checkpoint (incl. readout) for supervised community detection."""
+    if detect_pretraining_method(config) != "supervised_cd":
+        return False
+    tl = task_level if task_level is not None else detect_task_level(config)
+    if tl != "node":
+        return False
+    if downstream_task == "community_presence":
+        return False
+    return True
+
+
+def _detach_tensors_in_model_out(model_out):
+    if isinstance(model_out, dict):
+        return {
+            k: v.detach() if torch.is_tensor(v) else v
+            for k, v in model_out.items()
+        }
+    if torch.is_tensor(model_out):
+        return model_out.detach()
+    return model_out
+
+
+def freeze_batchnorm_eval_no_track(root: nn.Module) -> None:
+    """Set all BatchNorm submodules to eval with frozen running stats."""
+    for m in root.modules():
+        if isinstance(m, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
+            m.eval()
+            m.track_running_stats = False
+
+
+def instantiate_tbmodel_from_wandb_config(config: dict, device: str = "cpu"):
+    """Build TBModel the same way as training (encoder + backbone + readout + loss + evaluator)."""
+    import hydra
+    from topobench.model import TBModel
+
+    model_cfg = OmegaConf.create(config["model"])
+    evaluator = hydra.utils.instantiate(OmegaConf.create(config["evaluator"]))
+    loss = hydra.utils.instantiate(OmegaConf.create(config["loss"]))
+    optimizer = hydra.utils.instantiate(OmegaConf.create(config["optimizer"]))
+    learning_setting = config["dataset"]["split_params"]["learning_setting"]
+
+    model: TBModel = hydra.utils.instantiate(
+        model_cfg,
+        evaluator=evaluator,
+        learning_setting=learning_setting,
+        optimizer=optimizer,
+        loss=loss,
     )
-    
-    # Load checkpoint
+    return model.to(device)
+
+
+def load_tbmodel_weights_from_checkpoint(tb_model, checkpoint_path: str | Path) -> tuple:
+    """Load Lightning checkpoint weights into an existing TBModel."""
     checkpoint_path = Path(checkpoint_path)
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-    
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     state_dict = checkpoint.get("state_dict", checkpoint)
-    
-    # Load feature encoder weights
-    encoder_state = {k.replace("feature_encoder.", ""): v for k, v in state_dict.items() if k.startswith("feature_encoder.")}
-    if encoder_state:
-        feature_encoder.load_state_dict(encoder_state, strict=True)
-    
-    # Load wrapper/backbone weights
-    if wrapper is not None:
-        wrapper_state = {k.replace("backbone.", ""): v for k, v in state_dict.items() if k.startswith("backbone.")}
-        if wrapper_state:
-            wrapper.load_state_dict(wrapper_state, strict=False)
-        pretrained_backbone = wrapper.backbone
-    else:
-        # For supervised CD without wrapper, load backbone directly
-        backbone_state = {k.replace("backbone.", ""): v for k, v in state_dict.items() if k.startswith("backbone.")}
-        if backbone_state:
-            backbone.load_state_dict(backbone_state, strict=False)
-        pretrained_backbone = backbone
-    
-    # Create clean GNNWrapper
-    num_cell_dimensions = wrapper_config.get("num_cell_dimensions", 1) if wrapper_config else 0
-    out_channels = wrapper_config.get("out_channels", hidden_dim) if wrapper_config else hidden_dim
-    
-    clean_wrapper = GNNWrapper(
-        backbone=pretrained_backbone,
-        out_channels=out_channels,
-        num_cell_dimensions=num_cell_dimensions
+    return tb_model.load_state_dict(state_dict, strict=False)
+
+
+def sync_batch_0_from_batch(data) -> None:
+    """Align ``batch_0`` with PyG ``batch`` (required e.g. for DGI ``graph_diffusion``)."""
+    if getattr(data, "batch", None) is not None:
+        data.batch_0 = data.batch
+
+
+def hidden_dim_from_downstream_config(config: dict) -> int:
+    """Hidden width for node features after backbone (same resolution as verify script)."""
+    backbone_cfg = config.get("model", {}).get("backbone", {})
+    return int(
+        backbone_cfg.get("hidden_dim")
+        or backbone_cfg.get("hidden_channels")
+        or backbone_cfg.get("out_channels")
+        or config.get("model", {}).get("feature_encoder", {}).get("out_channels")
+        or 128
     )
-    
-    # Move to device
-    feature_encoder = feature_encoder.to(device)
-    clean_wrapper = clean_wrapper.to(device)
-    
-    return feature_encoder, clean_wrapper, hidden_dim
+
+
+def build_tb_model_for_downstream(
+    config: dict,
+    device: str,
+    checkpoint_path: str | Path | None,
+    *,
+    load_checkpoint: bool,
+    verbose: bool = True,
+):
+    """Instantiate full ``TBModel`` and optionally load Lightning weights (matches checkpoint verify flow)."""
+    tb_model = instantiate_tbmodel_from_wandb_config(config, device=device)
+    inc = None
+    if load_checkpoint:
+        if checkpoint_path is None:
+            raise ValueError("checkpoint_path is required when load_checkpoint=True")
+        inc = load_tbmodel_weights_from_checkpoint(tb_model, checkpoint_path)
+        if verbose and (inc.missing_keys or inc.unexpected_keys):
+            print(
+                f"TBModel load_state_dict (non-strict): "
+                f"{len(inc.missing_keys)} missing, {len(inc.unexpected_keys)} unexpected keys"
+            )
+    hidden_dim = hidden_dim_from_downstream_config(config)
+    return tb_model, hidden_dim, inc
+
+
+class TBModelNodeEncoder(nn.Module):
+    """``feature_encoder`` → ``backbone`` → node embeddings ``x_0`` (same SSL wrapper as training)."""
+
+    def __init__(self, tb_model):
+        super().__init__()
+        self.tb_model = tb_model
+        for p in self.tb_model.readout.parameters():
+            p.requires_grad = False
+
+    def train(self, mode=True):
+        self.training = mode
+        self.tb_model.feature_encoder.train(mode)
+        self.tb_model.backbone.train(mode)
+        self.tb_model.readout.eval()
+        return self
+
+    def eval(self):
+        return self.train(False)
+
+    def encode_to_x0_and_batch(self, batch):
+        batch = prepare_batch_for_topobench(batch)
+        if hasattr(batch, "x"):
+            batch.x_0 = batch.x
+        sync_batch_0_from_batch(batch)
+        encoded = self.tb_model.feature_encoder(batch)
+        sync_batch_0_from_batch(encoded)
+        out = self.tb_model.backbone(encoded)
+        if isinstance(out, dict):
+            x = out["x_0"]
+            bidx = out.get("batch_0")
+            if bidx is None:
+                bidx = getattr(encoded, "batch_0", None)
+        else:
+            x = out
+            bidx = getattr(encoded, "batch_0", None)
+        if bidx is None:
+            bidx = getattr(encoded, "batch", None)
+        return x, bidx
+
+    def forward(self, batch):
+        x, _ = self.encode_to_x0_and_batch(batch)
+        return x
+
+
+class TBModelGraphLevelEncoder(nn.Module):
+    """Graph-level: node encoder + global pool."""
+
+    def __init__(self, tb_model, readout_type: str = "mean"):
+        super().__init__()
+        self.node_encoder = TBModelNodeEncoder(tb_model)
+        try:
+            self.pool = _GLOBAL_POOL[readout_type]
+        except KeyError as e:
+            raise ValueError(f"Unknown readout type: {readout_type}") from e
+
+    def train(self, mode=True):
+        self.training = mode
+        self.node_encoder.train(mode)
+        return self
+
+    def eval(self):
+        return self.train(False)
+
+    def forward(self, batch, return_node_features=False):
+        x, bidx = self.node_encoder.encode_to_x0_and_batch(batch)
+        if bidx is None:
+            raise RuntimeError(
+                "Cannot pool: missing batch indices (batch_0 / batch) after backbone forward."
+            )
+        graph_x = self.pool(x, bidx)
+        if return_node_features:
+            return {"node": x, "graph": graph_x}
+        return graph_x
+
+
+class SupervisedCDDownstreamModel(nn.Module):
+    """Full supervised TBModel for node CD: uses pretrained readout, optional frozen encoder+backbone."""
+
+    def __init__(self, tb_model, freeze_encoder: bool = True):
+        super().__init__()
+        self.tb_model = tb_model
+        self.freeze_encoder = freeze_encoder
+        self.task_level = getattr(tb_model, "task_level", "node")
+        if freeze_encoder:
+            self._freeze_encoder_params()
+
+    def _freeze_encoder_params(self):
+        for p in self.tb_model.feature_encoder.parameters():
+            p.requires_grad = False
+        for p in self.tb_model.backbone.parameters():
+            p.requires_grad = False
+        for p in self.tb_model.readout.parameters():
+            p.requires_grad = True
+
+    def forward(self, batch):
+        batch = prepare_batch_for_topobench(batch)
+        sync_batch_0_from_batch(batch)
+        if self.freeze_encoder:
+            self.tb_model.feature_encoder.eval()
+            self.tb_model.backbone.eval()
+            with torch.no_grad():
+                model_out = self.tb_model.feature_encoder(batch)
+                if not isinstance(model_out, dict):
+                    sync_batch_0_from_batch(model_out)
+                model_out = self.tb_model.backbone(model_out)
+            model_out = _detach_tensors_in_model_out(model_out)
+            model_out = self.tb_model.readout(model_out=model_out, batch=batch)
+        else:
+            model_out = self.tb_model(batch)
+        logits = model_out["logits"]
+        if logits.dim() == 1:
+            logits = logits.unsqueeze(-1)
+        return logits
+
+    def train(self, mode=True):
+        super().train(mode)
+        if self.freeze_encoder:
+            self.tb_model.feature_encoder.eval()
+            self.tb_model.backbone.eval()
+            freeze_batchnorm_eval_no_track(self.tb_model.feature_encoder)
+            freeze_batchnorm_eval_no_track(self.tb_model.backbone)
+        return self
 
 
 def prepare_batch_for_topobench(batch):
     """Ensure batch has required TopoBench attributes."""
     if not hasattr(batch, 'x_0') and hasattr(batch, 'x'):
         batch.x_0 = batch.x
-    if not hasattr(batch, 'batch_0') and hasattr(batch, 'batch'):
-        batch.batch_0 = batch.batch
+    sync_batch_0_from_batch(batch)
     return batch
 
 
@@ -476,101 +528,32 @@ def verify_encoder_outputs(encoder: nn.Module, data_loader, device: str = "cpu")
     }
 
 
-# =============================================================================
-# Encoder Wrappers
-# =============================================================================
+def verify_downstream_logits(model: nn.Module, data_loader, device: str = "cpu") -> dict:
+    """Sanity-check that a full downstream model produces reasonable logits."""
+    model.eval()
+    model = model.to(device)
+    batch = next(iter(data_loader))
+    batch = batch.to(device)
+    batch = prepare_batch_for_topobench(batch)
+    with torch.no_grad():
+        try:
+            logits = model(batch)
+        except Exception as e:
+            return {"status": "ERROR", "error": str(e)}
+    mean = logits.mean().item()
+    std = logits.std().item()
+    issues = []
+    if std < 1e-6:
+        issues.append("Very low logit variance")
+    status = "OK" if not issues else "WARNING"
+    return {
+        "status": status,
+        "mean": mean,
+        "std": std,
+        "shape": list(logits.shape),
+        "issues": issues,
+    }
 
-class PretrainedEncoder(nn.Module):
-    """Wrapper combining feature encoder + backbone for node-level features."""
-    
-    def __init__(self, feature_encoder: nn.Module, backbone: nn.Module):
-        super().__init__()
-        self.feature_encoder = feature_encoder
-        self.backbone = backbone
-    
-    def forward(self, batch):
-        """Get encoded node-level features."""
-        batch = prepare_batch_for_topobench(batch)
-        
-        # IMPORTANT: Reset x_0 to original features before encoding
-        # The feature encoder modifies x_0 in-place, so we need to reset it
-        # each time to avoid applying the transformation twice
-        if hasattr(batch, 'x') and not hasattr(batch, 'x_0'):
-            batch.x_0 = batch.x
-        elif hasattr(batch, 'x'):
-            # Reset x_0 to original x for each forward pass
-            batch.x_0 = batch.x
-        
-        batch_encoded = self.feature_encoder(batch)
-        
-        if hasattr(batch_encoded, 'x_0'):
-            x = batch_encoded.x_0
-        elif isinstance(batch_encoded, dict):
-            x = batch_encoded.get('x_0', batch_encoded.get('x'))
-        else:
-            x = batch_encoded
-        
-        batch.x_0 = x
-        output = self.backbone(batch)
-        
-        if isinstance(output, dict):
-            node_features = output['x_0']
-        else:
-            node_features = output
-        
-        return node_features
-
-
-class GraphLevelEncoder(nn.Module):
-    """Wrapper for graph-level tasks: encoder + pooling."""
-    
-    def __init__(
-        self,
-        feature_encoder: nn.Module,
-        backbone: nn.Module,
-        readout_type: str = "mean",
-    ):
-        super().__init__()
-        self.feature_encoder = feature_encoder
-        self.backbone = backbone
-        self.readout_type = readout_type
-        
-        if readout_type == "mean":
-            self.pool = global_mean_pool
-        elif readout_type == "max":
-            self.pool = global_max_pool
-        elif readout_type == "sum":
-            self.pool = global_add_pool
-        else:
-            raise ValueError(f"Unknown readout type: {readout_type}")
-    
-    def forward(self, batch, return_node_features=False):
-        """Get encoded features."""
-        batch = prepare_batch_for_topobench(batch)
-        
-        batch_encoded = self.feature_encoder(batch)
-        batch_encoded.x_0 = batch_encoded.x_0 if hasattr(batch_encoded, 'x_0') else (
-            batch_encoded.get('x_0', batch_encoded.get('x')) if isinstance(batch_encoded, dict) else batch_encoded
-        )
-        
-        model_out_from_wrapper = self.backbone(batch_encoded)
-        node_features = model_out_from_wrapper["x_0"]
-        
-        batch_indices = batch_encoded.batch_0 if hasattr(batch_encoded, 'batch_0') else batch_encoded.batch
-        graph_features = self.pool(node_features, batch_indices)
-        
-        if return_node_features:
-            return {
-                'node': node_features,
-                'graph': graph_features,
-            }
-        else:
-            return graph_features
-
-
-# =============================================================================
-# Downstream Classifiers
-# =============================================================================
 
 class LinearClassifier(nn.Module):
     """Linear classifier for probing."""
@@ -585,402 +568,6 @@ class LinearClassifier(nn.Module):
     def forward(self, x):
         x = self.dropout(x)
         return self.linear(x)
-
-
-class MLPClassifier(nn.Module):
-    """MLP classifier with configurable layers."""
-    
-    def __init__(
-        self,
-        input_dim: int,
-        num_classes: int,
-        hidden_dims: list[int] = None,
-        dropout: float = 0.5,
-        input_dropout: float = None,
-    ):
-        super().__init__()
-        
-        if hidden_dims is None:
-            hidden_dims = [input_dim // 2, input_dim // 4]
-        
-        if input_dropout is None:
-            input_dropout = dropout
-        
-        layers = []
-        if input_dropout > 0:
-            layers.append(nn.Dropout(input_dropout))
-        
-        prev_dim = input_dim
-        for hidden_dim in hidden_dims:
-            layers.extend([
-                nn.Linear(prev_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-            ])
-            prev_dim = hidden_dim
-        
-        layers.append(nn.Linear(prev_dim, num_classes))
-        self.mlp = nn.Sequential(*layers)
-        self._init_weights()
-    
-    def _init_weights(self):
-        for module in self.mlp.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight, gain=0.1)
-                nn.init.zeros_(module.bias)
-    
-    def forward(self, x):
-        return self.mlp(x)
-
-
-# =============================================================================
-# Property Reconstruction Components
-# =============================================================================
-
-class MultiPropertyRegressor(nn.Module):
-    """Multi-head regressor for basic graph property reconstruction."""
-    
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dim: int | None = None,
-        dropout: float = 0.3,
-        input_dropout: float = None,
-        use_mlp_heads: bool = True,
-    ):
-        super().__init__()
-        
-        if hidden_dim is None:
-            hidden_dim = max(input_dim // 2, 32)
-        
-        if input_dropout is None:
-            input_dropout = dropout
-        
-        self.input_dropout = nn.Dropout(input_dropout) if input_dropout > 0 else nn.Identity()
-        
-        if use_mlp_heads:
-            self.head_avg_degree = nn.Sequential(
-                nn.Linear(input_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(hidden_dim, 1),
-            )
-            
-            self.head_gini = nn.Sequential(
-                nn.Linear(input_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(hidden_dim, 1),
-                nn.Sigmoid()
-            )
-            
-            self.head_diameter = nn.Sequential(
-                nn.Linear(input_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(hidden_dim, 1),
-            )
-        else:
-            self.head_avg_degree = nn.Linear(input_dim, 1)
-            self.head_gini = nn.Sequential(nn.Linear(input_dim, 1), nn.Sigmoid())
-            self.head_diameter = nn.Linear(input_dim, 1)
-        
-        self._init_weights()
-    
-    def _init_weights(self):
-        for module in self.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight, gain=0.01)
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)
-    
-    def forward(self, x):
-        """Predict all properties from graph-level embeddings."""
-        x = self.input_dropout(x)
-        
-        return {
-            'avg_degree': self.head_avg_degree(x),
-            'gini': self.head_gini(x),
-            'diameter': self.head_diameter(x),
-        }
-
-
-class CommunityPropertyRegressor(nn.Module):
-    """Multi-head regressor for community-related properties."""
-    
-    def __init__(
-        self,
-        input_dim: int,
-        hidden_dim: int | None = None,
-        dropout: float = 0.3,
-        input_dropout: float = None,
-        use_mlp_heads: bool = True,
-        K: int = 10,
-    ):
-        super().__init__()
-        
-        self.K = K
-        
-        if hidden_dim is None:
-            hidden_dim = max(input_dim // 2, 32)
-        
-        if input_dropout is None:
-            input_dropout = dropout
-        
-        self.input_dropout = nn.Dropout(input_dropout) if input_dropout > 0 else nn.Identity()
-        
-        if use_mlp_heads:
-            self.head_homophily = nn.Sequential(
-                nn.Linear(input_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(hidden_dim, 1),
-                nn.Sigmoid()
-            )
-            
-            self.head_community_presence = nn.Sequential(
-                nn.Linear(input_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(hidden_dim, K),
-            )
-            
-            self.head_community_detection = nn.Sequential(
-                nn.Linear(input_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(hidden_dim, K),
-            )
-        else:
-            self.head_homophily = nn.Sequential(nn.Linear(input_dim, 1), nn.Sigmoid())
-            self.head_community_presence = nn.Linear(input_dim, K)
-            self.head_community_detection = nn.Linear(input_dim, K)
-        
-        self._init_weights()
-    
-    def _init_weights(self):
-        for module in self.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight, gain=0.01)
-                if module.bias is not None:
-                    nn.init.zeros_(module.bias)
-    
-    def forward(self, x_graph=None, x_node=None):
-        """Predict community-related properties."""
-        result = {}
-        
-        if x_graph is not None:
-            x_graph_dropout = self.input_dropout(x_graph)
-            result['homophily'] = self.head_homophily(x_graph_dropout)
-            result['community_presence'] = self.head_community_presence(x_graph_dropout)
-        
-        if x_node is not None:
-            x_node_dropout = self.input_dropout(x_node)
-            result['community_detection'] = self.head_community_detection(x_node_dropout)
-        
-        return result
-
-
-def extract_normalization_scales_from_config(config: dict) -> dict:
-    """Extract normalization scales from GraphUniverse config."""
-    dataset_config = config.get("dataset", {})
-    loader_target = dataset_config.get("loader", {}).get("_target_", "")
-    
-    if "GraphUniverse" in loader_target:
-        gen_params = dataset_config.get("loader", {}).get("parameters", {}).get("generation_parameters", {})
-        family_params = gen_params.get("family_parameters", {})
-        
-        max_n_nodes = family_params.get("n_nodes_range", [200, 200])[1]
-        avg_degree_range = family_params.get("avg_degree_range", [2.0, 10.0])
-        max_avg_degree = max(avg_degree_range)
-        
-        return {
-            'homophily': 1.0,
-            'avg_degree': max_avg_degree,
-            'size': float(max_n_nodes),
-            'gini': 1.0,
-            'diameter': float(max_n_nodes),
-        }
-    else:
-        return {
-            'homophily': 1.0,
-            'avg_degree': 20.0,
-            'size': 200.0,
-            'gini': 1.0,
-            'diameter': 20.0,
-        }
-
-
-def extract_property_targets_from_batch(batch):
-    """Extract pre-computed property targets from batch."""
-    if not hasattr(batch, 'property_avg_degree'):
-        raise ValueError("Graph properties not found. Please pre-compute properties first.")
-    
-    properties = {}
-    for prop_name in ['avg_degree', 'gini', 'diameter']:
-        prop_tensor = getattr(batch, f'property_{prop_name}')
-        if prop_tensor.dim() == 1:
-            prop_tensor = prop_tensor.unsqueeze(1)
-        properties[prop_name] = prop_tensor
-    
-    return properties
-
-
-def extract_community_property_targets_from_batch(batch):
-    """Extract pre-computed community-related property targets from batch."""
-    if not hasattr(batch, 'property_homophily'):
-        raise ValueError("Graph properties not found. Please pre-compute properties first.")
-    
-    properties = {}
-    
-    homophily = batch.property_homophily
-    if homophily.dim() == 1:
-        homophily = homophily.unsqueeze(1)
-    properties['homophily'] = homophily
-    
-    if hasattr(batch, 'property_community_presence'):
-        properties['community_presence'] = batch.property_community_presence
-    
-    if hasattr(batch, 'y'):
-        properties['community_detection'] = batch.y
-    
-    return properties
-
-
-class CommunityPropertyReconstructionModel(nn.Module):
-    """Model for community-related property reconstruction."""
-    
-    def __init__(
-        self,
-        encoder: nn.Module,
-        property_regressor: CommunityPropertyRegressor,
-        freeze_encoder: bool = True,
-    ):
-        super().__init__()
-        self.encoder = encoder
-        self.property_regressor = property_regressor
-        self.freeze_encoder = freeze_encoder
-        self.task_level = "mixed"
-        
-        if freeze_encoder:
-            self._freeze_encoder()
-    
-    def _freeze_encoder(self):
-        """Freeze encoder parameters."""
-        for param in self.encoder.parameters():
-            param.requires_grad = False
-        self.encoder.eval()
-        
-        for module in self.encoder.modules():
-            if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
-                module.eval()
-                module.track_running_stats = False
-    
-    def forward(self, batch):
-        """Forward pass."""
-        if self.freeze_encoder:
-            self.encoder.eval()
-            with torch.no_grad():
-                features = self.encoder(batch, return_node_features=True)
-        else:
-            features = self.encoder(batch, return_node_features=True)
-        
-        return self.property_regressor(
-            x_graph=features['graph'],
-            x_node=features['node'],
-        )
-    
-    def train(self, mode=True):
-        """Override train to keep frozen encoder in eval mode."""
-        super().train(mode)
-        if self.freeze_encoder:
-            self.encoder.eval()
-        return self
-    
-    def get_model_state_info(self) -> dict:
-        """Get diagnostic info about model state."""
-        encoder_params = sum(p.numel() for p in self.encoder.parameters())
-        encoder_trainable = sum(p.numel() for p in self.encoder.parameters() if p.requires_grad)
-        regressor_params = sum(p.numel() for p in self.property_regressor.parameters())
-        regressor_trainable = sum(p.numel() for p in self.property_regressor.parameters() if p.requires_grad)
-        
-        return {
-            "encoder_params": encoder_params,
-            "encoder_trainable": encoder_trainable,
-            "regressor_params": regressor_params,
-            "regressor_trainable": regressor_trainable,
-            "freeze_encoder": self.freeze_encoder,
-            "encoder_mode": "eval" if not self.encoder.training else "train",
-            "encoder_in_train_mode": self.encoder.training,
-        }
-
-
-class PropertyReconstructionModel(nn.Module):
-    """Model for multi-property reconstruction."""
-    
-    def __init__(
-        self,
-        encoder: nn.Module,
-        property_regressor: MultiPropertyRegressor,
-        freeze_encoder: bool = True,
-    ):
-        super().__init__()
-        self.encoder = encoder
-        self.property_regressor = property_regressor
-        self.freeze_encoder = freeze_encoder
-        self.task_level = "graph"
-        
-        if freeze_encoder:
-            self._freeze_encoder()
-    
-    def _freeze_encoder(self):
-        """Freeze encoder parameters."""
-        for param in self.encoder.parameters():
-            param.requires_grad = False
-        self.encoder.eval()
-        
-        for module in self.encoder.modules():
-            if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
-                module.eval()
-                module.track_running_stats = False
-    
-    def forward(self, batch):
-        """Forward pass."""
-        if self.freeze_encoder:
-            self.encoder.eval()
-            with torch.no_grad():
-                graph_features = self.encoder(batch)
-        else:
-            graph_features = self.encoder(batch)
-        
-        return self.property_regressor(graph_features)
-    
-    def train(self, mode=True):
-        """Override train to keep frozen encoder in eval mode."""
-        super().train(mode)
-        if self.freeze_encoder:
-            self.encoder.eval()
-        return self
-    
-    def get_model_state_info(self) -> dict:
-        """Get diagnostic info about model state."""
-        encoder_params = sum(p.numel() for p in self.encoder.parameters())
-        encoder_trainable = sum(p.numel() for p in self.encoder.parameters() if p.requires_grad)
-        regressor_params = sum(p.numel() for p in self.property_regressor.parameters())
-        regressor_trainable = sum(p.numel() for p in self.property_regressor.parameters() if p.requires_grad)
-        
-        encoder_training = any(m.training for m in self.encoder.modules())
-        regressor_training = any(m.training for m in self.property_regressor.modules())
-        
-        return {
-            "encoder_params": encoder_params,
-            "encoder_trainable": encoder_trainable,
-            "encoder_frozen": self.freeze_encoder,
-            "encoder_in_train_mode": encoder_training,
-            "regressor_params": regressor_params,
-            "regressor_trainable": regressor_trainable,
-            "regressor_in_train_mode": regressor_training,
-        }
 
 
 class DownstreamModel(nn.Module):
@@ -1003,15 +590,10 @@ class DownstreamModel(nn.Module):
             self._freeze_encoder()
     
     def _freeze_encoder(self):
-        """Freeze encoder parameters."""
         for param in self.encoder.parameters():
             param.requires_grad = False
         self.encoder.eval()
-        
-        for module in self.encoder.modules():
-            if isinstance(module, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d)):
-                module.eval()
-                module.track_running_stats = False
+        freeze_batchnorm_eval_no_track(self.encoder)
     
     def forward(self, batch):
         """Forward pass."""
@@ -1030,85 +612,4 @@ class DownstreamModel(nn.Module):
         if self.freeze_encoder:
             self.encoder.eval()
         return self
-    
-    def get_model_state_info(self) -> dict:
-        """Get diagnostic info about model state."""
-        encoder_params = sum(p.numel() for p in self.encoder.parameters())
-        encoder_trainable = sum(p.numel() for p in self.encoder.parameters() if p.requires_grad)
-        classifier_params = sum(p.numel() for p in self.classifier.parameters())
-        classifier_trainable = sum(p.numel() for p in self.classifier.parameters() if p.requires_grad)
-        
-        encoder_training = any(m.training for m in self.encoder.modules())
-        classifier_training = any(m.training for m in self.classifier.modules())
-        
-        return {
-            "encoder_params": encoder_params,
-            "encoder_trainable": encoder_trainable,
-            "encoder_frozen": self.freeze_encoder,
-            "encoder_in_train_mode": encoder_training,
-            "classifier_params": classifier_params,
-            "classifier_trainable": classifier_trainable,
-            "classifier_in_train_mode": classifier_training,
-        }
-
-
-class LinearRegressor(nn.Module):
-    """Linear regressor for probing."""
-    
-    def __init__(self, input_dim: int, output_dim: int = 1, dropout: float = 0.0):
-        super().__init__()
-        self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
-        self.linear = nn.Linear(input_dim, output_dim)
-        nn.init.xavier_uniform_(self.linear.weight, gain=0.01)
-        nn.init.zeros_(self.linear.bias)
-    
-    def forward(self, x):
-        x = self.dropout(x)
-        return self.linear(x)
-
-
-class MLPRegressor(nn.Module):
-    """MLP regressor with configurable layers."""
-    
-    def __init__(
-        self,
-        input_dim: int,
-        output_dim: int = 1,
-        hidden_dims: list[int] = None,
-        dropout: float = 0.5,
-        input_dropout: float = None,
-    ):
-        super().__init__()
-        
-        if hidden_dims is None:
-            hidden_dims = [input_dim // 2, input_dim // 4]
-        
-        if input_dropout is None:
-            input_dropout = dropout
-        
-        layers = []
-        if input_dropout > 0:
-            layers.append(nn.Dropout(input_dropout))
-        
-        prev_dim = input_dim
-        for hidden_dim in hidden_dims:
-            layers.extend([
-                nn.Linear(prev_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-            ])
-            prev_dim = hidden_dim
-        
-        layers.append(nn.Linear(prev_dim, output_dim))
-        self.mlp = nn.Sequential(*layers)
-        self._init_weights()
-    
-    def _init_weights(self):
-        for module in self.mlp.modules():
-            if isinstance(module, nn.Linear):
-                nn.init.xavier_uniform_(module.weight, gain=0.1)
-                nn.init.zeros_(module.bias)
-    
-    def forward(self, x):
-        return self.mlp(x)
 
