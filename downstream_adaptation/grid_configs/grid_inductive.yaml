@@ -1,0 +1,50 @@
+# Inductive downstream evaluation grid (run_downstream_eval_grid.py)
+# Run from repo root, e.g.:
+#   python downstream_adaptation/run_downstream_eval_grid.py --config downstream_adaptation/grid_configs/grid_inductive.yaml
+# CLI flags override values here when provided.
+
+# Exactly one of:
+run_dirs: null
+# run_dirs:
+#   - data/outputs/wandb/run-YYYYMMDD_HHMMSS-xxxxx
+
+wandb_pretrain_project: rq1_graphmae_pretraining_try
+# wandb_pretrain_project: "entity/MyProject"
+
+# Wandb API fetch (when using wandb_pretrain_project)
+fetch_filters:
+  state: finished
+min_runs: 1
+
+# Grid axes
+n_train: [2, 5, 10]
+tasks: [community_detection]
+modes:
+  - linear-probe
+  - full-finetune
+readout_types: [mean]
+n_evaluation_graphs: 200
+
+# Each entry is null (no override) or a nested dict merged into GraphUniverse generation_parameters.
+# Replace with your own list; this block mirrors the former DEFAULT_GRAPHUNIVERSE_OVERRIDES in the script.
+graphuniverse_overrides:
+  - null
+
+# Training / logging
+epochs: 300
+lr: 0.001
+batch_size: 128
+patience: 10
+classifier_dropout: 0.0
+input_dropout: null
+device: cuda:0
+# Run this many experiments at once. Each job uses a distinct GPU (see eval_devices).
+# 1 = sequential on `device` only.
+parallel_workers: 4
+# Optional explicit device per worker slot; length must equal parallel_workers when set.
+# If null and parallel_workers > 1, uses cuda:0, cuda:1, ... cuda:(parallel_workers-1).
+eval_devices: null
+seed: 42
+wandb_project: test_rq1
+save_results: true
+confirm_before_run: true
