@@ -24,7 +24,7 @@ class DGIGNNWrapper(AbstractWrapper):
       
     - "graph_diffusion": Uses node embeddings from different graphs as negatives
       * Only for inductive setting (requires batch_size >= 2)
-      * As described in DGI paper: "our corruption function simply samples 
+      * As described in DGI paper: "our corruption function simply samples
         a different graph from the training set"
       * Each graph is encoded, then paired with a different graph's node embeddings
 

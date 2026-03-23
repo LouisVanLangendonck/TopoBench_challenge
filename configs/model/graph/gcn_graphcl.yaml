@@ -1,0 +1,54 @@
+_target_: topobench.model.TBModel
+
+model_name: gcn_graphcl
+model_domain: graph
+
+feature_encoder:
+  _target_: topobench.nn.encoders.${model.feature_encoder.encoder_name}
+  encoder_name: AllCellFeatureEncoder
+  in_channels: ${infer_in_channels:${dataset},${oc.select:transforms,null}}
+  out_channels: 256
+  proj_dropout: 0.0
+
+backbone:
+  _target_: torch_geometric.nn.models.GCN
+  in_channels: ${model.feature_encoder.out_channels}
+  hidden_channels: ${model.feature_encoder.out_channels}
+  num_layers: 3
+  dropout: 0.0
+  act: relu
+
+# Use GraphCLGNNWrapper for augmentation and encoding
+backbone_wrapper:
+  _target_: topobench.nn.wrappers.GraphCLGNNWrapper 
+  _partial_: true
+  wrapper_name: GraphCLGNNWrapper
+  out_channels: ${model.feature_encoder.out_channels}
+  num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
+  # GraphCL-specific parameters
+  aug1: drop_edge  # Options: none, drop_node, drop_edge, mask_attr, subgraph
+  aug2: mask_attr  # Options: none, drop_node, drop_edge, mask_attr, subgraph
+  aug_ratio1: 0.2
+  aug_ratio2: 0.2
+  readout_type: sum  # Options: mean, max, sum
+  # Augmentation variant knobs (match official repo sub-directory)
+  mask_attr_strategy: gaussian    # gaussian | zeros | mean
+  edge_perturbation_mode: drop_only  # drop_only | drop_and_add
+  subgraph_ratio_meaning: keep    # keep | drop
+
+# GraphCLReadOut handles the projection head
+readout:
+  _target_: topobench.nn.readouts.${model.readout.readout_name}
+  readout_name: GraphCLReadOut
+  num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
+  hidden_dim: ${model.feature_encoder.out_channels}
+  out_channels: ${model.feature_encoder.out_channels}
+  task_level: graph
+  pooling_type: sum
+  # GraphCL readout specific parameters
+  projection_type: mlp  # Options: none, linear, mlp
+  projection_hidden_dim: ${model.feature_encoder.out_channels}  # Hidden dim for MLP projection
+
+# compile model for faster training with pytorch 2.0
+compile: false
+

@@ -39,6 +39,7 @@ from .graphmaev2_evaluator import GraphMAEv2Evaluator
 from .grace_evaluator import GRACEEvaluator
 from .linkpred_evaluator import LinkPredEvaluator
 from .dgi_evaluator import DGIEvaluator
+from .graphcl_evaluator import GraphCLEvaluator
 from .bgrl_evaluator import BGRLEvaluator
 
 __all__ = [
@@ -49,5 +50,6 @@ __all__ = [
     "GRACEEvaluator",
     "LinkPredEvaluator",
     "DGIEvaluator",
+    "GraphCLEvaluator",
     "BGRLEvaluator",
 ]

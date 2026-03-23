@@ -158,7 +158,7 @@ def get_monitor_metric(task, metric):
         task == "classification"
         or task == "regression"
         or task == "multilabel classification"
-        or task in ["graphmaev2", "grace", "linkpred", "dgi", "bgrl"]
+        or task in ["graphmaev2", "grace", "linkpred", "dgi", "graphcl", "bgrl"]
     ):
         return f"val/{metric}"
     else:
@@ -196,6 +196,7 @@ def get_monitor_mode(task):
     elif (
         task == "regression"
         or task == "grace"  # GRACE: minimize contrastive loss
+        or task == "graphcl"  # GraphCL: minimize contrastive loss
         ):
         return "min"
 
@@ -535,6 +536,8 @@ def get_default_metrics(task, metrics=None):
             return ["loss", "accuracy", "auroc"]
         elif "dgi" in task:
             return ["loss", "loss_positive", "loss_negative", "accuracy"]
+        elif "graphcl" in task:
+            return ["contrastive_loss", "alignment", "cosine_sim"]
         elif "bgrl" in task:
             return ["loss", "loss_12", "loss_21", "cosine_sim"]
         else:
