@@ -1,143 +1,80 @@
-"""MVGRL (Multi-View Graph Representation Learning) wrapper.
+"""MVGRL (Multi-View Graph Representation Learning) unified wrapper.
 
 Based on: https://github.com/kavehhassani/mvgrl
-         https://github.com/dmlc/dgl/tree/master/examples/pytorch/mvgrl
 Paper: "Contrastive Multi-View Representation Learning on Graphs" (ICML 2020)
 https://arxiv.org/abs/2006.05582
 
-This implementation matches the original paper's Equation 4 for graph pooling:
-- JK-Net style: concatenates sum-pooled representations from ALL GCN layers
-- Graph representations have dimension `num_layers * hidden_dim` before MLP projection
+This unified implementation follows the paper's description exactly:
+- Same encoder architecture for both node and graph tasks
+- Same JK-Net style pooling
+- Same JSD (dot product) discriminator
+- Same MLP projection heads
+
+The ONLY difference between inductive (graph) and transductive (node) settings:
+- Inductive: negatives from other graphs in the batch
+- Transductive: negatives from shuffled features within each graph
+  + Subsampling: random windows of nodes treated as independent graphs
+
+From the paper:
+"To generate negative samples in transductive tasks, we randomly shuffle the features"
+"This procedure allows our approach to be applied to inductive tasks...and also to 
+transductive tasks by considering sub-samples as independent graphs."
+
+Hyperparameter recommendations from the paper:
+- Node classification: num_layers=1 (following DGI)
+- Graph classification: num_layers=2,4,8,12 (choose via validation)
 """
 
-import math
+import numpy as np
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch_scatter import scatter_add
 
 from topobench.nn.wrappers.base import AbstractWrapper
-
-
-def add_self_loops(edge_index, edge_weight, num_nodes):
-    """Add self-loops to edge_index and edge_weight.
-    
-    Matches original: adj + I
-    """
-    device = edge_index.device
-    
-    # Create self-loop edges: (0,0), (1,1), ..., (n-1, n-1)
-    loop_index = torch.arange(0, num_nodes, dtype=edge_index.dtype, device=device)
-    loop_index = loop_index.unsqueeze(0).repeat(2, 1)
-    
-    # Concatenate with original edges
-    edge_index = torch.cat([edge_index, loop_index], dim=1)
-    
-    # Add weight 1.0 for self-loops
-    if edge_weight is not None:
-        loop_weight = torch.ones(num_nodes, dtype=edge_weight.dtype, device=device)
-        edge_weight = torch.cat([edge_weight, loop_weight], dim=0)
-    else:
-        edge_weight = torch.ones(edge_index.size(1), device=device)
-    
-    return edge_index, edge_weight
-
-
-def symmetric_normalize(edge_index, edge_weight, num_nodes):
-    """Compute symmetric normalization: D^{-1/2} A D^{-1/2}.
-    
-    Matches original normalize_adj function.
-    """
-    row, col = edge_index
-    
-    # Compute degree
-    deg = scatter_add(edge_weight, col, dim=0, dim_size=num_nodes)
-    deg_inv_sqrt = deg.pow(-0.5)
-    deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
-    
-    # Normalize: D^{-1/2} A D^{-1/2}
-    normalized_weight = deg_inv_sqrt[row] * edge_weight * deg_inv_sqrt[col]
-    
-    return normalized_weight
-
-
-class GCNLayer(nn.Module):
-    """Single GCN layer matching original MVGRL implementation exactly.
-    
-    IMPORTANT: This layer does NOT perform D^{-1/2} normalization internally.
-    The adjacency/diffusion weights must be pre-normalized before being passed.
-    
-    Original MVGRL uses: GraphConv(in_dim, out_dim, bias=False, norm=norm, activation=nn.PReLU())
-    So NO bias is used in the GCN layers.
-    
-    Uses xavier_uniform initialization for weights (matches DGL GraphConv default).
-    """
-    
-    def __init__(self, in_ft, out_ft):
-        super().__init__()
-        # Original uses bias=False in GraphConv
-        self.fc = nn.Linear(in_ft, out_ft, bias=False)
-        self.act = nn.PReLU()
-        
-        # Initialize weights with xavier_uniform (matches DGL GraphConv)
-        nn.init.xavier_uniform_(self.fc.weight.data)
-    
-    def forward(self, feat, edge_index, edge_weight, num_nodes=None):
-        """Forward pass with sparse adjacency (no internal normalization).
-        
-        Parameters
-        ----------
-        feat : torch.Tensor
-            Node features (num_nodes, in_ft).
-        edge_index : torch.Tensor
-            Edge indices (2, num_edges).
-        edge_weight : torch.Tensor
-            Pre-normalized edge weights (num_edges,). REQUIRED.
-            For adjacency: should be D^{-1/2}(A+I)D^{-1/2} values.
-            For diffusion: should be raw PPR/heat diffusion values.
-        num_nodes : int, optional
-            Number of nodes.
-        """
-        # Linear transformation: X' = XW
-        feat = self.fc(feat)
-        
-        # Message passing: just aggregate with given weights (no normalization)
-        # This matches original: out = adj @ feat
-        if num_nodes is None:
-            num_nodes = feat.size(0)
-        
-        row, col = edge_index
-        
-        # Aggregate: sum over neighbors weighted by edge_weight
-        # Equivalent to sparse matrix multiply: adj @ feat
-        out = scatter_add(feat[row] * edge_weight.unsqueeze(-1), col, dim=0, dim_size=num_nodes)
-        
-        # No bias (original uses bias=False)
-        return self.act(out)
+from topobench.nn.wrappers.graph.mvgrl_utils import (
+    add_self_loops,
+    symmetric_normalize,
+    MVGRLGCNLayer,
+    MLP,
+)
 
 
 class MVGRLEncoder(nn.Module):
     """GCN encoder for MVGRL with JK-Net style graph pooling.
     
+    From the paper (Equation 4):
+    "We use a readout function similar to jumping knowledge network (JK-Net)
+    where we concatenate the summation of the node representations in each 
+    GCN layer and then feed them to a single layer feed-forward network"
+    
     Returns both node representations (from final layer) and graph representations
     (concatenation of sum-pooled representations from ALL layers).
     
-    This matches the original MVGRL implementation exactly.
+    Parameters
+    ----------
+    in_ft : int
+        Input feature dimension.
+    out_ft : int
+        Output (hidden) feature dimension.
+    num_layers : int
+        Number of GCN layers.
+    bias : bool
+        Whether to use bias in GCN layers. Paper uses bias=False for graph-level.
     """
     
-    def __init__(self, in_ft, out_ft, num_layers):
+    def __init__(self, in_ft, out_ft, num_layers, bias=False):
         super().__init__()
         self.num_layers = num_layers
         self.layers = nn.ModuleList()
         
         # First layer: in_ft -> out_ft
-        self.layers.append(GCNLayer(in_ft, out_ft))
+        self.layers.append(MVGRLGCNLayer(in_ft, out_ft, bias=bias))
         
         # Remaining layers: out_ft -> out_ft
         for _ in range(num_layers - 1):
-            self.layers.append(GCNLayer(out_ft, out_ft))
+            self.layers.append(MVGRLGCNLayer(out_ft, out_ft, bias=bias))
     
-    def forward(self, feat, edge_index, batch_indices, edge_weight=None):
+    def forward(self, feat, edge_index, batch_indices, edge_weight):
         """Forward pass returning both node and graph representations.
         
         Parameters
@@ -148,8 +85,8 @@ class MVGRLEncoder(nn.Module):
             Edge indices (2, num_edges).
         batch_indices : torch.Tensor
             Graph assignment for each node.
-        edge_weight : torch.Tensor, optional
-            Edge weights.
+        edge_weight : torch.Tensor
+            Pre-normalized edge weights.
             
         Returns
         -------
@@ -163,7 +100,7 @@ class MVGRLEncoder(nn.Module):
         
         # First layer
         h = self.layers[0](feat, edge_index, edge_weight, num_nodes)
-        # Sum pooling for first layer
+        # Sum pooling for first layer (JK-Net style)
         hg = scatter_add(h, batch_indices, dim=0, dim_size=num_graphs)
         
         # Remaining layers with JK-Net concatenation
@@ -175,294 +112,362 @@ class MVGRLEncoder(nn.Module):
         return h, hg
 
 
-class MLP(nn.Module):
-    """MLP projection head (matches original MVGRL).
-    
-    Architecture: 3 Linear layers with PReLU activations + residual shortcut.
-    Uses PyTorch default initialization (kaiming_uniform_).
-    """
-    
-    def __init__(self, in_ft, out_ft):
-        super().__init__()
-        self.ffn = nn.Sequential(
-            nn.Linear(in_ft, out_ft),
-            nn.PReLU(),
-            nn.Linear(out_ft, out_ft),
-            nn.PReLU(),
-            nn.Linear(out_ft, out_ft),
-            nn.PReLU()
-        )
-        self.linear_shortcut = nn.Linear(in_ft, out_ft)
-
-    def forward(self, x):
-        return self.ffn(x) + self.linear_shortcut(x)
-
-
-class MVGRLGNNWrapper(AbstractWrapper):
-    r"""Wrapper for MVGRL pre-training with GNN models.
+class MVGRLWrapper(AbstractWrapper):
+    r"""Unified wrapper for MVGRL pre-training (both node and graph tasks).
 
     MVGRL learns representations by contrasting node and graph encodings
     from two structural views:
-    1. Adjacency matrix (local structure)
+    1. Adjacency matrix (local structure) with symmetric normalization
     2. Diffusion matrix (global structure, e.g., PPR) - precomputed via transform
 
     The model maximizes mutual information using Jensen-Shannon Divergence (JSD)
-    estimator between:
+    estimator (dot product discriminator) between:
     - Node representations from view 1 and graph representation from view 2
     - Node representations from view 2 and graph representation from view 1
 
-    This implementation uses custom GCN encoders (not the backbone) to enable
-    JK-Net style graph pooling as described in the paper's Equation 4:
-    - Node representations: from final GCN layer
-    - Graph representations: concatenation of sum-pooled reps from ALL layers
+    This is a UNIFIED implementation following the paper exactly.
+    The only difference between settings is how negatives are generated:
+    - "cross_graph": Negatives from other graphs in batch (inductive/graph tasks)
+    - "feature_shuffle": Negatives from shuffled features (transductive/node tasks)
+      + With subsampling: random windows of nodes treated as independent graphs
 
-    Note: Diffusion edges must be precomputed using PPRDiffusion or HeatDiffusion
-    transform in the data preprocessing pipeline.
+    From the paper:
+    "To generate negative samples in transductive tasks, we randomly shuffle the features"
+    "considering sub-samples as independent graphs"
+
+    For transductive (node) tasks, the wrapper implements window-based subsampling
+    matching the original code: random contiguous windows of nodes are extracted
+    and treated as independent graphs in a batch.
 
     Parameters
     ----------
     backbone : torch.nn.Module
         The encoder backbone model (NOT USED - kept for TopoBench compatibility).
-        MVGRL uses its own custom encoders for JK-Net pooling.
     num_layers : int, optional
-        Number of GCN layers (default: 4).
+        Number of GCN layers (default: 1 for node tasks, use 2-12 for graph tasks).
+    negative_sampling : str, optional
+        How to generate negatives: "cross_graph" (inductive) or "feature_shuffle" (transductive).
+    sample_size : int, optional
+        Number of nodes per subgraph window (only for feature_shuffle). Default: 2000.
+    subsample_batch_size : int, optional
+        Number of subgraph windows per batch (only for feature_shuffle). Default: 4.
     diff_edge_index_attr : str, optional
-        Attribute name for precomputed diffusion edge indices (default: "edge_index_diff").
+        Attribute name for precomputed diffusion edge indices.
     diff_edge_weight_attr : str, optional
-        Attribute name for precomputed diffusion edge weights (default: "edge_weight_diff").
+        Attribute name for precomputed diffusion edge weights.
     **kwargs : dict
-        Additional arguments for the AbstractWrapper base class.
-        Must include 'out_channels' for hidden dimension.
+        Additional arguments. Must include 'out_channels' for hidden dimension.
     """
 
     def __init__(
         self,
         backbone: nn.Module,
-        num_layers: int = 4,
+        num_layers: int = 1,
+        negative_sampling: str = "cross_graph",
+        sample_size: int = 2000,
+        subsample_batch_size: int = 4,
         diff_edge_index_attr: str = "edge_index_diff",
         diff_edge_weight_attr: str = "edge_weight_diff",
         **kwargs
     ):
-        # Disable residual connections since MVGRL uses custom encoders
         kwargs['residual_connections'] = False
         super().__init__(backbone, **kwargs)
+
+        if negative_sampling not in ["cross_graph", "feature_shuffle"]:
+            raise ValueError(
+                f"negative_sampling must be 'cross_graph' or 'feature_shuffle', got {negative_sampling}"
+            )
 
         self.diff_edge_index_attr = diff_edge_index_attr
         self.diff_edge_weight_attr = diff_edge_weight_attr
         self.num_layers = num_layers
+        self.negative_sampling = negative_sampling
+        self.sample_size = sample_size
+        self.subsample_batch_size = subsample_batch_size
 
-        # Get feature dimensions from kwargs
+        # Get feature dimensions
         self.hidden_dim = kwargs.get('out_channels', None)
         if self.hidden_dim is None:
-            raise ValueError("Cannot determine hidden dimension. Please provide 'out_channels' in kwargs.")
+            raise ValueError("Please provide 'out_channels' in kwargs.")
         
-        # Get input dimension - this should come from feature encoder
         in_channels = kwargs.get('in_channels', None)
         if in_channels is None:
-            # Try to infer from backbone if available
             if hasattr(backbone, 'in_channels'):
                 in_channels = backbone.in_channels
             else:
-                in_channels = self.hidden_dim  # Fallback: assume already encoded
+                in_channels = self.hidden_dim
         self.in_channels = in_channels
 
-        # Create custom MVGRL encoders (NOT using the backbone)
-        # View 1: Adjacency encoder
-        self.encoder1 = MVGRLEncoder(self.in_channels, self.hidden_dim, num_layers)
-        # View 2: Diffusion encoder
-        self.encoder2 = MVGRLEncoder(self.in_channels, self.hidden_dim, num_layers)
+        # Create MVGRL encoders (same architecture for both settings)
+        # Paper uses bias=False for graph-level tasks
+        self.encoder1 = MVGRLEncoder(self.in_channels, self.hidden_dim, num_layers, bias=False)
+        self.encoder2 = MVGRLEncoder(self.in_channels, self.hidden_dim, num_layers, bias=False)
         
-        # MLP projection heads (matches original MVGRL exactly)
-        # For node-level representations: input is hidden_dim (from final layer)
+        # MLP projection heads (from paper Section 3.2)
+        # "The learned representations are then fed into a shared projection head
+        #  fψ(.) which is an MLP with two hidden layers"
         self.mlp_node = MLP(self.hidden_dim, self.hidden_dim)
-        # For graph-level representations: input is num_layers * hidden_dim (JK-Net concat)
         self.mlp_graph = MLP(num_layers * self.hidden_dim, self.hidden_dim)
 
-    def get_positive_expectation(self, p_samples, average=True):
-        """Computes the positive part of JS Divergence.
+    def shuffle_features(self, x, batch_indices):
+        """Shuffle node features within each graph for transductive negative sampling.
         
-        Matches original MVGRL implementation exactly.
-        Formula: log(2) - softplus(-p_samples)
-        
-        Parameters
-        ----------
-        p_samples : torch.Tensor
-            Positive samples (similarity scores for positive pairs).
-        average : bool
-            Whether to return mean or full tensor.
-        """
-        log_2 = math.log(2.0)
-        Ep = log_2 - F.softplus(-p_samples)
-        
-        if average:
-            return Ep.mean()
-        return Ep
-
-    def get_negative_expectation(self, q_samples, average=True):
-        """Computes the negative part of JS Divergence.
-        
-        Matches original MVGRL implementation exactly.
-        Formula: softplus(-q_samples) + q_samples - log(2)
+        From the paper: "To generate negative samples in transductive tasks, 
+        we randomly shuffle the features"
         
         Parameters
         ----------
-        q_samples : torch.Tensor
-            Negative samples (similarity scores for negative pairs).
-        average : bool
-            Whether to return mean or full tensor.
-        """
-        log_2 = math.log(2.0)
-        Eq = F.softplus(-q_samples) + q_samples - log_2
-        
-        if average:
-            return Eq.mean()
-        return Eq
-
-    def local_global_loss(self, l_enc, g_enc, batch_indices, num_graphs):
-        """Compute local-global contrastive loss using JSD estimator.
-        
-        Matches original MVGRL implementation exactly.
-        
-        Parameters
-        ----------
-        l_enc : torch.Tensor
-            Local (node) encodings after MLP projection (num_nodes, hidden_dim).
-        g_enc : torch.Tensor
-            Global (graph) encodings after MLP projection (num_graphs, hidden_dim).
+        x : torch.Tensor
+            Node features (num_nodes, num_features).
         batch_indices : torch.Tensor
             Graph assignment for each node.
-        num_graphs : int
-            Number of graphs in batch.
             
         Returns
         -------
         torch.Tensor
-            Scalar contrastive loss value.
+            Shuffled node features.
         """
-        num_nodes = l_enc.shape[0]
-        device = l_enc.device
+        batch_ids = batch_indices.unique()
+        shuffled_x = x.clone()
         
-        # Create positive mask: pos_mask[i,j] = 1 if node i belongs to graph j
-        # Create negative mask: neg_mask[i,j] = 1 if node i does NOT belong to graph j
-        pos_mask = torch.zeros((num_nodes, num_graphs), device=device)
-        neg_mask = torch.ones((num_nodes, num_graphs), device=device)
+        for batch_id in batch_ids:
+            graph_mask = (batch_indices == batch_id)
+            graph_indices = torch.where(graph_mask)[0]
+            perm = torch.randperm(len(graph_indices), device=x.device)
+            shuffled_indices = graph_indices[perm]
+            shuffled_x[graph_indices] = x[shuffled_indices]
         
-        for nodeidx, graphidx in enumerate(batch_indices):
-            pos_mask[nodeidx][graphidx] = 1.0
-            neg_mask[nodeidx][graphidx] = 0.0
+        return shuffled_x
+
+    def subsample_graph(self, x, edge_index, edge_weight, edge_index_diff, diff_weights, num_nodes):
+        """Subsample the graph into multiple windows for transductive training.
         
-        # Compute similarity scores: (num_nodes, num_graphs)
-        res = torch.mm(l_enc, g_enc.t())
+        From the original MVGRL code (node/train.py):
+        ```
+        sample_size = 2000
+        batch_size = 4
+        idx = np.random.randint(0, adj.shape[-1] - sample_size + 1, batch_size)
+        for i in idx:
+            ba.append(adj[i: i + sample_size, i: i + sample_size])
+            bd.append(diff[i: i + sample_size, i: i + sample_size])
+            bf.append(features[i: i + sample_size])
+        ```
         
-        # Compute positive expectation (only for positive pairs)
-        E_pos = self.get_positive_expectation(res * pos_mask, average=False).sum()
-        E_pos = E_pos / num_nodes
+        This extracts contiguous windows of nodes and treats them as independent graphs.
         
-        # Compute negative expectation (only for negative pairs)
-        E_neg = self.get_negative_expectation(res * neg_mask, average=False).sum()
-        E_neg = E_neg / (num_nodes * (num_graphs - 1))
+        Parameters
+        ----------
+        x : torch.Tensor
+            Node features (num_nodes, num_features).
+        edge_index : torch.Tensor
+            Edge indices (2, num_edges).
+        edge_weight : torch.Tensor or None
+            Edge weights.
+        edge_index_diff : torch.Tensor
+            Diffusion edge indices (2, num_diff_edges).
+        diff_weights : torch.Tensor
+            Diffusion edge weights.
+        num_nodes : int
+            Total number of nodes.
+            
+        Returns
+        -------
+        tuple
+            (subsampled_x, subsampled_edge_index, subsampled_edge_weight,
+             subsampled_edge_index_diff, subsampled_diff_weights, batch_indices)
+        """
+        device = x.device
+        sample_size = min(self.sample_size, num_nodes)
+        batch_size = self.subsample_batch_size
         
-        return E_neg - E_pos
+        # If graph is smaller than sample_size, just use the whole graph
+        if num_nodes <= sample_size:
+            batch_indices = torch.zeros(num_nodes, dtype=torch.long, device=device)
+            return x, edge_index, edge_weight, edge_index_diff, diff_weights, batch_indices
+        
+        # Random starting indices for each window
+        max_start = num_nodes - sample_size
+        start_indices = np.random.randint(0, max_start + 1, batch_size)
+        
+        all_features = []
+        all_adj_edges = []
+        all_adj_weights = []
+        all_diff_edges = []
+        all_diff_weights = []
+        all_batch_indices = []
+        
+        node_offset = 0
+        
+        for batch_idx, start in enumerate(start_indices):
+            end = start + sample_size
+            
+            # Node mask for this window
+            node_mask = torch.zeros(num_nodes, dtype=torch.bool, device=device)
+            node_mask[start:end] = True
+            
+            # Extract features for this window
+            window_features = x[start:end]
+            all_features.append(window_features)
+            
+            # Create batch indices for this window
+            window_batch = torch.full((sample_size,), batch_idx, dtype=torch.long, device=device)
+            all_batch_indices.append(window_batch)
+            
+            # Filter adjacency edges: both endpoints must be in window
+            row, col = edge_index
+            adj_mask = (row >= start) & (row < end) & (col >= start) & (col < end)
+            window_adj_edges = edge_index[:, adj_mask] - start + node_offset  # Reindex
+            all_adj_edges.append(window_adj_edges)
+            
+            if edge_weight is not None:
+                all_adj_weights.append(edge_weight[adj_mask])
+            
+            # Filter diffusion edges
+            row_diff, col_diff = edge_index_diff
+            diff_mask = (row_diff >= start) & (row_diff < end) & (col_diff >= start) & (col_diff < end)
+            window_diff_edges = edge_index_diff[:, diff_mask] - start + node_offset  # Reindex
+            all_diff_edges.append(window_diff_edges)
+            
+            if diff_weights is not None:
+                all_diff_weights.append(diff_weights[diff_mask])
+            
+            node_offset += sample_size
+        
+        # Concatenate all windows
+        subsampled_x = torch.cat(all_features, dim=0)
+        subsampled_edge_index = torch.cat(all_adj_edges, dim=1)
+        subsampled_edge_index_diff = torch.cat(all_diff_edges, dim=1)
+        batch_indices = torch.cat(all_batch_indices, dim=0)
+        
+        subsampled_edge_weight = None
+        if edge_weight is not None and all_adj_weights:
+            subsampled_edge_weight = torch.cat(all_adj_weights, dim=0)
+        
+        subsampled_diff_weights = None
+        if diff_weights is not None and all_diff_weights:
+            subsampled_diff_weights = torch.cat(all_diff_weights, dim=0)
+        
+        return (subsampled_x, subsampled_edge_index, subsampled_edge_weight,
+                subsampled_edge_index_diff, subsampled_diff_weights, batch_indices)
 
     def forward(self, batch):
-        r"""Forward pass for MVGRL encoding with contrastive learning.
+        r"""Forward pass for MVGRL with contrastive learning.
 
         Parameters
         ----------
         batch : torch_geometric.data.Data
-            Batch object containing the batched data.
-            Must have precomputed diffusion edges from PPRDiffusion or HeatDiffusion transform:
-            - edge_index_diff: Precomputed diffusion edge indices
-            - edge_weight_diff: Precomputed diffusion edge weights
+            Batch object with precomputed diffusion edges.
 
         Returns
         -------
         dict
-            Dictionary containing encoded representations and loss components.
+            Dictionary containing representations and contrastive loss.
         """
         x_0 = batch.x_0
         edge_index = batch.edge_index
         edge_weight = batch.get("edge_weight", None)
         batch_indices = batch.batch_0
 
-        num_nodes = x_0.size(0)
-        num_graphs = batch_indices.max().item() + 1
+        num_nodes_original = x_0.size(0)
         device = x_0.device
 
         # Get precomputed diffusion edges
         if not hasattr(batch, self.diff_edge_index_attr) or getattr(batch, self.diff_edge_index_attr) is None:
             raise ValueError(
                 f"MVGRL requires precomputed diffusion edges. "
-                f"Attribute '{self.diff_edge_index_attr}' not found in batch. "
-                f"Add PPRDiffusion or HeatDiffusion transform to your data preprocessing pipeline."
+                f"Add PPRDiffusion or HeatDiffusion transform to your pipeline."
             )
         
         edge_index_diff = getattr(batch, self.diff_edge_index_attr)
         diff_weights = getattr(batch, self.diff_edge_weight_attr, None)
         
-        # Ensure on correct device
         if edge_index_diff.device != device:
             edge_index_diff = edge_index_diff.to(device)
         if diff_weights is not None and diff_weights.device != device:
             diff_weights = diff_weights.to(device)
 
-        # === View 1: Adjacency encoding ===
-        # Original: adj = normalize_adj(adj + I) then gcn(feat, adj)
-        # We add self-loops and compute D^{-1/2}(A+I)D^{-1/2} normalization
+        # === For transductive (feature_shuffle), apply subsampling during training ===
+        if self.negative_sampling == "feature_shuffle" and self.training:
+            # Subsample the graph into multiple windows
+            (x_0, edge_index, edge_weight, edge_index_diff, diff_weights, batch_indices) = \
+                self.subsample_graph(x_0, edge_index, edge_weight, edge_index_diff, diff_weights, num_nodes_original)
+        
+        num_nodes = x_0.size(0)
+        num_graphs = batch_indices.max().item() + 1
+
+        # Prepare adjacency with normalization
         adj_edge_index, adj_edge_weight = add_self_loops(edge_index, edge_weight, num_nodes)
         adj_edge_weight = symmetric_normalize(adj_edge_index, adj_edge_weight, num_nodes)
-        # Returns: lv1 (nodes from final layer), gv1 (JK-Net concat graph rep)
+
+        # === Encode real features through both views ===
         lv1, gv1 = self.encoder1(x_0, adj_edge_index, batch_indices, adj_edge_weight)
-        
-        # === View 2: Diffusion encoding ===
-        # Original: gcn(feat, diff) where diff is raw PPR matrix (no additional normalization)
-        # The PPR matrix already incorporates normalization in its formula: α(I - (1-α)Ã)^{-1}
-        # Returns: lv2 (nodes from final layer), gv2 (JK-Net concat graph rep)
         lv2, gv2 = self.encoder2(x_0, edge_index_diff, batch_indices, diff_weights)
 
-        # Apply MLP projection heads (matches original MVGRL exactly)
-        # Node MLPs: hidden_dim -> hidden_dim
+        # Apply MLP projections
         lv1_proj = self.mlp_node(lv1)
         lv2_proj = self.mlp_node(lv2)
-        # Graph MLPs: num_layers * hidden_dim -> hidden_dim
         gv1_proj = self.mlp_graph(gv1)
         gv2_proj = self.mlp_graph(gv2)
 
-        # === Compute contrastive loss ===
-        # Loss 1: node from view1 with graph from view2
-        loss1 = self.local_global_loss(lv1_proj, gv2_proj, batch_indices, num_graphs)
-        # Loss 2: node from view2 with graph from view1
-        loss2 = self.local_global_loss(lv2_proj, gv1_proj, batch_indices, num_graphs)
-        
-        contrastive_loss = loss1 + loss2
-
-        # Final embeddings: sum of projected graph representations (matches original)
-        g_combined = gv1_proj + gv2_proj
+        # Final embeddings (paper: sum of both views)
+        h_combined = lv1 + lv2  # Node representations
+        g_combined = gv1_proj + gv2_proj  # Graph representations
 
         model_out = {
-            "x_0": lv1,  # Node representations (for downstream node tasks)
-            "x_graph": g_combined,  # Combined graph representations (for downstream graph tasks)
+            "x_0": h_combined,  # For node-level downstream tasks
+            "x_graph": g_combined,  # For graph-level downstream tasks
             "lv1": lv1,
             "lv2": lv2,
-            "gv1": gv1,  # Before MLP (JK-Net concat)
-            "gv2": gv2,  # Before MLP (JK-Net concat)
-            "gv1_proj": gv1_proj,  # After MLP
-            "gv2_proj": gv2_proj,  # After MLP
-            "contrastive_loss": contrastive_loss,
+            "lv1_proj": lv1_proj,  # For loss computation in MVGRLLoss
+            "lv2_proj": lv2_proj,  # For loss computation in MVGRLLoss
+            "gv1_proj": gv1_proj,
+            "gv2_proj": gv2_proj,
+            "negative_sampling": self.negative_sampling,  # For loss module to know which mode
             "labels": batch.y if hasattr(batch, 'y') else None,
             "batch_0": batch_indices,
             "edge_index": edge_index,
             "num_nodes": num_nodes,
             "num_graphs": num_graphs,
+            "num_nodes_original": num_nodes_original,  # Track original size for inference
         }
+
+        # For transductive mode, compute shuffled embeddings for loss module
+        if self.negative_sampling == "feature_shuffle":
+            x_shuffled = self.shuffle_features(x_0, batch_indices)
+            
+            # Encode shuffled features
+            lv1_shuf, _ = self.encoder1(x_shuffled, adj_edge_index, batch_indices, adj_edge_weight)
+            lv2_shuf, _ = self.encoder2(x_shuffled, edge_index_diff, batch_indices, diff_weights)
+            
+            # Project shuffled embeddings - passed to loss module
+            model_out["lv1_shuf_proj"] = self.mlp_node(lv1_shuf)
+            model_out["lv2_shuf_proj"] = self.mlp_node(lv2_shuf)
 
         return model_out
 
     def embed(self, batch):
         """Get embeddings without loss computation (for inference).
         
-        Returns graph-level embeddings (sum of both projected views).
-        Matches original: (gv1 + gv2).detach() where gv1/gv2 are after MLP projection.
+        Note: For transductive mode, this runs on the FULL graph (no subsampling)
+        since we want embeddings for all nodes.
         """
-        model_out = self.forward(batch)
-        return model_out["x_graph"].detach()
+        # Ensure we're in eval mode (no subsampling)
+        was_training = self.training
+        self.eval()
+        
+        with torch.no_grad():
+            model_out = self.forward(batch)
+        
+        if was_training:
+            self.train()
+        
+        if self.negative_sampling == "feature_shuffle":
+            return model_out["x_0"].detach()  # Node embeddings for node tasks
+        else:
+            return model_out["x_graph"].detach()  # Graph embeddings for graph tasks
+
+
+# Aliases for backward compatibility
+MVGRLGNNWrapper = MVGRLWrapper
+MVGRLInductiveWrapper = MVGRLWrapper
+MVGRLTransductiveWrapper = MVGRLWrapper

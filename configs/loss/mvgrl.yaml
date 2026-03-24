@@ -1,15 +1,10 @@
-# MVGRL Loss Configuration
-# Based on: https://github.com/kavehhassani/mvgrl
+# MVGRL loss configuration
 # Paper: "Contrastive Multi-View Representation Learning on Graphs" (ICML 2020)
-
-_target_: topobench.loss.TBLoss
+# https://arxiv.org/abs/2006.05582
+#
+# Uses Jensen-Shannon Divergence (JSD) based mutual information maximization
+# between local (node) and global (graph) representations across views.
 
 dataset_loss:
-  _target_: topobench.loss.dataset.MVGRLLoss
-  # Loss is computed in the wrapper using JSD-based MI estimation
-  # The measure parameter is set in the wrapper config
-
-modules_losses:
-  feature_encoder: ${oc.select:model.feature_encoder.loss,null}
-  backbone: ${oc.select:model.backbone.loss,null}
-  readout: ${oc.select:model.readout.loss,null}
+  _target_: topobench.loss.dataset.mvgrl_loss.MVGRLLoss
+  weight: 1.0

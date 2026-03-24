@@ -1,0 +1,29 @@
+# MVGRL model configuration for GRAPH-LEVEL tasks (inductive learning)
+# Paper: "Contrastive Multi-View Representation Learning on Graphs" (ICML 2020)
+# https://arxiv.org/abs/2006.05582
+#
+# For graph classification, negatives come from OTHER graphs in the batch.
+# Recommended: num_layers=2-12 (choose via validation)
+
+_target_: topobench.nn.wrappers.graph.MVGRLWrapper
+
+# GCN backbone (not used internally, kept for TopoBench compatibility)
+backbone:
+  _target_: topobench.nn.backbones.graph.GCNBackbone
+  
+# Wrapper parameters
+wrapper:
+  _target_: topobench.nn.wrappers.graph.mvgrl_gnn_wrapper.MVGRLWrapper
+  num_layers: 4
+  negative_sampling: cross_graph  # Inductive: negatives from other graphs
+  diff_edge_index_attr: edge_index_diff
+  diff_edge_weight_attr: edge_weight_diff
+
+# Readout for graph classification
+readout:
+  _target_: topobench.nn.readouts.mvgrl_readout.MVGRLReadOut
+  task_level: graph
+  pooling_type: sum
+  
+# Model defaults
+task_level: graph

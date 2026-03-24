@@ -15,19 +15,18 @@ from topobench.nn.readouts.base import AbstractZeroCellReadOut
 class MVGRLReadOut(AbstractZeroCellReadOut):
     r"""MVGRL readout layer for contrastive pre-training.
 
-    This readout handles the output from MVGRLGNNWrapper.
-    The wrapper already computes graph-level representations using
-    JK-Net style pooling (sum + concatenate across layers) followed by MLP projection.
+    This readout handles the output from MVGRLWrapper.
+    The wrapper already computes both node and graph representations.
 
     For pre-training, it passes through the representations.
-    For downstream tasks, it computes logits from the graph representations.
+    For downstream tasks, it computes logits from the appropriate representations.
 
     Parameters
     ----------
     hidden_dim : int
-        Hidden dimension from the encoder (after MLP projection).
+        Hidden dimension from the encoder.
     out_channels : int
-        Number of output classes (for downstream tasks).
+        Number of output classes.
     task_level : str, optional
         Task level: "node" or "graph" (default: "graph").
     **kwargs : dict
@@ -41,7 +40,6 @@ class MVGRLReadOut(AbstractZeroCellReadOut):
         task_level: str = "graph",
         **kwargs
     ):
-        # Use logits_linear_layer=True to create the linear projection for downstream tasks
         super().__init__(
             hidden_dim=hidden_dim,
             out_channels=out_channels,
@@ -58,15 +56,13 @@ class MVGRLReadOut(AbstractZeroCellReadOut):
     ) -> dict:
         r"""Forward pass for MVGRL readout.
 
-        The wrapper provides:
-        - x_0: Node representations from view 1 (final GCN layer)
-        - x_graph: Combined projected graph representations (gv1_proj + gv2_proj)
-        - contrastive_loss: The JSD-based contrastive loss
-
         Parameters
         ----------
         model_out : dict
-            Dictionary from MVGRLGNNWrapper containing representations and loss.
+            Dictionary from MVGRLWrapper containing:
+            - x_0: Node representations (h1 + h2)
+            - x_graph: Graph representations (gv1_proj + gv2_proj)
+            - contrastive_loss: The JSD-based contrastive loss
         batch : torch_geometric.data.Data
             Batch object.
 
@@ -77,18 +73,14 @@ class MVGRLReadOut(AbstractZeroCellReadOut):
         """
         # Ensure x_graph is available for graph-level tasks
         if "x_graph" not in model_out and self.task_level == "graph":
-            # Fallback: compute graph representation from node representations
             h = model_out["x_0"]
             batch_indices = model_out["batch_0"]
             model_out["x_graph"] = scatter(h, batch_indices, dim=0, reduce="sum")
         
         # Compute logits for downstream tasks
-        # Override the base class behavior to use x_graph directly for graph tasks
         if self.task_level == "graph":
-            # Use the pre-computed graph representations (already pooled)
             model_out["logits"] = self.linear(model_out["x_graph"])
         else:
-            # For node-level tasks, use x_0 (node representations)
             model_out["logits"] = self.linear(model_out["x_0"])
         
         return model_out
@@ -100,3 +92,8 @@ class MVGRLReadOut(AbstractZeroCellReadOut):
             f"out_channels={self.linear.out_features}, "
             f"task_level={self.task_level})"
         )
+
+
+# Aliases for backward compatibility
+MVGRLInductiveReadOut = MVGRLReadOut
+MVGRLTransductiveReadOut = MVGRLReadOut
