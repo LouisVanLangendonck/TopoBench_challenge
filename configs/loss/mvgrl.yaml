@@ -1,0 +1,15 @@
+# MVGRL Loss Configuration
+# Based on: https://github.com/kavehhassani/mvgrl
+# Paper: "Contrastive Multi-View Representation Learning on Graphs" (ICML 2020)
+
+_target_: topobench.loss.TBLoss
+
+dataset_loss:
+  _target_: topobench.loss.dataset.MVGRLLoss
+  # Loss is computed in the wrapper using JSD-based MI estimation
+  # The measure parameter is set in the wrapper config
+
+modules_losses:
+  feature_encoder: ${oc.select:model.feature_encoder.loss,null}
+  backbone: ${oc.select:model.backbone.loss,null}
+  readout: ${oc.select:model.readout.loss,null}

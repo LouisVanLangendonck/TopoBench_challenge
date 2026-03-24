@@ -1,0 +1,7 @@
+transform_name: "HeatDiffusion"
+transform_type: "data manipulation"
+t: 5.0
+threshold: 0.0001
+self_loop: true
+attr_name_edge_index: "edge_index_diff"
+attr_name_edge_weight: "edge_weight_diff"
