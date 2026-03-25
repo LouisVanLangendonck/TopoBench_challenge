@@ -8,7 +8,7 @@ run_dirs: null
 # run_dirs:
 #   - data/outputs/wandb/run-YYYYMMDD_HHMMSS-xxxxx
 
-wandb_pretrain_project: rq1_graphmae_pretraining_try
+wandb_pretrain_project: dgi_grid_inductive
 # wandb_pretrain_project: "entity/MyProject"
 
 # Wandb API fetch (when using wandb_pretrain_project)
@@ -17,11 +17,11 @@ fetch_filters:
 min_runs: 1
 
 # Grid axes
-n_train: [2, 5, 10]
+n_train: [10]
 tasks: [community_detection]
 modes:
   - linear-probe
-  - full-finetune
+  - random-init-linear-probe
 readout_types: [mean]
 n_evaluation_graphs: 200
 
@@ -45,6 +45,6 @@ parallel_workers: 4
 # If null and parallel_workers > 1, uses cuda:0, cuda:1, ... cuda:(parallel_workers-1).
 eval_devices: null
 seed: 42
-wandb_project: test_rq1
+wandb_project: dgi_downstream_results_inductive
 save_results: true
 confirm_before_run: true

@@ -1,8 +1,11 @@
 """Shared utilities for downstream evaluation (inductive and transductive)."""
 
 import json
+import random
 import sys
+import time
 from pathlib import Path
+from typing import Any
 from copy import deepcopy
 
 _THIS_DIR = Path(__file__).resolve().parent
@@ -61,6 +64,208 @@ def get_checkpoint_path_from_summary(run_dir: str | Path) -> str | None:
         summary = json.load(f)
     
     return summary.get("best_epoch/checkpoint")
+
+
+def build_wandb_local_run_dir_index(
+    potential_wandb_dirs: list[Path | str],
+) -> tuple[dict[str, str], list[tuple[str, str]]]:
+    """
+    Scan each wandb root once and build (1) run_id -> run directory path and
+    (2) a list of (dir_name, path) for substring fallback.
+
+    Wandb offline folders are typically ``run-YYYYMMDD_HHMMSS-<run_id>``; the
+    run id is the segment after the final ``-``. Using a dict avoids O(n²)
+    rescans when matching many API runs to local dirs.
+    """
+    by_run_id: dict[str, str] = {}
+    all_named: list[tuple[str, str]] = []
+    for root in potential_wandb_dirs:
+        wd = Path(root)
+        if not wd.is_dir():
+            continue
+        for run_path in wd.iterdir():
+            if not run_path.is_dir():
+                continue
+            name = run_path.name
+            resolved = str(run_path.resolve())
+            all_named.append((name, resolved))
+            if name.startswith("run-"):
+                _prefix, tail = name.rsplit("-", 1)
+                if tail:
+                    by_run_id[tail] = resolved
+    return by_run_id, all_named
+
+
+def resolve_local_wandb_run_dir(
+    run_id: str,
+    by_run_id: dict[str, str],
+    all_named: list[tuple[str, str]],
+) -> str | None:
+    """Resolve API ``run_id`` to a local run directory path."""
+    p = by_run_id.get(run_id)
+    if p is not None:
+        return p
+    for name, path in all_named:
+        if run_id in name:
+            return path
+    return None
+
+
+def wandb_transient_api_error(exc: BaseException) -> bool:
+    """Return True if retrying may succeed (W&B gateway overload, timeouts)."""
+    text = str(exc).lower()
+    markers = (
+        "502",
+        "503",
+        "504",
+        "429",
+        "bad gateway",
+        "timed out",
+        "timeout",
+        "temporarily unavailable",
+        "connection reset",
+    )
+    return any(m in text for m in markers)
+
+
+def run_with_wandb_retry(
+    fn,
+    *,
+    max_retries: int = 6,
+    label: str = "W&B API",
+) -> Any:
+    """Run ``fn()`` and retry on transient W&B / HTTP gateway errors."""
+    last: BaseException | None = None
+    for attempt in range(max_retries):
+        try:
+            return fn()
+        except Exception as e:
+            last = e
+            if attempt == max_retries - 1 or not wandb_transient_api_error(e):
+                raise
+            delay = min(120.0, (2**attempt) * 10 + random.uniform(0, 3))
+            print(
+                f"\n  {label} transient error (attempt {attempt + 1}/{max_retries}): {e!s}\n"
+                f"  Retrying in {delay:.0f}s ...\n"
+            )
+            time.sleep(delay)
+    assert last is not None
+    raise last
+
+
+def fetch_runs_from_wandb_project(
+    project_path: str,
+    filters: dict | None = None,
+    min_runs: int = 1,
+    *,
+    max_api_retries: int = 6,
+) -> list[dict[str, Any]]:
+    """
+    List runs from a W&B project via the API and join to local ``wandb/run-*`` dirs.
+
+    Uses a single local directory scan, ``per_page=500``, local checkpoint/config
+    reads, and retries on transient API errors (502/503/timeout).
+    """
+    import wandb
+
+    def _fetch_once() -> list[dict[str, Any]]:
+        api = wandb.Api(timeout=120)
+
+        if "/" in project_path:
+            entity, project = project_path.split("/", 1)
+        else:
+            entity = None
+            project = project_path
+
+        print(f"\n{'=' * 80}")
+        print(f"FETCHING RUNS FROM WANDB PROJECT: {project_path}")
+        print(f"{'=' * 80}")
+
+        # Do not assign to ``filters`` here: that would shadow the closure and
+        # trigger UnboundLocalError on ``if filters is None`` above.
+        run_filters = filters if filters is not None else {"state": "finished"}
+
+        potential_wandb_dirs = [
+            Path("data/outputs/wandb"),
+            Path("wandb"),
+        ]
+        by_run_id, all_named = build_wandb_local_run_dir_index(potential_wandb_dirs)
+
+        print(
+            "  Indexed local wandb run directories; contacting api.wandb.ai for run list "
+            "(large projects may take a minute; 502/503 from W&B are often transient — retrying)."
+        )
+
+        page_size = 500
+        if entity:
+            runs = api.runs(
+                f"{entity}/{project}", filters=run_filters, per_page=page_size
+            )
+        else:
+            runs = api.runs(project, filters=run_filters, per_page=page_size)
+
+        run_infos: list[dict[str, Any]] = []
+        api_runs_seen = 0
+
+        for run in runs:
+            api_runs_seen += 1
+            run_id = run.id
+            run_name = run.name
+
+            run_dir = resolve_local_wandb_run_dir(run_id, by_run_id, all_named)
+
+            if run_dir is None:
+                print(
+                    f"  ⚠️  Skipping {run_id} ({run_name}): local run directory not found"
+                )
+            else:
+                checkpoint_path = get_checkpoint_path_from_summary(run_dir)
+                if checkpoint_path is None:
+                    print(
+                        f"  ⚠️  {run_id} ({run_name}): no checkpoint in local summary "
+                        f"(still usable for random-init-* modes)"
+                    )
+
+                pretrain_config = load_wandb_config(run_dir)
+                config = pretrain_config
+
+                run_infos.append(
+                    {
+                        "run_dir": run_dir,
+                        "run_id": run_id,
+                        "run_name": run_name,
+                        "config": config,
+                        "checkpoint_path": checkpoint_path,
+                        "pretrain_config": pretrain_config,
+                    }
+                )
+
+                print(f"  ✓ {run_id} ({run_name})")
+                print(f"    Dir: {run_dir}")
+                print(f"    Checkpoint: {checkpoint_path or '—'}")
+
+            if api_runs_seen % page_size == 0:
+                n_pages = api_runs_seen // page_size
+                print(
+                    f"  … W&B API: fetched {api_runs_seen} runs so far "
+                    f"(~page {n_pages} of {page_size}/page); "
+                    f"{len(run_infos)} matched local run dirs.",
+                    flush=True,
+                )
+
+        print(f"\n{'=' * 80}")
+        print(f"FOUND {len(run_infos)} RUNS (checkpoint optional for random-init-*)")
+        print(f"{'=' * 80}\n")
+
+        if len(run_infos) < min_runs:
+            raise ValueError(
+                f"Expected at least {min_runs} runs, but only found {len(run_infos)} "
+                f"in project {project_path}"
+            )
+
+        return run_infos
+
+    return run_with_wandb_retry(_fetch_once, max_retries=max_api_retries)
 
 
 # =============================================================================
@@ -320,6 +525,112 @@ def hidden_dim_from_downstream_config(config: dict) -> int:
     )
 
 
+def replace_ssl_backbone_with_gnn_wrapper(tb_model, *, verbose: bool = True) -> bool:
+    """Use ``GNNWrapper`` for downstream: one clean GNN pass, no SSL augmentations.
+
+    **Preserved (same ``nn.Module`` instances and tensors as after checkpoint load)**
+
+    - Inner graph encoder: ``GPSEncoder`` (or equivalent) — the weights used for message passing.
+    - Per-rank residual LayerNorms ``ln_0``, … on the wrapper — copied from the old SSL wrapper
+      so we do **not** randomly re-init them (they participate in ``AbstractWrapper.__call__`` when
+      ``residual_connections`` is True and ``batch`` carries ``x_0``).
+
+    **Dropped (SSL-only; not used by ``GNNWrapper.forward``)**
+
+    These are left out of the forward path on purpose; they only served the pretraining loss:
+
+    - **GraphMAEv2**: ``enc_mask_token``, latent ``projector`` / ``predictor``, EMA teacher copies.
+    - **GraphCL / GRACE / LinkPred**: no learnable params in the wrapper besides ``ln_*`` and backbone.
+    - **DGI**: wrapper is only the GNN + corruption logic; readout/discriminator lives under
+      ``tb_model.readout`` (still loaded, unused by ``TBModelNodeEncoder``).
+    - **BGRL**: the **target** encoder (``bb.backbone``) is unused; we keep **online_encoder** as
+      the downstream GNN (standard choice for the student branch).
+
+    **No extra random weights**: the only new modules in a fresh ``GNNWrapper`` are ``ln_*``;
+    those are filled by copying from ``bb``, not left at init.
+
+    .. note::
+
+        Hydra often instantiates wrappers via ``topobench.nn.wrappers`` dynamic discovery,
+        which can produce a *different* class object than ``import ...graphcl_gnn_wrapper``.
+        We match by ``__class__.__name__``, not ``isinstance``, so replacement still runs.
+    """
+    from topobench.nn.wrappers.graph.gnn_wrapper import GNNWrapper
+
+    _SSL_WRAPPER_NAMES = frozenset({
+        "GraphCLGNNWrapper",
+        "GraphMAEv2GNNWrapper",
+        "DGIGNNWrapper",
+        "LinkPredGNNWrapper",
+        "BGRLGNNWrapper",
+        "GRACEGNNWrapper",
+    })
+
+    bb = getattr(tb_model, "backbone", None)
+    if bb is None:
+        if verbose:
+            print("Downstream SSL swap: tb_model has no backbone; skipping.")
+        return False
+    cls_name = bb.__class__.__name__
+    if cls_name == "GNNWrapper":
+        if verbose:
+            print("Downstream SSL swap: backbone already GNNWrapper — no replacement.")
+        return False
+    if cls_name not in _SSL_WRAPPER_NAMES:
+        if verbose:
+            known = ", ".join(sorted(_SSL_WRAPPER_NAMES))
+            print(
+                f"Downstream SSL swap: backbone class {cls_name!r} is not in the swap list "
+                f"({known}) — keeping original wrapper."
+            )
+        return False
+
+    if cls_name == "BGRLGNNWrapper":
+        inner = bb.online_encoder
+    else:
+        inner = bb.backbone
+
+    if inner is None:
+        if verbose:
+            print(f"Downstream SSL swap: {cls_name} has no inner encoder; skipping.")
+        return False
+
+    out_ch = getattr(inner, "out_channels", None) or getattr(inner, "hidden_dim", None)
+    if out_ch is None and hasattr(bb, "ln_0"):
+        out_ch = bb.ln_0.normalized_shape[0]
+    if out_ch is None:
+        if verbose:
+            print(
+                f"Downstream SSL swap: could not infer out_channels for {cls_name}; skipping."
+            )
+        return False
+    out_ch = int(out_ch)
+
+    num_cell_dim = len(bb.dimensions)
+    residual = getattr(bb, "residual_connections", True)
+
+    device = next(inner.parameters()).device
+    new_bb = GNNWrapper(
+        inner,
+        out_channels=out_ch,
+        num_cell_dimensions=num_cell_dim,
+        residual_connections=residual,
+    )
+    new_bb.to(device)
+    for i in bb.dimensions:
+        old_ln = getattr(bb, f"ln_{i}", None)
+        new_ln = getattr(new_bb, f"ln_{i}", None)
+        if old_ln is not None and new_ln is not None:
+            new_ln.load_state_dict(old_ln.state_dict())
+    tb_model.backbone = new_bb
+    if verbose:
+        print(
+            f"Downstream SSL swap: replaced {cls_name} with GNNWrapper "
+            f"(inner encoder module unchanged; ln_* copied)."
+        )
+    return True
+
+
 def build_tb_model_for_downstream(
     config: dict,
     device: str,
@@ -340,12 +651,22 @@ def build_tb_model_for_downstream(
                 f"TBModel load_state_dict (non-strict): "
                 f"{len(inc.missing_keys)} missing, {len(inc.unexpected_keys)} unexpected keys"
             )
+    replace_ssl_backbone_with_gnn_wrapper(tb_model, verbose=verbose)
     hidden_dim = hidden_dim_from_downstream_config(config)
     return tb_model, hidden_dim, inc
 
 
 class TBModelNodeEncoder(nn.Module):
-    """``feature_encoder`` → ``backbone`` → node embeddings ``x_0`` (same SSL wrapper as training)."""
+    """``feature_encoder`` → ``backbone`` → node embeddings ``x_0``.
+
+    After ``build_tb_model_for_downstream``, SSL runs use ``GNNWrapper`` (see
+    ``replace_ssl_backbone_with_gnn_wrapper``), not the training-time augmenting wrapper.
+
+    ``readout`` parameters are marked ``requires_grad=False`` and stay in ``eval()`` during
+    ``train()`` on this module; the forward path does **not** call ``readout`` (SSL heads are
+    irrelevant for probing). ``DownstreamModel`` then freezes the whole encoder for linear-probe
+    or leaves it trainable for full-finetune — **same** for pretrained and random-init pairs.
+    """
 
     def __init__(self, tb_model):
         super().__init__()
@@ -571,8 +892,16 @@ class LinearClassifier(nn.Module):
 
 
 class DownstreamModel(nn.Module):
-    """Complete downstream model: encoder + classifier."""
-    
+    """Encoder (``TBModelNodeEncoder``) + linear classifier.
+
+    ``freeze_encoder=True`` (linear-probe / random-init-linear-probe): all encoder parameters,
+    including inner GNN and wrapper ``LayerNorm``, are frozen; classifier updates only.
+
+    ``freeze_encoder=False`` (full-finetune / random-init-full-finetune): encoder parameters train;
+    submodule ``readout`` inside the nested ``TBModel`` remains frozen by ``TBModelNodeEncoder``
+    because that head is not in the forward path.
+    """
+
     def __init__(
         self,
         encoder: nn.Module,

@@ -187,6 +187,7 @@ notebooks/tmp
 /tutorials/datasets/
 /plots/
 /plotting/
+/downstream_adaptation_real_world_dataset/
 
 # wandb
 wandb/

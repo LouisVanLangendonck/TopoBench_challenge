@@ -2,8 +2,26 @@
 
 Transductive (single graph, masks): ``downstream_eval_transductive.py``.
 
-Modes (``--mode``): ``linear-probe`` / ``random-init-linear-probe`` freeze encoder+backbone;
-``full-finetune`` / ``random-init-full-finetune`` train all (random-init skips checkpoint).
+**Freeze / init parity (SSL community_detection + TBModelNodeEncoder)**
+
+For each ``--mode``, **pretrained** and **random-init-\*** use the *same* train/freeze rules;
+only whether the Lightning checkpoint is loaded differs. ``--seed`` is set before building the
+TB model and the linear head, so init is reproducible.
+
+- ``linear-probe`` / ``random-init-linear-probe``: ``feature_encoder`` and ``backbone`` (inner GNN
+  + wrapper LayerNorm ``ln_*``) are **frozen**; ``readout`` is frozen too and **not used** in the
+  forward (only encoder path runs). Only the **linear classifier** trains.
+- ``full-finetune`` / ``random-init-full-finetune``: ``feature_encoder`` and ``backbone`` **train**
+  (including ``ln_*``). ``readout`` stays ``requires_grad=False`` and eval (SSL head unused here).
+  Classifier trains.
+
+**Random from-scratch:** random-init modes never call ``load_state_dict``; all weights in the
+instantiated TB model (then swapped to ``GNNWrapper``) come from default module initialization.
+The linear classifier always uses the same Xavier init rule. SSL-only tensors dropped during the
+wrapper swap (e.g. GraphMAEv2 projector) are not part of the downstream forward for *either*
+pretrained or random runs.
+
+See ``replace_ssl_backbone_with_gnn_wrapper`` in ``downstream_eval_utils.py``.
 """
 
 GRAPHUNIVERSE_OVERRIDE_DEFAULT = None
@@ -524,7 +542,14 @@ def run_downstream_evaluation(
             verbose=verbose_checkpoint_load,
         )
 
-        graph_level = downstream_task == "community_presence" or task_level == "graph"
+        # Pretraining task_level can be "graph" (e.g. GraphCL) while community_detection
+        # labels stay node-level; encoder/readout must match downstream labels, not pretrain.
+        if downstream_task == "community_presence":
+            graph_level = True
+        elif downstream_task == "community_detection":
+            graph_level = False
+        else:
+            graph_level = task_level == "graph"
         if graph_level:
             encoder = TBModelGraphLevelEncoder(tb_model, readout_type=readout_type)
             downstream_task_level = "graph"

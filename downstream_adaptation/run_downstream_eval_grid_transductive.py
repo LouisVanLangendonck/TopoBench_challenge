@@ -27,6 +27,7 @@ except ImportError:
 
 from downstream_eval_transductive import run_downstream_evaluation_transductive
 from downstream_eval_utils import (
+    fetch_runs_from_wandb_project,
     load_wandb_config,
     get_checkpoint_path_from_summary,
     downstream_mode_requires_checkpoint,
@@ -85,100 +86,6 @@ class NumpyEncoder(json.JSONEncoder):
         elif isinstance(obj, np.ndarray):
             return obj.tolist()
         return super().default(obj)
-
-
-# =============================================================================
-# Wandb Project Fetching
-# =============================================================================
-
-def fetch_runs_from_wandb_project(
-    project_path: str,
-    filters: dict | None = None,
-    min_runs: int = 1,
-) -> List[Dict[str, Any]]:
-    """
-    Fetch all runs from a wandb project and extract their local paths and configs.
-    """
-    api = wandb.Api()
-    
-    if "/" in project_path:
-        entity, project = project_path.split("/", 1)
-    else:
-        entity = None
-        project = project_path
-    
-    print(f"\n{'=' * 80}")
-    print(f"FETCHING RUNS FROM WANDB PROJECT: {project_path}")
-    print(f"{'=' * 80}")
-    
-    if filters is None:
-        filters = {"state": "finished"}
-    
-    if entity:
-        runs = api.runs(f"{entity}/{project}", filters=filters)
-    else:
-        runs = api.runs(project, filters=filters)
-    
-    run_infos = []
-    
-    for run in runs:
-        run_id = run.id
-        run_name = run.name
-        
-        checkpoint_path = run.summary.get("best_epoch/checkpoint")
-        if checkpoint_path is None:
-            print(
-                f"  ⚠️  {run_id} ({run_name}): no checkpoint in summary "
-                f"(still usable for random-init-* modes)"
-            )
-
-        run_dir = None
-        
-        potential_wandb_dirs = [
-            Path("data/outputs/wandb"),
-            Path("wandb"),
-        ]
-        
-        for wandb_dir in potential_wandb_dirs:
-            if wandb_dir.exists():
-                for run_path in wandb_dir.iterdir():
-                    if run_path.is_dir() and run_id in run_path.name:
-                        run_dir = str(run_path)
-                        break
-            if run_dir:
-                break
-        
-        if run_dir is None:
-            print(f"  ⚠️  Skipping {run_id} ({run_name}): local run directory not found")
-            continue
-        
-        config = dict(run.config)
-        pretrain_config = load_wandb_config(run_dir)
-        
-        run_infos.append({
-            "run_dir": run_dir,
-            "run_id": run_id,
-            "run_name": run_name,
-            "config": config,
-            "checkpoint_path": checkpoint_path,
-            "pretrain_config": pretrain_config,
-        })
-        
-        print(f"  ✓ {run_id} ({run_name})")
-        print(f"    Dir: {run_dir}")
-        print(f"    Checkpoint: {checkpoint_path or '—'}")
-    
-    print(f"\n{'=' * 80}")
-    print(f"FOUND {len(run_infos)} RUNS (checkpoint optional for random-init-*)")
-    print(f"{'=' * 80}\n")
-
-    if len(run_infos) < min_runs:
-        raise ValueError(
-            f"Expected at least {min_runs} runs, but only found {len(run_infos)} "
-            f"in project {project_path}"
-        )
-    
-    return run_infos
 
 
 # =============================================================================
