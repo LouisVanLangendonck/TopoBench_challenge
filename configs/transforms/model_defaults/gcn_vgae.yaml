@@ -1,3 +1,2 @@
 defaults:
   - data_manipulations@identity: identity
-

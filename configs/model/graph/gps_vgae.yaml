@@ -1,11 +1,11 @@
 _target_: topobench.model.TBModel
 
-model_name: gps_linkpred
+model_name: gps_vgae
 model_domain: graph
 
 feature_encoder:
   _target_: topobench.nn.encoders.${model.feature_encoder.encoder_name}
-  encoder_name: AllCellFeatureEncoder
+  encoder_name: LinearFeatureEncoder
   in_channels: ${infer_in_channels:${dataset},${oc.select:transforms,null}}
   out_channels: 256
   proj_dropout: 0.1
@@ -20,31 +20,28 @@ backbone:
   attn_type: multihead
   local_conv_type: gin
 
-# Use LinkPredGNNWrapper for edge sampling and negative sampling
 backbone_wrapper:
-  _target_: topobench.nn.wrappers.LinkPredGNNWrapper 
+  _target_: topobench.nn.wrappers.VAEGNNWrapper
   _partial_: true
-  wrapper_name: LinkPredGNNWrapper
+  wrapper_name: VAEGNNWrapper
   out_channels: ${model.feature_encoder.out_channels}
   num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
-  # Link prediction specific parameters
-  edge_sample_ratio: 0.8  # Remove edge_sample_ratio% of edges as positive samples
-  neg_sample_ratio: 1.0  # Equal number of negative and positive samples
-  sampling_method: sparse  # Use sparse sampling for large graphs (choose between sparse and dense)
+  residual_connections: false
+  edge_sample_ratio: 0.2
+  neg_sample_ratio: 1.0
+  sampling_method: sparse
+  latent_dim: 32
+  variational: true
 
-# LinkPredReadOut handles edge scoring and classification
 readout:
   _target_: topobench.nn.readouts.${model.readout.readout_name}
-  readout_name: LinkPredReadOut
+  readout_name: VGAEReadOut
   num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
-  hidden_dim: ${model.feature_encoder.out_channels}
-  out_channels: 1  # Binary classification
+  hidden_dim: ${model.backbone_wrapper.latent_dim}
+  out_channels: 1
   task_level: ${dataset.parameters.task_level}
-  pooling_type: sum
-  # Link prediction readout specific parameters
-  decoder_type: concat_mlp  # Options: dot, concat_mlp, hadamard_mlp
+  pooling_type: mean
+  decoder_type: dot
   decoder_hidden_dim: 256
 
-# compile model for faster training with pytorch 2.0
 compile: false
-

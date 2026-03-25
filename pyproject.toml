@@ -86,6 +86,10 @@ test = [
     "mypy",
     "pytest-mock"
 ]
+analysis = [
+    "streamlit",
+    "statsmodels",
+]
 
 dev = ["TopoBench[test, lint]"]
 all = ["TopoBench[dev, doc]"]

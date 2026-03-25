@@ -145,6 +145,10 @@ class TBModel(LightningModule):
 
         return model_out
 
+    def _uses_vgae_evaluator(self) -> bool:
+        """VGAE logs edge BCE as ``train/loss`` via the evaluator; ELBO is ``train/elbo``."""
+        return type(self.evaluator).__name__ == "VGAEEvaluator"
+
     def training_step(self, batch: Data, batch_idx: int) -> torch.Tensor:
         r"""Perform a single training step on a batch of data.
 
@@ -166,16 +170,26 @@ class TBModel(LightningModule):
          # Get actual batch size (if graph, num_graphs, if node, num_nodes)
         actual_batch_size = batch.num_graphs if hasattr(batch, "num_graphs") else 1
 
-        # Update and log metrics
+        # Log optimization objective (avoid naming it train/loss for VGAE — see VGAEEvaluator).
         loss_value = model_out["loss"].item()
-        self.log(
-            "train/loss",
-            loss_value,
-            on_step=False,
-            on_epoch=True,
-            prog_bar=True,
-            batch_size=actual_batch_size,
-        )
+        if self._uses_vgae_evaluator():
+            self.log(
+                "train/elbo",
+                loss_value,
+                on_step=False,
+                on_epoch=True,
+                prog_bar=True,
+                batch_size=actual_batch_size,
+            )
+        else:
+            self.log(
+                "train/loss",
+                loss_value,
+                on_step=False,
+                on_epoch=True,
+                prog_bar=True,
+                batch_size=actual_batch_size,
+            )
 
         # Return loss for backpropagation step
         return model_out["loss"]
@@ -196,16 +210,16 @@ class TBModel(LightningModule):
         # Get actual batch size (if graph, num_graphs, if node, num_nodes)
         actual_batch_size = batch.num_graphs if hasattr(batch, "num_graphs") else 1
 
-        # Log Loss
-        loss_value = model_out["loss"].item()
-        self.log(
-            "val/loss",
-            loss_value,
-            on_step=False,
-            on_epoch=True,
-            prog_bar=True,
-            batch_size=actual_batch_size,
-        )
+        if not self._uses_vgae_evaluator():
+            loss_value = model_out["loss"].item()
+            self.log(
+                "val/loss",
+                loss_value,
+                on_step=False,
+                on_epoch=True,
+                prog_bar=True,
+                batch_size=actual_batch_size,
+            )
 
     def test_step(self, batch: Data, batch_idx: int) -> None:
         r"""Perform a single test step on a batch of data.
@@ -223,16 +237,16 @@ class TBModel(LightningModule):
         # Get actual batch size (if graph, num_graphs, if node, num_nodes)
         actual_batch_size = batch.num_graphs if hasattr(batch, "num_graphs") else 1
 
-        # Log loss
-        loss_value = model_out["loss"].item()
-        self.log(
-            "test/loss",
-            loss_value,
-            on_step=False,
-            on_epoch=True,
-            prog_bar=True,
-            batch_size=actual_batch_size,
-        )
+        if not self._uses_vgae_evaluator():
+            loss_value = model_out["loss"].item()
+            self.log(
+                "test/loss",
+                loss_value,
+                on_step=False,
+                on_epoch=True,
+                prog_bar=True,
+                batch_size=actual_batch_size,
+            )
 
     def process_outputs(self, model_out: dict, batch: Data) -> dict:
         r"""Handle model outputs.
@@ -251,14 +265,14 @@ class TBModel(LightningModule):
         """
         # Get the correct mask
         if self.learning_setting == "transductive":
-            # Check if this is DGI, GRACE, or LinkPred - these methods don't use node masks
+            # DGI, GRACE, VGAE (edge minibatch), BGRL: no node-level train/val/test masking
             # (GraphMAEv2 uses train/val/test splits for evaluation)
             is_dgi = "x_0_corrupted" in model_out  # DGI
             is_grace = "z_1" in model_out and "z_2" in model_out  # GRACE
-            is_linkpred = "pos_edge_index" in model_out and "neg_edge_index" in model_out  # LinkPred
+            is_vgae_edges = "pos_edge_index" in model_out and "neg_edge_index" in model_out
             is_bgrl = "pred_h_1" in model_out and "target_h_2" in model_out  # BGRL
-            
-            if is_dgi or is_grace or is_linkpred or is_bgrl:
+
+            if is_dgi or is_grace or is_vgae_edges or is_bgrl:
                 # Skip masking for self-supervised pre-training outputs
                 return model_out
             

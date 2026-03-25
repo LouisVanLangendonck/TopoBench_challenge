@@ -140,7 +140,7 @@ def get_monitor_metric(task, metric):
     Parameters
     ----------
     task : str
-        Task, either "classification", "regression", "graphmaev2", "grace", "linkpred", etc.
+        Task, either "classification", "regression", "graphmaev2", "grace", "vgae", etc.
     metric : str
         Name of the metric function.
 
@@ -158,7 +158,7 @@ def get_monitor_metric(task, metric):
         task == "classification"
         or task == "regression"
         or task == "multilabel classification"
-        or task in ["graphmaev2", "grace", "linkpred", "dgi", "graphcl", "bgrl"]
+        or task in ["graphmaev2", "grace", "vgae", "dgi", "graphcl", "bgrl"]
     ):
         return f"val/{metric}"
     else:
@@ -171,7 +171,7 @@ def get_monitor_mode(task):
     Parameters
     ----------
     task : str
-        Task, either "classification", "regression", "graphmaev2", "grace", "linkpred", etc.
+        Task, either "classification", "regression", "graphmaev2", "grace", "vgae", etc.
 
     Returns
     -------
@@ -187,7 +187,7 @@ def get_monitor_mode(task):
         task == "classification"
         or task == "multilabel classification"
         or task == "graphmaev2"  # GraphMAEv2: maximize cosine similarity
-        or task == "linkpred"  # LinkPred: maximize accuracy/auroc
+        or task == "vgae"  # VGAE edge pretraining: maximize accuracy/auroc
         or task == "dgi"  # DGI: maximize discrimination accuracy
         or task == "bgrl"  # BGRL: maximize cosine similarity
         ):
@@ -507,7 +507,7 @@ def get_default_metrics(task, metrics=None):
     Parameters
     ----------
     task : str
-        Task, either "classification", "regression", "graphmaev2", "grace", "linkpred", or "dgi".
+        Task, either "classification", "regression", "graphmaev2", "grace", "vgae", or "dgi".
     metrics : list, optional
         List of metrics to be used. If None, the default metrics will be used.
 
@@ -532,7 +532,7 @@ def get_default_metrics(task, metrics=None):
             return ["recon_loss", "cosine_sim"]
         elif "grace" in task:
             return ["loss", "loss_view1", "loss_view2"]
-        elif "linkpred" in task:
+        elif "vgae" in task:
             return ["loss", "accuracy", "auroc"]
         elif "dgi" in task:
             return ["loss", "loss_positive", "loss_negative", "accuracy"]

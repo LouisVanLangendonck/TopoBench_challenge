@@ -8,7 +8,7 @@ feature_encoder:
   encoder_name: AllCellFeatureEncoder
   in_channels: ${infer_in_channels:${dataset},${oc.select:transforms,null}}
   out_channels: 128
-  proj_dropout: 0.0
+  proj_dropout: 0.2
 
 backbone:
   _target_: topobench.nn.backbones.GPSEncoder
@@ -28,9 +28,9 @@ backbone_wrapper:
   out_channels: ${model.feature_encoder.out_channels}
   num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
   # GraphCL-specific parameters
-  aug1: mask_attr  # Options: drop_node, drop_edge, mask_attr, subgraph
-  aug2: drop_edge  # Options: drop_node, drop_edge, mask_attr, subgraph
-  aug_ratio1: 0.2
+  aug1: drop_node  # Options: drop_node, drop_edge, mask_attr, subgraph
+  aug2: drop_node  # Options: drop_node, drop_edge, mask_attr, subgraph
+  aug_ratio1: 0.0
   aug_ratio2: 0.2
   readout_type: sum  # Options: mean, max, sum
   # Augmentation variant knobs (match official repo sub-directory)
@@ -46,9 +46,9 @@ readout:
   hidden_dim: ${model.feature_encoder.out_channels}
   out_channels: ${model.feature_encoder.out_channels}
   task_level: graph
-  pooling_type: sum
+  pooling_type: mean
   # GraphCL readout specific parameters
-  projection_type: mlp  # Options: none, linear, mlp
+  projection_type: linear  # Options: none, linear, mlp
   projection_hidden_dim: ${model.feature_encoder.out_channels}  # Hidden dim for MLP projection
 
 # compile model for faster training with pytorch 2.0
