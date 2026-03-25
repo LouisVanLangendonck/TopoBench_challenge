@@ -1,0 +1,5 @@
+# Transform configuration for MVGRL (graph-level tasks)
+# Requires precomputed diffusion (PPR or Heat Kernel) matrix
+
+defaults:
+  - /transforms/liftings@_here_: ppr_diffusion
