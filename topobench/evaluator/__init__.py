@@ -36,6 +36,7 @@ METRICS = {
 from .base import AbstractEvaluator  # noqa: E402
 from .evaluator import TBEvaluator  # noqa: E402
 from .graphmaev2_evaluator import GraphMAEv2Evaluator
+from .dgmae_evaluator import DGMAEEvaluator
 from .grace_evaluator import GRACEEvaluator
 from .vgae_evaluator import VGAEEvaluator
 from .dgi_evaluator import DGIEvaluator
@@ -47,6 +48,7 @@ __all__ = [
     "AbstractEvaluator",
     "TBEvaluator",
     "GraphMAEv2Evaluator",
+    "DGMAEEvaluator",
     "GRACEEvaluator",
     "VGAEEvaluator",
     "DGIEvaluator",

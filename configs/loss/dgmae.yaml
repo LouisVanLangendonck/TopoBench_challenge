@@ -1,0 +1,16 @@
+# DGMAE Loss Configuration
+# Based on: https://github.com/zhengziyu77/DGMAE
+
+_target_: topobench.loss.TBLoss
+
+dataset_loss:
+  _target_: topobench.loss.dataset.DGMAELoss
+  loss_type: sce  # Options: sce, mse
+  alpha_recon: 2  # Alpha parameter (γ₁) for reconstruction SCE loss
+  alpha_hetero: 4  # Alpha parameter (γ₂) for discrepancy SCE loss
+  lam: 0.1  # Lambda: L = (1-λ)·L_f + λ·L_d. Use ~0.1 for homophilic, ~0.7-0.8 for heterophilic
+
+modules_losses:
+  feature_encoder: ${oc.select:model.feature_encoder.loss,null}
+  backbone: ${oc.select:model.backbone.loss,null}
+  readout: ${oc.select:model.readout.loss,null}
