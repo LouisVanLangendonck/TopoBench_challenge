@@ -354,6 +354,16 @@ class TBModel(LightningModule):
         """
         self.log_metrics(mode="test")
 
+    def on_before_zero_grad(self, optimizer) -> None:
+        r"""Lightning hook called after optimizer.step() and before optimizer.zero_grad().
+        
+        This is the correct place to update the target encoder in BGRL:
+        - After the online encoder has been updated by the optimizer
+        - Before the next forward pass
+        """
+        if hasattr(self.backbone, 'update_target_encoder'):
+            self.backbone.update_target_encoder()
+
     def on_train_epoch_start(self) -> None:
         r"""Lightning hook that is called when a train epoch begins.
 

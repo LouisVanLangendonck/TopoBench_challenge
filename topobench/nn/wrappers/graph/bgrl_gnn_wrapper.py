@@ -104,7 +104,7 @@ class BGRLGNNWrapper(AbstractWrapper):
             edge_index,
             p=drop_rate,
             force_undirected=self.force_undirected,
-            training=True,
+            training=self.training,
         )
         edge_attr_aug = edge_attr[edge_mask] if edge_attr is not None else None
         return edge_index_aug, edge_attr_aug
@@ -144,7 +144,16 @@ class BGRLGNNWrapper(AbstractWrapper):
             return encoder(x, edge_index, **encoder_kwargs)
 
     def forward(self, batch):
-        r"""Create two views and encode them with online/target encoders."""
+        r"""Create two views and cross-encode with online/target encoders.
+        
+        BGRL architecture per the official paper:
+        - Online encoder processes view 1 → predictor → compared with target(view 2)
+        - Symmetrically: online encoder processes view 2 → predictor → compared with target(view 1)
+        
+        Both encoders see both views (with independent augmentations), and the loss
+        cross-pairs them. The target encoder EMA update happens AFTER optimizer.step()
+        via the on_before_zero_grad hook in TBModel, not during this forward pass.
+        """
         x_0 = batch.x_0
         edge_index = batch.edge_index
         batch_indices = batch.batch_0
@@ -200,9 +209,6 @@ class BGRLGNNWrapper(AbstractWrapper):
                 edge_weight=edge_weight if edge_index_2.size(1) == edge_index.size(1) else None,
                 edge_attr=edge_attr_2,
             )
-
-        if self.training:
-            self.update_target_encoder()
 
         return {
             "x_0": online_h_1,

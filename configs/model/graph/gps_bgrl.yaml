@@ -27,13 +27,10 @@ backbone_wrapper:
   wrapper_name: BGRLGNNWrapper
   out_channels: ${model.feature_encoder.out_channels}
   num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
-  # Augmentations: stronger / more symmetric views → harder SSL task, often less train/val gap.
-  # If loss becomes noisy or val collapses, back off ~0.05 on drops or restore momentum 0.99.
-  # Upstream bgrl defaults in code: edge 0.1/0.2, feature 0.3/0.2, momentum 0.99.
-  drop_edge_rate_1: 0.5
-  drop_edge_rate_2: 0.5
-  drop_feature_rate_1: 0.5
-  drop_feature_rate_2: 0.5
+  drop_edge_rate_1: 0.2
+  drop_edge_rate_2: 0.2
+  drop_feature_rate_1: 0.2
+  drop_feature_rate_2: 0.2
   momentum: 0.999
   # Thing Claude added to be able to turn off when having a directed graph, that edge deletion can be done in a directed way! Keep True normally
   force_undirected: true
