@@ -363,8 +363,8 @@ def detect_pretraining_method(config: dict) -> str:
             return "graphmae"
         elif "GraphCL" in wrapper_target:
             return "graphcl"
-        elif "LinkPred" in wrapper_target:
-            return "linkpred"
+        elif "VAEGNNWrapper" in wrapper_target:
+            return "vgae"
     
     loss_config = config.get("loss", {})
     dataset_loss = loss_config.get("dataset_loss", {})
@@ -380,13 +380,15 @@ def detect_pretraining_method(config: dict) -> str:
         return "bgrl"
     elif "GraphMAE" in loss_target:
         return "graphmae"
-    elif "LinkPred" in loss_target:
-        return "linkpred"
+    elif "VAELoss" in loss_target:
+        return "vgae"
     
     # Fallback: detect directly from dataset task when wrapper/loss metadata is missing.
     dataset_task = str(config.get("dataset", {}).get("parameters", {}).get("task", "")).lower()
     if dataset_task == "bgrl":
         return "bgrl"
+    if dataset_task == "vgae":
+        return "vgae"
 
     # Check if it's supervised community detection
     dataset_config = config.get("dataset", {})
@@ -540,7 +542,9 @@ def replace_ssl_backbone_with_gnn_wrapper(tb_model, *, verbose: bool = True) -> 
     These are left out of the forward path on purpose; they only served the pretraining loss:
 
     - **GraphMAEv2**: ``enc_mask_token``, latent ``projector`` / ``predictor``, EMA teacher copies.
-    - **GraphCL / GRACE / LinkPred**: no learnable params in the wrapper besides ``ln_*`` and backbone.
+    - **GraphCL / GRACE**: no learnable params in the wrapper besides ``ln_*`` and backbone.
+    - **VGAE** (``VAEGNNWrapper``): inner ``GPSEncoder`` (or GCN) is kept; ``fc_mu`` / ``fc_logvar``
+      and edge sampling are dropped — downstream uses full-graph message passing like ``GNNWrapper``.
     - **DGI**: wrapper is only the GNN + corruption logic; readout/discriminator lives under
       ``tb_model.readout`` (still loaded, unused by ``TBModelNodeEncoder``).
     - **BGRL**: the **target** encoder (``bb.backbone``) is unused; we keep **online_encoder** as
@@ -561,9 +565,9 @@ def replace_ssl_backbone_with_gnn_wrapper(tb_model, *, verbose: bool = True) -> 
         "GraphCLGNNWrapper",
         "GraphMAEv2GNNWrapper",
         "DGIGNNWrapper",
-        "LinkPredGNNWrapper",
         "BGRLGNNWrapper",
         "GRACEGNNWrapper",
+        "VAEGNNWrapper",
     })
 
     bb = getattr(tb_model, "backbone", None)
