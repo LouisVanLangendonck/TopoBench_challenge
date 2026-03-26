@@ -9,19 +9,19 @@ loader:
     generation_parameters:
       task: community_detection
       universe_parameters:
-        K: 5
+        K: 20
         feature_dim: 15
-        center_variance: 0.01
-        cluster_variance: 1.0
-        edge_propensity_variance: 0.0
+        center_variance: 0.2
+        cluster_variance: 0.5
+        edge_propensity_variance: 0.5
         seed: 42
       family_parameters:
         n_graphs: 1000
-        n_nodes_range: [50, 50]
-        n_communities_range: [4,5]
+        n_nodes_range: [30, 50]
+        n_communities_range: [3,7]
         homophily_range: [0.4, 0.6]
-        avg_degree_range: [1.5, 2.5]
-        degree_separation_range: [1.0, 1.0]
+        avg_degree_range: [2.0, 3.0]
+        degree_separation_range: [0.5, 0.5]
         power_law_exponent_range: [1.5, 2.5]
         seed: ${dataset.loader.parameters.generation_parameters.universe_parameters.seed}
 

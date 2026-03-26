@@ -27,9 +27,27 @@ FEATURE_SIGNALS = [
 ]
 
 STRUCTURAL_SIGNALS = [
-    ("Low", {"edge_propensity_variance": "0.0", "degree_separation_range": r"\[0.0,0.0\]"}),
-    ("Medium", {"edge_propensity_variance": "0.5", "degree_separation_range": r"\[0.5,0.5\]"}),
-    ("High", {"edge_propensity_variance": "1.0", "degree_separation_range": r"\[0.9,0.9\]"}),
+    (
+        "Low",
+        {
+            "edge_propensity_variance": "0.0",
+            "degree_separation_range": r"\[0.0,0.0\]",
+        },
+    ),
+    (
+        "Medium",
+        {
+            "edge_propensity_variance": "0.5",
+            "degree_separation_range": r"\[0.5,0.5\]",
+        },
+    ),
+    (
+        "High",
+        {
+            "edge_propensity_variance": "1.0",
+            "degree_separation_range": r"\[0.9,0.9\]",
+        },
+    ),
 ]
 
 
@@ -106,11 +124,14 @@ COMMAND_TEMPLATE = r"""python -m topobench \
     dataset.loader.parameters.generation_parameters.family_parameters.power_law_exponent_range=\[2.0,2.0\] \
     trainer.max_epochs=100 \
     trainer.min_epochs=5 \
+    model.feature_encoder.encoder_name=LinearFeatureEncoder \
     model.feature_encoder.out_channels=256 \
     model.feature_encoder.proj_dropout=0.2 \
     model.backbone.num_layers=2,4 \
+    model.backbone.heads=4 \
+    model.backbone.dropout=0.0 \
     optimizer.parameters.lr=0.001 \
-    optimizer.parameters.weight_decay=0 \
+    optimizer.parameters.weight_decay=0,0.0001 \
     dataset.dataloader_params.batch_size=1 \
     trainer.devices={trainer_devices} \
     trainer.check_val_every_n_epoch=2 \
@@ -127,7 +148,7 @@ def _trainer_devices_override(device_id: int) -> str:
 
 def _wandb_tags_hydra(wandb_project: str) -> str:
     """Comma-separated tag list inside Hydra tags=[...] (project first, then fixed tags)."""
-    return f"{wandb_project},gps,graphmaev2"
+    return f"{wandb_project},gps,CD"
 
 
 def build_block(
@@ -161,17 +182,21 @@ def build_block(
     return comment, body
 
 
-def generate_script(num_devices: int, wandb_project: str) -> tuple[str, int, int]:
+def generate_script(
+    num_devices: int, wandb_project: str
+) -> tuple[str, int, int]:
     sections: list[str] = []
-    per_job = multirun_product_from_command_block(COMMAND_TEMPLATE.format(
-        center_variance="0.2",
-        cluster_variance="0.4",
-        edge_propensity_variance="1.0",
-        degree_separation_range=r"\[0.5,0.5\]",
-        trainer_devices=_trainer_devices_override(0),
-        wandb_project=wandb_project,
-        wandb_tags=_wandb_tags_hydra(wandb_project),
-    ))
+    per_job = multirun_product_from_command_block(
+        COMMAND_TEMPLATE.format(
+            center_variance="0.2",
+            cluster_variance="0.4",
+            edge_propensity_variance="1.0",
+            degree_separation_range=r"\[0.5,0.5\]",
+            trainer_devices=_trainer_devices_override(0),
+            wandb_project=wandb_project,
+            wandb_tags=_wandb_tags_hydra(wandb_project),
+        )
+    )
 
     cmd_index = 0
     for f_name, f_params in FEATURE_SIGNALS:
@@ -210,7 +235,8 @@ def generate_script(num_devices: int, wandb_project: str) -> tuple[str, int, int
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     root = Path(__file__).resolve().parents[1]
-    default_out = root / "scripts" / "run_CD_grid_transductive.sh"
+    default_out = root / "scripts" / "run_CD_grid_transductive_rq1.sh"
+    default_wandb_project = default_out.stem
     parser.add_argument(
         "-o",
         "--output",
@@ -225,9 +251,12 @@ def main() -> int:
     )
     parser.add_argument(
         "--wandb-project",
-        required=True,
         metavar="NAME",
-        help="W&B project (sets logger.wandb.project and the first Hydra tag)",
+        default=default_wandb_project,
+        help=(
+            "W&B project (sets logger.wandb.project and the first Hydra tag; "
+            f"default: {default_wandb_project})"
+        ),
     )
     parser.add_argument(
         "--num-devices",
@@ -245,7 +274,9 @@ def main() -> int:
         print("--num-devices must be >= 1", file=sys.stderr)
         return 2
 
-    script, per_job, total_runs = generate_script(args.num_devices, args.wandb_project)
+    script, per_job, total_runs = generate_script(
+        args.num_devices, args.wandb_project
+    )
     print(
         f"Per-job Hydra grid size: {per_job}",
         file=sys.stderr,

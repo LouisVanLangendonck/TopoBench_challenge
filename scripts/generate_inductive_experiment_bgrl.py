@@ -105,10 +105,10 @@ def multirun_product_from_command_block(block: str) -> int:
 # Paths match configs/dataset/graph/GraphUniverse_graphmaev2.yaml (loader.parameters.generation_parameters).
 # No space after '=' before \\[...\\] — a space splits the shell word and breaks Hydra's lexer.
 COMMAND_TEMPLATE = r"""python -m topobench \
-    dataset=graph/GraphUniverse_graphcl \
-    model=graph/gps_graphcl \
-    loss=graphcl \
-    evaluator=graphcl \
+    dataset=graph/GraphUniverse_bgrl \
+    model=graph/gps_bgrl \
+    loss=bgrl \
+    evaluator=bgrl \
     dataset.loader.parameters.generation_parameters.universe_parameters.K=30 \
     dataset.loader.parameters.generation_parameters.universe_parameters.center_variance={center_variance} \
     dataset.loader.parameters.generation_parameters.universe_parameters.cluster_variance={cluster_variance} \
@@ -122,7 +122,7 @@ COMMAND_TEMPLATE = r"""python -m topobench \
     dataset.loader.parameters.generation_parameters.family_parameters.avg_degree_range=\[2.0,3.0\] \
     dataset.loader.parameters.generation_parameters.family_parameters.degree_separation_range={degree_separation_range} \
     dataset.loader.parameters.generation_parameters.family_parameters.power_law_exponent_range=\[1.5,2.5\] \
-    trainer.max_epochs=40 \
+    trainer.max_epochs=50 \
     trainer.min_epochs=5 \
     model.feature_encoder.encoder_name=LinearFeatureEncoder \
     model.feature_encoder.out_channels=256 \
@@ -133,17 +133,11 @@ COMMAND_TEMPLATE = r"""python -m topobench \
     optimizer.parameters.lr=0.001 \
     optimizer.parameters.weight_decay=0,0.0001 \
     dataset.dataloader_params.batch_size=256 \
-    model.backbone_wrapper.aug1=subgraph \
-    model.backbone_wrapper.aug2=drop_edge,drop_node,mask_attr \
-    model.backbone_wrapper.aug_ratio1=0.0,0.2 \
-    model.backbone_wrapper.aug_ratio2=0.2 \
-    model.backbone_wrapper.readout_type=mean \
-    model.backbone_wrapper.mask_attr_strategy=zeros \
-    model.backbone_wrapper.edge_perturbation_mode=drop_only \
-    model.backbone_wrapper.subgraph_ratio_meaning=keep \
-    model.backbone_wrapper.readout_type=mean \
-    model.readout.pooling_type=mean \
-    model.readout.projection_type=linear \
+    model.backbone_wrapper.drop_edge_rate_1=0.0,0.2 \
+    model.backbone_wrapper.drop_edge_rate_2=0.2 \
+    model.backbone_wrapper.drop_feature_rate_1=0.0,0.2 \
+    model.backbone_wrapper.drop_feature_rate_2=0.2 \
+    model.backbone_wrapper.momentum=0.990,0.999 \
     trainer.devices={trainer_devices} \
     trainer.check_val_every_n_epoch=2 \
     callbacks.early_stopping.patience=5 \
@@ -159,7 +153,7 @@ def _trainer_devices_override(device_id: int) -> str:
 
 def _wandb_tags_hydra(wandb_project: str) -> str:
     """Comma-separated tag list inside Hydra tags=[...] (project first, then fixed tags)."""
-    return f"{wandb_project},gps,GraphCL"
+    return f"{wandb_project},gps,bgrl"
 
 
 def build_block(
@@ -246,7 +240,7 @@ def generate_script(
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     root = Path(__file__).resolve().parents[1]
-    default_out = root / "scripts" / "run_graphcl_grid_inductive_rq1.sh"
+    default_out = root / "scripts" / "run_bgrl_grid_inductive_rq1.sh"
     default_wandb_project = default_out.stem
     parser.add_argument(
         "-o",
