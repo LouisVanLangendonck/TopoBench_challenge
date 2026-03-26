@@ -9,11 +9,11 @@ loader:
 # Dataset parameters
 parameters:
   num_features: 37
-  num_classes: 1  # Not used for GraphMAE reconstruction
-  task: graphmae
-  loss_type: sce
-  monitor_metric: recon_loss
-  task_level: node  # GraphMAE does node-level reconstruction
+  num_classes: 1
+  task: graphmaev2
+  loss_type: sce  # Used internally by GraphMAEv2 loss
+  monitor_metric: cosine_sim  # Track cosine similarity
+  task_level: node
 
 #splits
 split_params:

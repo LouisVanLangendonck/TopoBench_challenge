@@ -67,7 +67,9 @@ class GraphMAEv2Evaluator(AbstractEvaluator):
         """
         x_reconstructed = model_out["x_reconstructed"].detach().cpu()
         x_original = model_out["x_original"].detach().cpu()
-        
+        if not x_original.is_floating_point():
+            x_original = x_original.float()
+
         # Compute and update each metric
         if "recon_loss" in self.metric_names:
             if "loss_rec" in model_out:

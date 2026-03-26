@@ -56,6 +56,9 @@ class GraphMAEv2Loss(AbstractLoss):
         """
         x_reconstructed = model_out["x_reconstructed"]
         x_original = model_out["x_original"]
+        # Raw node features (e.g. ZINC atom indices) are often integer; SCE/MSE need floats.
+        if not x_original.is_floating_point():
+            x_original = x_original.to(dtype=x_reconstructed.dtype)
         latent_loss = model_out.get("latent_loss", torch.tensor(0.0, device=x_reconstructed.device))
 
         # Compute reconstruction loss
