@@ -1,0 +1,14 @@
+# GraphMAEv2 Evaluator Configuration
+
+_target_: topobench.evaluator.graphmaev2_evaluator.GraphMAEv2Evaluator
+
+# GraphMAEv2 evaluator tracks:
+# - recon_loss: Mean reconstruction loss
+# - latent_loss: Mean latent representation loss  
+# - cosine_sim: Mean cosine similarity (higher is better)
+# - total_loss: Combined loss
+metrics:
+  - recon_loss
+  - latent_loss
+  - cosine_sim
+

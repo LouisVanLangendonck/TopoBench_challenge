@@ -1,0 +1,15 @@
+# GRACE Evaluator Configuration
+
+_target_: topobench.evaluator.grace_evaluator.GRACEEvaluator
+
+# GRACE evaluator tracks:
+# - loss: Total contrastive loss
+# - loss_view1: Loss for view 1 direction
+# - loss_view2: Loss for view 2 direction
+# - cosine_sim: Cosine similarity between views (optional)
+metrics:
+  - loss
+  - loss_view1
+  - loss_view2
+
+

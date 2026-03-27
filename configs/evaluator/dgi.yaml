@@ -1,0 +1,16 @@
+# DGI Evaluator Configuration
+
+_target_: topobench.evaluator.dgi_evaluator.DGIEvaluator
+
+# DGI evaluator tracks:
+# - loss: Total DGI loss (binary cross-entropy)
+# - loss_positive: Loss on positive samples (real node-summary pairs)
+# - loss_negative: Loss on negative samples (corrupted node-summary pairs)
+# - accuracy: Discrimination accuracy
+metrics:
+  - loss
+  - loss_positive
+  - loss_negative
+  - accuracy
+
+

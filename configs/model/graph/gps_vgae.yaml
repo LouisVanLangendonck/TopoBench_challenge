@@ -1,0 +1,47 @@
+_target_: topobench.model.TBModel
+
+model_name: gps_vgae
+model_domain: graph
+
+feature_encoder:
+  _target_: topobench.nn.encoders.${model.feature_encoder.encoder_name}
+  encoder_name: LinearFeatureEncoder
+  in_channels: ${infer_in_channels:${dataset},${oc.select:transforms,null}}
+  out_channels: 256
+  proj_dropout: 0.1
+
+backbone:
+  _target_: topobench.nn.backbones.GPSEncoder
+  input_dim: ${model.feature_encoder.out_channels}
+  hidden_dim: ${model.feature_encoder.out_channels}
+  num_layers: 4
+  dropout: 0.3
+  heads: 4
+  attn_type: multihead
+  local_conv_type: gin
+
+backbone_wrapper:
+  _target_: topobench.nn.wrappers.VAEGNNWrapper
+  _partial_: true
+  wrapper_name: VAEGNNWrapper
+  out_channels: ${model.feature_encoder.out_channels}
+  num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
+  residual_connections: false
+  edge_sample_ratio: 0.2
+  neg_sample_ratio: 1.0
+  sampling_method: sparse
+  latent_dim: 32
+  variational: true
+
+readout:
+  _target_: topobench.nn.readouts.${model.readout.readout_name}
+  readout_name: VGAEReadOut
+  num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
+  hidden_dim: ${model.backbone_wrapper.latent_dim}
+  out_channels: 1
+  task_level: ${dataset.parameters.task_level}
+  pooling_type: mean
+  decoder_type: dot
+  decoder_hidden_dim: 256
+
+compile: false

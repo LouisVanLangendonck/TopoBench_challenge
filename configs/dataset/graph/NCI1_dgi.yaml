@@ -1,0 +1,30 @@
+loader:
+  _target_: topobench.data.loaders.TUDatasetLoader
+  parameters: 
+    data_domain: graph
+    data_type: TUDataset
+    data_name: NCI1
+    data_dir: ${paths.data_dir}/${dataset.loader.parameters.data_domain}/${dataset.loader.parameters.data_type}
+
+# Dataset parameters
+parameters:
+  num_features: 37
+  num_classes: 1  # Binary classification (positive vs negative samples)
+  task: dgi
+  monitor_metric: accuracy  # Track discrimination accuracy
+  task_level: node  # Node-level embeddings
+
+#splits
+split_params:
+  learning_setting: inductive
+  data_split_dir: ${dataset.loader.parameters.data_dir}/data_splits
+  data_seed: 0
+  split_type: random #'k-fold' # either "k-fold" or "random" strategies
+  k: 10 # for "k-fold" Cross-Validation
+  train_prop: 0.7 # for "random" strategy splitting
+
+# Dataloader parameters
+dataloader_params:
+  batch_size: 32  # Multiple graphs for graph_diffusion corruption
+  num_workers: 0
+  pin_memory: False

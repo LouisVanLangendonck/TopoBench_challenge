@@ -1,0 +1,37 @@
+# Transductive downstream evaluation grid (run_downstream_eval_grid_transductive.py)
+# Run from repo root, e.g.:
+#   python downstream_adaptation/run_downstream_eval_grid_transductive.py --config downstream_adaptation/grid_configs/grid_transductive.yaml
+
+run_dirs: null
+wandb_pretrain_project: dgi_grid_transductive
+
+fetch_filters:
+  state: finished
+min_runs: 1
+
+modes:
+  - linear-probe
+  - random-init-linear-probe
+
+# Few-shot: set n_train to a list, e.g. [20, 30, 50]. null = use full training split from dataset config.
+n_train: [20]
+n_evaluation: 500
+data_seed: 0
+
+# Optional GraphUniverse overrides (same semantics as inductive grid).
+graphuniverse_overrides:
+  - null
+
+epochs: 200
+lr: 0.001
+patience: 10
+classifier_dropout: 0.0
+input_dropout: null
+device: cuda:0
+# Max concurrent jobs; each uses a distinct GPU (see eval_devices). 1 = sequential.
+parallel_workers: 4
+eval_devices: null
+seed: 42
+wandb_project: dgi_downstream_results_transductive
+save_results: true
+confirm_before_run: true

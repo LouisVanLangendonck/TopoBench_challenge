@@ -1,0 +1,49 @@
+_target_: topobench.model.TBModel
+
+model_name: gps_dgi
+model_domain: graph
+
+feature_encoder:
+  _target_: topobench.nn.encoders.${model.feature_encoder.encoder_name}
+  encoder_name: LinearFeatureEncoder
+  in_channels: ${infer_in_channels:${dataset},${oc.select:transforms,null}}
+  out_channels: 512
+  proj_dropout: 0.1
+
+backbone:
+  _target_: topobench.nn.backbones.GPSEncoder
+  input_dim: ${model.feature_encoder.out_channels}
+  hidden_dim: ${model.feature_encoder.out_channels}
+  num_layers: 4
+  dropout: 0.3
+  heads: 4
+  attn_type: multihead
+  local_conv_type: gin
+
+# Use DGIGNNWrapper for corruption and dual encoding
+backbone_wrapper:
+  _target_: topobench.nn.wrappers.DGIGNNWrapper 
+  _partial_: true
+  wrapper_name: DGIGNNWrapper
+  out_channels: ${model.feature_encoder.out_channels}
+  num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
+  # DGI specific parameters
+  corruption_type: graph_diffusion
+  # Options: feature_shuffle (transductive or inductive), graph_diffusion (inductive) (Graph diffusion is just shuffling graphs. We now do it within batch always random but might need to revisit at some point.. )
+  verbose: false  # Set to true to see detailed graph pairing logs for all batches
+
+# DGIReadOut handles graph summary and discrimination
+readout:
+  _target_: topobench.nn.readouts.${model.readout.readout_name}
+  readout_name: DGIReadOut
+  num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
+  hidden_dim: ${model.feature_encoder.out_channels}
+  out_channels: 1  # Binary discrimination
+  task_level: ${dataset.parameters.task_level}
+  pooling_type: mean
+  # DGI readout specific parameters
+  readout_type: mean  # Options: mean, sum, max
+
+# compile model for faster training with pytorch 2.0
+compile: false
+

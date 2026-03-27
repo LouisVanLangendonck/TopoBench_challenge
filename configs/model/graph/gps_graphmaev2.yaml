@@ -1,0 +1,57 @@
+_target_: topobench.model.TBModel
+
+model_name: gps_graphmaev2
+model_domain: graph
+
+feature_encoder:
+  _target_: topobench.nn.encoders.${model.feature_encoder.encoder_name}
+  encoder_name: LinearFeatureEncoder
+  in_channels: ${infer_in_channels:${dataset},${oc.select:transforms,null}}
+  out_channels: 512
+  proj_dropout: 0.1
+
+backbone:
+  _target_: topobench.nn.backbones.GPSEncoder
+  input_dim: ${model.feature_encoder.out_channels}
+  hidden_dim: ${model.feature_encoder.out_channels}
+  num_layers: 4
+  dropout: 0.3
+  heads: 2
+  attn_type: multihead
+  local_conv_type: gin
+
+# Use GraphMAEv2GNNWrapper for masking, EMA encoder, and latent loss
+backbone_wrapper:
+  _target_: topobench.nn.wrappers.GraphMAEv2GNNWrapper 
+  _partial_: true
+  wrapper_name: GraphMAEv2GNNWrapper
+  out_channels: ${model.feature_encoder.out_channels}
+  num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
+  mask_rate: 0.9 
+  replace_rate: 0.0
+  drop_edge_rate: 0.0
+  momentum: 0.99 
+  delayed_ema_epoch: 0  
+  lam: 0.8  # Balance between reconstruction and latent matching
+
+# GraphMAEv2ReadOut handles the decoder with re-masking
+readout:
+  _target_: topobench.nn.readouts.${model.readout.readout_name}
+  readout_name: GraphMAEv2ReadOut
+  num_cell_dimensions: ${infer_num_cell_dimensions:${oc.select:model.feature_encoder.selected_dimensions,null},${model.feature_encoder.in_channels}}
+  hidden_dim: ${model.feature_encoder.out_channels}
+  # Reconstruct RAW features only (SaveRawNodeFeatures target); not raw+PSE.
+  out_channels: ${dataset.parameters.num_features}
+  task_level: ${dataset.parameters.task_level}
+  pooling_type: mean
+  # GraphMAEv2 readout specific parameters - aggressive for challenge
+  decoder_type: gcn  # GNN-based decoder as in GraphMAEv2 paper (supports re-masking via message passing). Options: gat, gcn, mlp, linear.
+  # ! If selecting an mlp decoder, set the num_remasking to 1 and remask rate to 0, because none-message passing decoders do not benefit from re-masking!!
+  decoder_hidden_dim: 128
+  num_remasking: 6  # Number of different random re-masks to average (multi-view decoding). Only used with GNN decoders.
+  remask_rate: 0.75  # Percentage of nodes to mask in each re-masking iteration
+  remask_method: random 
+
+# compile model for faster training with pytorch 2.0
+compile: false
+

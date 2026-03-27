@@ -1,0 +1,15 @@
+# GRACE Loss Configuration
+
+_target_: topobench.loss.TBLoss
+
+dataset_loss:
+  _target_: topobench.loss.dataset.GRACELoss
+  tau: 0.5  # Temperature parameter
+  batch_size: null  # Batch size for memory-efficient computation. null = full matrix
+
+modules_losses:
+  feature_encoder: ${oc.select:model.feature_encoder.loss,null}
+  backbone: ${oc.select:model.backbone.loss,null}
+  readout: ${oc.select:model.readout.loss,null}
+
+

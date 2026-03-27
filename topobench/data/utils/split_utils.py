@@ -247,17 +247,25 @@ def load_transductive_splits(dataset, parameters):
         "Dataset should have only one graph in a transductive setting."
     )
 
-    data = dataset.data_list[0]
+    # Handle both data_list and data_lst attributes
+    if hasattr(dataset, 'data_list'):
+        data = dataset.data_list[0]
+    elif hasattr(dataset, 'data_lst'):
+        data = dataset.data_lst[0]
+    else:
+        data = dataset[0]
+    
     labels = data.y.numpy()
 
     # Ensure labels are one dimensional array
     assert len(labels.shape) == 1, "Labels should be one dimensional array"
 
-    root = (
-        dataset.dataset.get_data_dir()
-        if hasattr(dataset.dataset, "get_data_dir")
-        else None
-    )
+    # Get root directory for saving splits
+    root = None
+    if hasattr(dataset, 'dataset') and hasattr(dataset.dataset, "get_data_dir"):
+        root = dataset.dataset.get_data_dir()
+    elif hasattr(data, 'root'):
+        root = data.root
 
     if parameters.split_type == "random":
         splits = random_splitting(labels, parameters, root=root)

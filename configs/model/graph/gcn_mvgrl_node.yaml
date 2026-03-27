@@ -1,0 +1,37 @@
+# MVGRL model configuration for NODE-LEVEL tasks (transductive learning)
+# Paper: "Contrastive Multi-View Representation Learning on Graphs" (ICML 2020)
+# https://arxiv.org/abs/2006.05582
+#
+# For node classification, negatives come from SHUFFLED FEATURES.
+# From the paper: "To generate negative samples in transductive tasks, 
+# we randomly shuffle the features"
+# 
+# Subsampling: Random windows of nodes are extracted and treated as 
+# independent graphs in a batch (from original code: sample_size=2000, batch_size=4)
+#
+# Recommended: num_layers=1 (following DGI convention)
+
+_target_: topobench.nn.wrappers.graph.MVGRLWrapper
+
+# GCN backbone (not used internally, kept for TopoBench compatibility)
+backbone:
+  _target_: topobench.nn.backbones.graph.GCNBackbone
+  
+# Wrapper parameters
+wrapper:
+  _target_: topobench.nn.wrappers.graph.mvgrl_gnn_wrapper.MVGRLWrapper
+  num_layers: 1
+  negative_sampling: feature_shuffle  # Transductive: negatives from shuffled features
+  sample_size: 2000  # Nodes per subgraph window (from original code)
+  subsample_batch_size: 4  # Number of subgraph windows per batch (from original code)
+  diff_edge_index_attr: edge_index_diff
+  diff_edge_weight_attr: edge_weight_diff
+
+# Readout for node classification
+readout:
+  _target_: topobench.nn.readouts.mvgrl_readout.MVGRLReadOut
+  task_level: node
+  pooling_type: sum
+  
+# Model defaults
+task_level: node

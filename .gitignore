@@ -185,6 +185,9 @@ notebooks/tmp
 /tutorials/datasets/
 /tutorials/lightning_logs/
 /tutorials/datasets/
+/plots/
+/plotting/
+/downstream_adaptation_real_world_dataset/
 
 # wandb
 wandb/
@@ -194,3 +197,4 @@ wandb/
 
 # test temporary
 .test_tmp/
+uv.lock

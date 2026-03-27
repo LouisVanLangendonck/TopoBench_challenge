@@ -1,0 +1,14 @@
+# DGMAE Evaluator Configuration
+# Based on: https://github.com/zhengziyu77/DGMAE
+
+_target_: topobench.evaluator.dgmae_evaluator.DGMAEEvaluator
+
+# DGMAE evaluator tracks:
+# - recon_loss: Mean reconstruction loss (L_f)
+# - hetero_loss: Mean heterophily/discrepancy loss (L_d)
+# - cosine_sim: Mean cosine similarity (higher is better)
+# - total_loss: Combined loss
+metrics:
+  - recon_loss
+  - hetero_loss
+  - cosine_sim

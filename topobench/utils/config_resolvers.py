@@ -140,7 +140,7 @@ def get_monitor_metric(task, metric):
     Parameters
     ----------
     task : str
-        Task, either "classification" or "regression".
+        Task, either "classification", "regression", "graphmaev2", "grace", "vgae", etc.
     metric : str
         Name of the metric function.
 
@@ -158,6 +158,7 @@ def get_monitor_metric(task, metric):
         task == "classification"
         or task == "regression"
         or task == "multilabel classification"
+        or task in ["graphmaev2", "grace", "vgae", "dgi", "graphcl", "bgrl"]
     ):
         return f"val/{metric}"
     else:
@@ -170,7 +171,7 @@ def get_monitor_mode(task):
     Parameters
     ----------
     task : str
-        Task, either "classification" or "regression".
+        Task, either "classification", "regression", "graphmaev2", "grace", "vgae", etc.
 
     Returns
     -------
@@ -182,10 +183,21 @@ def get_monitor_mode(task):
     ValueError
         If the task is invalid.
     """
-    if task == "classification" or task == "multilabel classification":
+    if (
+        task == "classification"
+        or task == "multilabel classification"
+        or task == "graphmaev2"  # GraphMAEv2: maximize cosine similarity
+        or task == "vgae"  # VGAE edge pretraining: maximize accuracy/auroc
+        or task == "dgi"  # DGI: maximize discrimination accuracy
+        or task == "bgrl"  # BGRL: maximize cosine similarity
+        ):
         return "max"
 
-    elif task == "regression":
+    elif (
+        task == "regression"
+        or task == "grace"  # GRACE: minimize contrastive loss
+        or task == "graphcl"  # GraphCL: minimize contrastive loss
+        ):
         return "min"
 
     else:
@@ -257,6 +269,27 @@ def check_pses_in_transforms(transforms):
             added_features += transforms[key].get("max_pe_dim")
 
     return added_features
+
+
+def get_raw_feature_dim(in_channels):
+    r"""Extract the raw feature dimension from in_channels list.
+    
+    For GraphMAE/GraphMAEv2, we need to reconstruct raw features.
+    This helper extracts the first dimension from the in_channels list.
+    
+    Parameters
+    ----------
+    in_channels : list or int
+        Input channels (can be list like [15] or int like 15).
+    
+    Returns
+    -------
+    int
+        The raw feature dimension (e.g., 15).
+    """
+    if isinstance(in_channels, list):
+        return in_channels[0]
+    return in_channels
 
 
 def infer_in_channels(dataset, transforms):
@@ -474,7 +507,7 @@ def get_default_metrics(task, metrics=None):
     Parameters
     ----------
     task : str
-        Task, either "classification" or "regression".
+        Task, either "classification", "regression", "graphmaev2", "grace", "vgae", or "dgi".
     metrics : list, optional
         List of metrics to be used. If None, the default metrics will be used.
 
@@ -495,5 +528,17 @@ def get_default_metrics(task, metrics=None):
             return ["accuracy", "precision", "recall", "auroc"]
         elif "regression" in task:
             return ["mse", "mae"]
+        elif "graphmae" in task:
+            return ["recon_loss", "cosine_sim"]
+        elif "grace" in task:
+            return ["loss", "loss_view1", "loss_view2"]
+        elif "vgae" in task:
+            return ["loss", "accuracy", "auroc"]
+        elif "dgi" in task:
+            return ["loss", "loss_positive", "loss_negative", "accuracy"]
+        elif "graphcl" in task:
+            return ["contrastive_loss", "alignment", "cosine_sim"]
+        elif "bgrl" in task:
+            return ["loss", "loss_12", "loss_21", "cosine_sim"]
         else:
             raise ValueError(f"Invalid task {task}")

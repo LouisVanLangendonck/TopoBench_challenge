@@ -1,0 +1,12 @@
+_target_: topobench.loss.TBLoss
+
+dataset_loss:
+  _target_: topobench.loss.dataset.VAELoss
+  # Large values encourage posterior collapse (z ~ N(0,I)) → logits ~ 0 → AUROC ~ 0.5 while ELBO still drops.
+  kl_weight: 0.05
+  pos_weight: 1.0
+
+modules_losses:
+  feature_encoder: ${oc.select:model.feature_encoder.loss,null}
+  backbone: ${oc.select:model.backbone.loss,null}
+  readout: ${oc.select:model.readout.loss,null}

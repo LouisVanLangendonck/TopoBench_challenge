@@ -95,6 +95,8 @@ class TestConfigResolvers:
         """Test get_monitor_metric."""
         out = get_monitor_metric("classification", "F1")
         assert out == "val/F1" 
+        out = get_monitor_metric("bgrl", "cosine_sim")
+        assert out == "val/cosine_sim"
         
         with pytest.raises(ValueError, match="Invalid task") as e:
             get_monitor_metric("mix", "F1")
@@ -105,6 +107,9 @@ class TestConfigResolvers:
         assert out == "min"
         
         out = get_monitor_mode("classification")
+        assert out == "max"
+        
+        out = get_monitor_mode("bgrl")
         assert out == "max"
         
         with pytest.raises(ValueError, match="Invalid task") as e:
@@ -182,6 +187,9 @@ class TestConfigResolvers:
 
         out = get_default_metrics("regression")
         assert out == ["mse", "mae"]
+        
+        out = get_default_metrics("bgrl")
+        assert out == ["loss", "loss_12", "loss_21", "cosine_sim"]
 
         with pytest.raises(ValueError, match="Invalid task") as e:
             get_default_metrics("some_task")

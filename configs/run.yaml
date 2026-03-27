@@ -8,8 +8,8 @@ defaults:
   - model: graph/gcn
   - transforms: ${get_default_transform:${dataset},${model}} #no_transform
   - optimizer: default
-  - loss: default
-  - evaluator: default
+  - loss: vgae
+  - evaluator: vgae
   - callbacks: default
   - logger: wandb # set logger here or use command line (e.g. `python train.py logger=tensorboard`)
   - trainer: ${get_default_trainer:} #default

@@ -1,0 +1,10 @@
+# MVGRL loss configuration
+# Paper: "Contrastive Multi-View Representation Learning on Graphs" (ICML 2020)
+# https://arxiv.org/abs/2006.05582
+#
+# Uses Jensen-Shannon Divergence (JSD) based mutual information maximization
+# between local (node) and global (graph) representations across views.
+
+dataset_loss:
+  _target_: topobench.loss.dataset.mvgrl_loss.MVGRLLoss
+  weight: 1.0
