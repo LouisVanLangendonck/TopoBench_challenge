@@ -22,7 +22,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import torch
 from collections import Counter
-from torch_geometric.datasets import AQSOL, TUDataset
+from torch_geometric.datasets import AQSOL, TUDataset, ZINC
+from tqdm import tqdm
+from kneed import KneeLocator
 
 # sklearn KMeans can warn on tiny graphs in IMDB-MULTI
 warnings.filterwarnings(
@@ -32,11 +34,11 @@ warnings.filterwarnings(
     module="sklearn",
 )
 
-DATASETS = ("AQSOL", "NCI1", "IMDB-MULTI")
+DATASETS = ("ZINC", "NCI1", "IMDB-MULTI")
 
 
 def load_aqsol_dataset(root: str = "./data", force_reload: bool = False):
-    print("Loading AQSOL dataset...")
+    print("Loading AQSOL dataset (train split only)...")
     aqsol_root = os.path.join(root, "AQSOL")
     if force_reload and os.path.exists(aqsol_root):
         processed_dir = os.path.join(aqsol_root, "processed")
@@ -44,27 +46,42 @@ def load_aqsol_dataset(root: str = "./data", force_reload: bool = False):
             shutil.rmtree(processed_dir)
     try:
         train_dataset = AQSOL(root=aqsol_root, split="train", force_reload=force_reload)
-        val_dataset = AQSOL(root=aqsol_root, split="val", force_reload=force_reload)
-        test_dataset = AQSOL(root=aqsol_root, split="test", force_reload=force_reload)
     except Exception as e:
         print(f"Error loading AQSOL: {e}\nAttempting force reload...")
         if os.path.exists(aqsol_root):
             shutil.rmtree(aqsol_root)
         train_dataset = AQSOL(root=aqsol_root, split="train", force_reload=True)
-        val_dataset = AQSOL(root=aqsol_root, split="val", force_reload=True)
-        test_dataset = AQSOL(root=aqsol_root, split="test", force_reload=True)
 
-    dataset = train_dataset + val_dataset + test_dataset
     print("Dataset loaded successfully!")
-    print(
-        f"Number of graphs: {len(dataset)} (train: {len(train_dataset)}, "
-        f"val: {len(val_dataset)}, test: {len(test_dataset)})"
-    )
+    print(f"Number of graphs (train): {len(train_dataset)}")
     nc = getattr(train_dataset, "num_classes", None)
     print(f"Number of classes/tasks: {nc if nc is not None else 'N/A (regression)'}")
     print(f"Number of node features: {train_dataset.num_node_features}")
     print(f"Number of edge features: {train_dataset.num_edge_features}\n")
-    return dataset
+    return train_dataset
+
+
+def load_zinc_dataset(root: str = "./data", force_reload: bool = False):
+    print("Loading ZINC dataset (train split only)...")
+    zinc_root = os.path.join(root, "ZINC")
+    if force_reload and os.path.exists(zinc_root):
+        processed_dir = os.path.join(zinc_root, "processed")
+        if os.path.exists(processed_dir):
+            shutil.rmtree(processed_dir)
+    try:
+        train_dataset = ZINC(root=zinc_root, subset=True, split="train", force_reload=force_reload)
+    except Exception as e:
+        print(f"Error loading ZINC: {e}\nAttempting force reload...")
+        if os.path.exists(zinc_root):
+            shutil.rmtree(zinc_root)
+        train_dataset = ZINC(root=zinc_root, subset=True, split="train", force_reload=True)
+
+    print("Dataset loaded successfully!")
+    print(f"Number of graphs (train): {len(train_dataset)}")
+    print(f"Number of classes/tasks: {train_dataset.num_classes if hasattr(train_dataset, 'num_classes') else 'N/A (regression)'}")
+    print(f"Number of node features: {train_dataset.num_node_features}")
+    print(f"Number of edge features: {train_dataset.num_edge_features}\n")
+    return train_dataset
 
 
 def load_nci1_dataset(root: str = "./data"):
@@ -96,6 +113,8 @@ def load_dataset(name: str, root: str):
         return load_nci1_dataset(root=root)
     if name == "IMDB-MULTI":
         return load_imdbmulti_dataset(root=root)
+    if name == "ZINC":
+        return load_zinc_dataset(root=root)
     raise ValueError(f"Unknown dataset: {name}")
 
 
@@ -307,13 +326,22 @@ def plot_distributions(stats, save_path: str, target_xlabel: str = "Target value
 
 
 def extract_node_communities_nci(nci_dataset):
+    print("Annotating NCI1 graphs with node communities...")
     annotated = []
-    for graph in nci_dataset:
+    for graph in tqdm(nci_dataset, desc="Extracting communities"):
         community_labels = graph.x.argmax(dim=1)
         graph["community_labels"] = community_labels
         annotated.append(graph)
     return annotated
 
+def extract_node_communities_zinc(zinc_dataset):
+    print("Annotating ZINC graphs with node communities...")
+    annotated = []
+    for graph in tqdm(zinc_dataset, desc="Extracting communities"):
+        community_labels = graph.x.squeeze()
+        graph["community_labels"] = community_labels
+        annotated.append(graph)
+    return annotated
 
 def _imdb_node_features(graph):
     """Degree + local clustering coefficient per node (same as original IMDB pipeline)."""
@@ -356,13 +384,14 @@ def _imdb_cluster_labels_for_graph(graph, n_clusters: int, random_state: int = 4
     return np.zeros(num_nodes, dtype=np.int64)
 
 
-def _mean_silhouette_imdb_k(dataset, n_clusters: int, random_state: int = 42) -> tuple[float, int]:
+def _mean_silhouette_imdb_k(dataset, n_clusters: int, random_state: int = 42, show_progress: bool = False) -> tuple[float, int]:
     """Mean silhouette over graphs where the score is defined."""
     from sklearn.metrics import silhouette_score
 
     scores: list[float] = []
     used = 0
-    for graph in dataset:
+    iterator = tqdm(dataset, desc=f"K={n_clusters}", leave=False) if show_progress else dataset
+    for graph in iterator:
         features, num_nodes = _imdb_node_features(graph)
         if features is None or num_nodes < 2:
             continue
@@ -390,8 +419,9 @@ def imdb_silhouette_sweep(
     ks: list[int] = []
     means: list[float] = []
     counts: list[int] = []
-    for k in k_values:
-        m, n = _mean_silhouette_imdb_k(dataset, k)
+    print(f"\nRunning silhouette sweep over K = {list(k_values)}...")
+    for k in tqdm(k_values, desc="K sweep"):
+        m, n = _mean_silhouette_imdb_k(dataset, k, show_progress=True)
         ks.append(k)
         means.append(m)
         counts.append(n)
@@ -403,6 +433,7 @@ def plot_imdb_silhouette_vs_k(
     sil_means: list[float],
     save_path: str,
     suggested_k: int | None = None,
+    knee_k: int | None = None,
 ) -> None:
     fig, ax = plt.subplots(figsize=(8, 5))
     valid = [(k, s) for k, s in zip(k_vals, sil_means) if np.isfinite(s)]
@@ -414,9 +445,15 @@ def plot_imdb_silhouette_vs_k(
     ax.set_title("IMDB-MULTI: node clustering — silhouette vs K")
     ax.grid(True, alpha=0.3)
     ax.set_xticks(k_vals)
-    if suggested_k is not None and suggested_k in k_vals:
-        ax.axvline(suggested_k, color="gray", linestyle="--", alpha=0.8, label=f"max silhouette K={suggested_k}")
+    
+    if knee_k is not None and knee_k in k_vals:
+        ax.axvline(knee_k, color="green", linestyle="--", alpha=0.8, linewidth=2, label=f"knee detected K={knee_k}")
+    if suggested_k is not None and suggested_k in k_vals and suggested_k != knee_k:
+        ax.axvline(suggested_k, color="gray", linestyle=":", alpha=0.6, label=f"max silhouette K={suggested_k}")
+    
+    if knee_k is not None or suggested_k is not None:
         ax.legend(loc="best")
+    
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -428,6 +465,26 @@ def _suggest_k_max_silhouette(k_vals: list[int], sil_means: list[float]) -> int 
     if not pairs:
         return None
     return max(pairs, key=lambda t: t[1])[0]
+
+
+def find_knee_k(k_vals: list[int], sil_means: list[float]) -> int | None:
+    """Automatic knee detection using KneeLocator."""
+    valid_pairs = [(k, s) for k, s in zip(k_vals, sil_means) if np.isfinite(s)]
+    if not valid_pairs or len(valid_pairs) < 3:
+        return None
+    
+    valid_k, valid_s = zip(*valid_pairs)
+    try:
+        kn = KneeLocator(
+            valid_k,
+            valid_s,
+            curve='concave',
+            direction='increasing',
+            S=1.0
+        )
+        return kn.knee
+    except Exception:
+        return None
 
 
 def prompt_imdb_k(
@@ -446,6 +503,10 @@ def prompt_imdb_k(
         print(f"Using IMDB node-clustering K from CLI: {preset}")
         return preset
     if non_interactive:
+        knee_k = find_knee_k(k_vals, sil_means)
+        if knee_k is not None:
+            print(f"Non-interactive: using knee-detected K = {knee_k}")
+            return knee_k
         sug = _suggest_k_max_silhouette(k_vals, sil_means)
         if sug is None:
             raise SystemExit(
@@ -455,16 +516,25 @@ def prompt_imdb_k(
         print(f"Non-interactive: using K with highest mean silhouette: {sug}")
         return sug
 
-    sug = _suggest_k_max_silhouette(k_vals, sil_means)
+    knee_k = find_knee_k(k_vals, sil_means)
+    sug = knee_k if knee_k is not None else _suggest_k_max_silhouette(k_vals, sil_means)
+    
     print("\n" + "=" * 80)
     print("IMDB-MULTI: choose K for node clustering (see silhouette plot for 'knee')")
     print("=" * 80)
     print(f"{'K':>4}  {'mean silhouette':>18}  {'graphs used':>12}")
     for k, s, n in zip(k_vals, sil_means, counts):
         ss = f"{s:.4f}" if np.isfinite(s) else "n/a"
-        print(f"{k:>4}  {ss:>18}  {n:>12}")
-    if sug is not None:
+        marker = ""
+        if knee_k is not None and k == knee_k:
+            marker = " <- knee detected"
+        print(f"{k:>4}  {ss:>18}  {n:>12}{marker}")
+    
+    if knee_k is not None:
+        print(f"\nAutomatic knee detection suggests K = {knee_k}")
+    elif sug is not None:
         print(f"\nHeuristic maximum mean silhouette at K = {sug} (you may still pick a knee).")
+    
     while True:
         raw = input(f"Enter K in {list(k_vals)} (default {sug}): ").strip()
         if not raw:
@@ -484,8 +554,9 @@ def prompt_imdb_k(
 
 
 def extract_node_communities_imdb(imdb_dataset, n_clusters: int):
+    print(f"Annotating IMDB graphs with K={n_clusters} clusters...")
     annotated_dataset = []
-    for graph in imdb_dataset:
+    for graph in tqdm(imdb_dataset, desc="Clustering nodes"):
         num_nodes = graph.num_nodes
         if num_nodes == 0:
             graph["community_labels"] = torch.tensor([], dtype=torch.long)
@@ -498,8 +569,9 @@ def extract_node_communities_imdb(imdb_dataset, n_clusters: int):
 
 
 def extract_node_communities_aqsol(aqsol_dataset):
+    print("Annotating AQSOL graphs with node communities...")
     annotated_dataset = []
-    for graph in aqsol_dataset:
+    for graph in tqdm(aqsol_dataset, desc="Extracting communities"):
         graph["community_labels"] = graph.x
         annotated_dataset.append(graph)
     return annotated_dataset
@@ -527,32 +599,39 @@ def annotate_communities(dataset_name: str, dataset, imdb_k: int | None = None):
         if imdb_k is None:
             raise ValueError("imdb_k is required for IMDB-MULTI (run silhouette sweep first).")
         return extract_node_communities_imdb(dataset, n_clusters=imdb_k)
+    if dataset_name == "ZINC":
+        return extract_node_communities_zinc(dataset)
     raise ValueError(dataset_name)
 
 
 def calculate_node_community_statistics(community_annotated_dataset):
+    print("\nCalculating community statistics...")
     unique_communities = set()
-    for graph in community_annotated_dataset:
+    for graph in tqdm(community_annotated_dataset, desc="Finding unique communities", leave=False):
         cl = graph["community_labels"]
         unique_communities.update(_community_rows(cl))
     num_unique_communities = len(unique_communities)
     print(f"(showing up to 20) {list(unique_communities)[:20]}...")
     print(f"Number of unique communities: {num_unique_communities}")
-    num_unique_comms_per_graph = [
-        len(set(_community_rows(graph["community_labels"]))) for graph in community_annotated_dataset
-    ]
+    
+    num_unique_comms_per_graph = []
+    for graph in tqdm(community_annotated_dataset, desc="Communities per graph", leave=False):
+        num_unique_comms_per_graph.append(len(set(_community_rows(graph["community_labels"]))))
+    
     distribution_of_unique_communities = Counter(num_unique_comms_per_graph)
     unique_comms_5th = np.percentile(num_unique_comms_per_graph, 5)
     unique_comms_95th = np.percentile(num_unique_comms_per_graph, 95)
     print(f"5th percentile of # unique communities per graph: {unique_comms_5th}")
     print(f"95th percentile of # unique communities per graph: {unique_comms_95th}")
+    
     distribution_of_community_size = {}
     total_nodes = 0
-    for graph in community_annotated_dataset:
+    for graph in tqdm(community_annotated_dataset, desc="Community sizes", leave=False):
         community_labels = graph["community_labels"]
         total_nodes += len(community_labels)
         for label in _community_rows(community_labels):
             distribution_of_community_size[label] = distribution_of_community_size.get(label, 0) + 1
+    
     sorted_communities_and_sizes = sorted(
         distribution_of_community_size.items(), key=lambda x: x[1], reverse=True
     )
@@ -567,8 +646,9 @@ def calculate_node_community_statistics(community_annotated_dataset):
         f"To cover 95% of all nodes, need top {num_communities_for_90pct} "
         f"communities out of {num_unique_communities}"
     )
+    
     community_homophily = []
-    for graph in community_annotated_dataset:
+    for graph in tqdm(community_annotated_dataset, desc="Computing homophily", leave=False):
         community_labels = graph["community_labels"].squeeze()
         edge_index = graph.edge_index
         src = edge_index[0]
@@ -579,6 +659,7 @@ def calculate_node_community_statistics(community_annotated_dataset):
         else:
             homophily = float("nan")
         community_homophily.append(homophily)
+    
     homophily_array = np.array([h for h in community_homophily if not np.isnan(h)])
     if len(homophily_array) > 0:
         homophily_5th = np.percentile(homophily_array, 5)
@@ -647,16 +728,14 @@ def target_xlabel_for(dataset_name: str) -> str:
         return "Target (solubility)"
     if dataset_name == "NCI1":
         return "Graph class label"
+    if dataset_name == "ZINC":
+        return "Graph class label"
     return "Graph class label"
 
 
-def graphuniverse_graph_level_k_description(dataset, dataset_name: str) -> str:
-    if dataset_name == "AQSOL":
-        return "N/A (regression — molecular solubility; no discrete graph-class K)"
-    nc = getattr(dataset, "num_classes", None)
-    if nc is not None and nc > 0:
-        return str(int(nc))
-    return "unknown"
+def graphuniverse_graph_level_k_description(community_stats: dict) -> str:
+    """K is the number of unique node community types across the entire dataset."""
+    return str(community_stats["num_unique_communities"])
 
 
 def append_graphuniverse_report_section(
@@ -669,7 +748,7 @@ def append_graphuniverse_report_section(
 ) -> None:
     """Append one dataset block; includes assumed feature/structural signal labels."""
     n_graphs = len(dataset)
-    k_desc = graphuniverse_graph_level_k_description(dataset, dataset_name)
+    k_desc = graphuniverse_graph_level_k_description(community_stats)
 
     if dataset_name == "IMDB-MULTI":
         feature_signal = "Low"
@@ -701,11 +780,11 @@ def append_graphuniverse_report_section(
         "=" * 72,
         "",
         f"n_graphs:                    {n_graphs}",
-        f"Graph-level K (classes):    {k_desc}",
+        f"K (unique node types):       {k_desc}",
     ]
     if dataset_name == "IMDB-MULTI" and imdb_chosen_k is not None:
         lines.append(
-            f"Node clustering K (IMDB):   {imdb_chosen_k}  "
+            f"Node clustering K (IMDB):    {imdb_chosen_k}  "
             "(KMeans on degree + local clustering; chosen after silhouette sweep)"
         )
     lines.extend(
@@ -758,12 +837,14 @@ def run_one(
     imdb_chosen_k: int | None = None
     if dataset_name == "IMDB-MULTI":
         k_vals, sil_means, counts = imdb_silhouette_sweep(dataset)
+        knee_k = find_knee_k(k_vals, sil_means)
         sug = _suggest_k_max_silhouette(k_vals, sil_means)
         plot_imdb_silhouette_vs_k(
             k_vals,
             sil_means,
             os.path.join(out_dir, f"{safe}_silhouette_vs_k.png"),
             suggested_k=sug,
+            knee_k=knee_k,
         )
         imdb_chosen_k = prompt_imdb_k(
             k_vals, sil_means, counts, preset=imdb_k, non_interactive=no_prompt
@@ -798,10 +879,10 @@ def main():
         choices=list(DATASETS),
         help="Subset to run (default: all three).",
     )
-    p.add_argument("--root", default="./data", help="Data root directory.")
+    p.add_argument("--root", default="./downstream_adaptation_real_world_dataset/data", help="Data root directory.")
     p.add_argument(
         "--out-dir",
-        default="./analysis_output",
+        default="./downstream_adaptation_real_world_dataset/analysis_output",
         help="Where to save PNG figures.",
     )
     p.add_argument(
@@ -813,7 +894,14 @@ def main():
     p.add_argument(
         "--no-prompt",
         action="store_true",
-        help="IMDB-MULTI only: non-interactive — pick K with highest mean silhouette.",
+        default=True,
+        help="IMDB-MULTI only: non-interactive — use automatic knee detection (default: True).",
+    )
+    p.add_argument(
+        "--prompt",
+        dest="no_prompt",
+        action="store_false",
+        help="IMDB-MULTI only: prompt user to manually select K after showing silhouette sweep.",
     )
     args = p.parse_args()
 
