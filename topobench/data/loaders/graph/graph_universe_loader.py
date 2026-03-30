@@ -1,8 +1,7 @@
 """Loaders for GraphUniverse [1] datasets.
 
-[1] "GraphUniverse: Enabling Systematic Evaluation of Inductive Generalization" by Louis Van Langendonck and Guillermo Bernardez and Nina Miolane and Pere Barlet-Ros
-Accepted at The Fourteenth International Conference on Learning Representations, 2026},
-https://openreview.net/forum?id=jRWxvQnqUt
+[1] Anonymous (2025). GraphUniverse: Enabling Systematic Evaluation of Inductive Generalization. In Submitted to The Fourteenth International Conference on Learning Representations.
+(github: https://github.com/LouisVanLangendonck/GraphUniverse)
 """
 
 from graph_universe import GraphUniverseDataset
@@ -26,9 +25,10 @@ class GraphUniverseDatasetLoader(AbstractLoader):
 
     def __init__(self, parameters: DictConfig) -> None:
         super().__init__(parameters)
-        if self.parameters.get("n_nodes_range") is not None:
-            self.parameters["generation_parameters"]["family_parameters"]["n_nodes_range"] = self.parameters.get("n_nodes_range")
-            
+        if self.parameters.get("num_nodes_range") is not None:
+            self.parameters["generation_parameters"]["family_parameters"]["min_n_nodes"] = self.parameters.get("num_nodes_range")[0]
+            self.parameters["generation_parameters"]["family_parameters"]["max_n_nodes"] = self.parameters.get("num_nodes_range")[1]
+
     def load_dataset(self) -> Dataset:
         """Load Graph Universe dataset.
 
