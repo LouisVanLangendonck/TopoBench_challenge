@@ -425,6 +425,8 @@ def run_downstream_evaluation(
     readout_type: str = "mean",
     pretraining_config: dict | None = None,
     verbose_checkpoint_load: bool = True,
+    repeat_idx: int = 0,
+    repeat_on_different_family_seed: int = 1,
 ) -> dict:
     """Run inductive downstream evaluation: community_detection (node CE) or community_presence (graph BCE)."""
     run_dir = Path(run_dir)
@@ -455,7 +457,7 @@ def run_downstream_evaluation(
     num_classes = universe_params.get("K", 10)
 
     family_evaluation_seed = pretraining_family_seed + 1
-    family_training_seed = pretraining_family_seed + 2
+    family_training_seed = pretraining_family_seed + 2 + repeat_idx
 
     eval_dataset, eval_data_dir, _ = create_dataset_from_config(
         config,
@@ -590,6 +592,12 @@ def run_downstream_evaluation(
             "input_dropout": input_dropout,
             "hidden_dim": hidden_dim,
             "graphuniverse_override": graphuniverse_override,
+            "pretraining_universe_seed": pretraining_universe_seed,
+            "pretraining_family_seed": pretraining_family_seed,
+            "family_evaluation_seed": family_evaluation_seed,
+            "family_training_seed": family_training_seed,
+            "repeat_idx": repeat_idx,
+            "repeat_on_different_family_seed": repeat_on_different_family_seed,
         }
 
         def flatten_dict(d, parent_key='', sep='/'):
