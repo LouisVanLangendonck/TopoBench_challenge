@@ -52,7 +52,7 @@ class LapPE(BaseTransform):
         eps: float = 1e-6,
         tolerance: float = 0.001,
         method: str = "fast",
-        debug: bool = True,
+        debug: bool = False,
         **kwargs,
     ):
         self.max_pe_dim = max_pe_dim

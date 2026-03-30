@@ -51,7 +51,7 @@ class HKdiagSE(BaseTransform):
         include_first: bool = False,
         concat_to_x: bool = True,
         method: str = "fast",
-        debug: bool = True,
+        debug: bool = False,
         **kwargs,
     ):
         self.kernel_param_HKdiagSE = kernel_param_HKdiagSE

@@ -38,7 +38,7 @@ class ElectrostaticPE(BaseTransform):
         concat_to_x: bool = True,
         eps: float = 1e-6,
         method: str = "fast",
-        debug: bool = True,
+        debug: bool = False,
         **kwargs,
     ):
         self.concat_to_x = concat_to_x
