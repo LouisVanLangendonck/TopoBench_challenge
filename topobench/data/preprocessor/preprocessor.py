@@ -131,7 +131,7 @@ class PreProcessor(torch_geometric.data.InMemoryDataset):
         for key, value in config_items:
             kwargs = dict(value)
 
-            requested_device = kwargs.pop("device", "cpu")
+            requested_device = kwargs.pop("preprocessor_device", "cpu")
 
             target_device = (
                 "cuda"

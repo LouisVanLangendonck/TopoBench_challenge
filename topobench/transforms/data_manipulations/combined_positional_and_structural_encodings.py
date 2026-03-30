@@ -23,7 +23,7 @@ class CombinedPSEs(BaseTransform):
         "LapPE", "RWSE", "ElectrostaticPE", and "HKdiagSE".
     parameters : dict, optional
         Additional parameters for the encoding transforms.
-    device : str, optional
+    preprocessor_device : str, optional
         The overarching device to use for the combined transforms (e.g., 'cpu', 'cuda').
         If a specific encoding specifies its own device in `parameters`, that will
         take precedence. Default is None.
@@ -35,12 +35,12 @@ class CombinedPSEs(BaseTransform):
         self,
         encodings: list[str],
         parameters: dict | None = None,
-        device: str | None = None,
+        preprocessor_device: str | None = None,
         **kwargs,
     ):
         self.encodings = encodings
         self.parameters = parameters if parameters is not None else {}
-        self.device = device
+        self.device = preprocessor_device
 
     def forward(self, data: Data) -> Data:
         r"""Apply the transform to the input data.
