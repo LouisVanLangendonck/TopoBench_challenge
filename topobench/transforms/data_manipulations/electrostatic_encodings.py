@@ -65,7 +65,7 @@ class ElectrostaticPE(BaseTransform):
         """
         if self.debug:
             print("\n--- ElectrostaticPE Debug Report ---")
-
+            print(f"Data device:        {data.edge_index.device}")
             # Exact Method (Original CPU NumPy)
             t0 = time.time()
             pe_numpy = self._compute_numpy(data.edge_index, data.num_nodes)

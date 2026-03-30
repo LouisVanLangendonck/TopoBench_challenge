@@ -140,7 +140,7 @@ class PPRFE(BaseTransform):
 
         if self.debug:
             print("\n--- PPRFE Debug Report ---")
-
+            print(f"Data device:        {device}")
             # Exact
             t0 = time.time()
             fe_exact = self._compute_exact(

@@ -97,9 +97,6 @@ class KHopFE(BaseTransform):
     ) -> torch.Tensor:
         """Internal method to compute K-hop feature encodings.
 
-        Propagates features through K hops and aggregates over input features
-        to produce a fixed-dimension output.
-
         Parameters
         ----------
         x : torch.Tensor
@@ -112,7 +109,7 @@ class KHopFE(BaseTransform):
         Returns
         -------
         torch.Tensor
-            K-hop feature encodings of shape ``[num_nodes, max_hop]``.
+            K-hop feature encodings of shape [num_nodes, max_hop, feature_dim].
         """
         device = edge_index.device
         x = x.to(device)
@@ -122,25 +119,60 @@ class KHopFE(BaseTransform):
 
         if self.debug:
             print("\n--- KHopFE Debug Report ---")
+            is_cuda = device.type == "cuda"
+            print(f"Data device:        {device}")
+
+            # Helper function to track both time and peak GPU memory
+            def _track_execution(func):
+                if is_cuda:
+                    torch.cuda.synchronize(device)
+                    torch.cuda.reset_peak_memory_stats(device)
+                    mem_start = torch.cuda.memory_allocated(device)
+
+                t0 = time.time()
+                result = func(x, edge_index, num_nodes, device)
+
+                if is_cuda:
+                    torch.cuda.synchronize(device)
+                    t_elapsed = time.time() - t0
+                    # Calculate peak memory used during the function call
+                    mem_peak = torch.cuda.max_memory_allocated(device)
+                    mem_used = mem_peak - mem_start
+                else:
+                    t_elapsed = time.time() - t0
+                    mem_used = 0
+
+                return result, t_elapsed, mem_used
 
             # Exact (Dense)
-            t0 = time.time()
-            fe_dense = self._compute_dense(x, edge_index, num_nodes, device)
-            t_dense = time.time() - t0
+            fe_dense, t_dense, mem_dense = _track_execution(
+                self._compute_dense
+            )
             print(f"Dense compute time:  {t_dense:.4f}s")
+            if is_cuda:
+                print(f"Dense peak memory:   {mem_dense / (1024**2):.2f} MB")
 
             # Approx (Sparse)
-            t0 = time.time()
-            fe_sparse = self._compute_sparse(x, edge_index, num_nodes, device)
-            t_sparse = time.time() - t0
+            fe_sparse, t_sparse, mem_sparse = _track_execution(
+                self._compute_sparse
+            )
             print(f"Sparse compute time: {t_sparse:.4f}s")
+            if is_cuda:
+                print(f"Sparse peak memory:  {mem_sparse / (1024**2):.2f} MB")
 
             # Compare
             diff = torch.abs(fe_dense - fe_sparse)
             speedup = (t_dense / t_sparse) if t_sparse > 0 else float("inf")
-            print(f"Speedup Factor:      {speedup:.2f}x")
-            print(f"Mean Abs Error:      {diff.mean().item():.6e}")
-            print(f"Max Abs Error:       {diff.max().item():.6e}")
+            print(f"\nSpeedup Factor (Time): {speedup:.2f}x")
+
+            if is_cuda and mem_sparse > 0:
+                mem_ratio = mem_dense / mem_sparse
+                print(
+                    f"Memory Factor (VRAM):  {mem_ratio:.2f}x (Dense uses {mem_ratio:.1f}x more memory)"
+                )
+
+            print(f"Mean Abs Error:        {diff.mean().item():.6e}")
+            print(f"Max Abs Error:         {diff.max().item():.6e}")
             print("---------------------------\n")
 
             fe_raw = fe_dense if self.method == "dense" else fe_sparse

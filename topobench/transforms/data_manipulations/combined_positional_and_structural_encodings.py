@@ -1,5 +1,6 @@
 """Combined Positional and Structural Encodings Transform."""
 
+import torch
 from torch_geometric.data import Data
 from torch_geometric.transforms import BaseTransform
 
@@ -19,10 +20,13 @@ class CombinedPSEs(BaseTransform):
     ----------
     encodings : list of str
         List of structural encodings to apply. Supported values are
-        "LapPE" for Laplacian Positional Encoding and "RWSE" for
-        Random Walk Structural Encoding.
+        "LapPE", "RWSE", "ElectrostaticPE", and "HKdiagSE".
     parameters : dict, optional
         Additional parameters for the encoding transforms.
+    device : str, optional
+        The overarching device to use for the combined transforms (e.g., 'cpu', 'cuda').
+        If a specific encoding specifies its own device in `parameters`, that will
+        take precedence. Default is None.
     **kwargs : dict, optional
         Additional keyword arguments.
     """
@@ -31,10 +35,12 @@ class CombinedPSEs(BaseTransform):
         self,
         encodings: list[str],
         parameters: dict | None = None,
+        device: str | None = None,
         **kwargs,
     ):
         self.encodings = encodings
         self.parameters = parameters if parameters is not None else {}
+        self.device = device
 
     def forward(self, data: Data) -> Data:
         r"""Apply the transform to the input data.
@@ -73,12 +79,44 @@ class CombinedPSEs(BaseTransform):
                 f"Missing in PSE_ENCODINGS: {missing_in_set}."
             )
 
+        if hasattr(data, "edge_index") and data.edge_index is not None:
+            baseline_device = data.edge_index.device
+        elif hasattr(data, "x") and data.x is not None:
+            baseline_device = data.x.device
+        else:
+            baseline_device = torch.device("cpu")
+
+        current_device = baseline_device
+
         for enc in self.encodings:
             if enc not in encoding_classes:
                 raise ValueError(f"Unsupported encoding type: {enc}")
 
-            encoder = encoding_classes[enc](**self.parameters.get(enc, {}))
+            enc_params = self.parameters.get(enc, {}).copy()
+
+            # Determine the target device for this specific transform
+            # Priority: 1. PE-specific device, 2. CombinedPSEs overarching device, 3. Baseline
+            req_device = enc_params.pop("device", self.device)
+            target_device = (
+                torch.device(req_device) if req_device else baseline_device
+            )
+
+            # Fallback to CPU if CUDA is requested but physically unavailable
+            if target_device.type == "cuda" and not torch.cuda.is_available():
+                target_device = torch.device("cpu")
+
+            if current_device != target_device:
+                data = data.to(target_device)
+                current_device = target_device
+
+            # Instantiate and apply the encoder
+            # The encoder naturally uses `current_device` because it reads `data.edge_index.device`
+            encoder = encoding_classes[enc](**enc_params)
             data = encoder(data)
+
+        # Ensure the graph is returned to its original device before exiting
+        if current_device != baseline_device:
+            data = data.to(baseline_device)
 
         return data
 
@@ -92,8 +130,8 @@ class SelectDestinationPSEs(BaseTransform):
 
     Parameters
     ----------
-    encoding_key : str
-        Key in `data` where the PSEs are stored (e.g., 'LapPE', 'RWSE').
+    encodings : list of str
+        Keys in `data` where the PSEs are stored (e.g., ['LapPE', 'RWSE']).
     **kwargs : dict, optional
         Additional keyword arguments.
     """
@@ -130,4 +168,18 @@ class SelectDestinationPSEs(BaseTransform):
         return Data(**new_data)
 
     def __call__(self, data: Data, n_dst_nodes: int) -> Data:
+        """Override __call__ to accept n_dst_nodes as an argument.
+
+        Parameters
+        ----------
+        data : torch_geometric.data.Data
+            The input data.
+        n_dst_nodes : int
+            Number of destination nodes.
+
+        Returns
+        -------
+        torch_geometric.data.Data
+            The transformed data with selected PSEs.
+        """
         return self.forward(data, n_dst_nodes)

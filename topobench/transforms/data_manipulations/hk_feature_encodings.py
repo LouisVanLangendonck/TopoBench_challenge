@@ -141,7 +141,7 @@ class HKFE(BaseTransform):
 
         if self.debug:
             print("\n--- HKFE Debug Report ---")
-
+            print(f"Data device:        {edge_index.device}")
             # 1. Run Exact Method
             t0 = time.time()
             hk_fe_exact = self._compute_exact(

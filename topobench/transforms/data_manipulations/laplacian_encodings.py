@@ -82,7 +82,7 @@ class LapPE(BaseTransform):
         """
         if self.debug:
             print("\n--- LapPE Debug Report ---")
-
+            print(f"Data device:        {data.edge_index.device}")
             # Exact Method (SciPy CPU)
             t0 = time.time()
             pe_exact = self._compute_exact(data.edge_index, data.num_nodes)

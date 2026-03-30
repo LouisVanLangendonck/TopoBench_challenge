@@ -38,7 +38,7 @@ class RWSE(BaseTransform):
         self,
         max_pe_dim: int,
         concat_to_x: bool = True,
-        method: str = "sparse",
+        method: str = "batched",
         batch_size: int = 2048,
         debug: bool = False,
         **kwargs,
@@ -66,16 +66,16 @@ class RWSE(BaseTransform):
             Graph data object with RWSE added to ``data.x`` or ``data.RWSE``.
         """
         if self.debug:
-            print(
-                f"\n--- RWSE Debug Report (Nodes: {data.num_nodes}, Edges: {data.edge_index.size(1)}) ---"
-            )
-
+            print("\n--- RWSE Debug Report ---")
+            print(f"Data device:        {data.edge_index.device}")
             # 1. Dense Method
             try:
+                t0 = time.time()
                 pe_dense, t_dense, mem_dense = self._profile_method(
                     self._compute_dense, data.edge_index, data.num_nodes
                 )
-                dense_status = f"{t_dense:.4f}s | {mem_dense:.2f} MB"
+                t_dense_total = time.time() - t0
+                dense_status = f"{t_dense_total:.4f}s | {mem_dense:.2f} MB"
             except RuntimeError as e:
                 if "out of memory" in str(e).lower():
                     pe_dense = None
@@ -85,10 +85,12 @@ class RWSE(BaseTransform):
 
             # 2. Sparse Method
             try:
+                t0 = time.time()
                 pe_sparse, t_sparse, mem_sparse = self._profile_method(
                     self._compute_sparse, data.edge_index, data.num_nodes
                 )
-                sparse_status = f"{t_sparse:.4f}s | {mem_sparse:.2f} MB"
+                t_sparse_total = time.time() - t0
+                sparse_status = f"{t_sparse_total:.4f}s | {mem_sparse:.2f} MB"
             except RuntimeError as e:
                 if "out of memory" in str(e).lower():
                     pe_sparse = None
@@ -97,10 +99,12 @@ class RWSE(BaseTransform):
                     raise e
 
             # 3. Batched Method
+            t0 = time.time()
             pe_batched, t_batched, mem_batched = self._profile_method(
                 self._compute_batched, data.edge_index, data.num_nodes
             )
-            batched_status = f"{t_batched:.4f}s | {mem_batched:.2f} MB"
+            t_batched_total = time.time() - t0
+            batched_status = f"{t_batched_total:.4f}s | {mem_batched:.2f} MB"
 
             # Print Report
             print(f"{'Method':<10} | {'Status (Time | Peak VRAM)':<30}")

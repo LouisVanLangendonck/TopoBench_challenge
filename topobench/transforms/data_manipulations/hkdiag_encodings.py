@@ -85,7 +85,7 @@ class HKdiagSE(BaseTransform):
         """
         if self.debug:
             print("\n--- HKdiagSE Debug Report ---")
-
+            print(f"Data device:        {data.edge_index.device}")
             # Exact Method (CPU)
             t0 = time.time()
             pe_exact = self._compute_exact(data.edge_index, data.num_nodes)

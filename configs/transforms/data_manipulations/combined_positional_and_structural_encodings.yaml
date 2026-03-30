@@ -7,6 +7,7 @@ parameters:
     include_eigenvalues: false
     include_first: false
     concat_to_x: true
+    device: "cpu"
   RWSE: 
     max_pe_dim: 10
     concat_to_x: true
@@ -16,3 +17,4 @@ parameters:
     kernel_param_HKdiagSE: [1, 21]
     space_dim: 0
     concat_to_x: true
+device: "cuda"

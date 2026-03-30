@@ -20,3 +20,4 @@ parameters:
     concat_to_x: true
     aggregation: "mean"
     self_loop: true
+device: "cuda"
