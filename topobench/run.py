@@ -409,6 +409,13 @@ def rerun_best_model_checkpoint(
             if isinstance(lgr, WandbLogger):
                 lgr.log_metrics(logged)
 
+    if cfg.get("delete_checkpoint_after_test", False):
+        if model_path and model_path.exists():
+            log.info(f"Cleaning up: Deleting checkpoint at {model_path}")
+            try:
+                model_path.unlink()
+            except Exception as e:
+                log.warning(f"Failed to delete checkpoint at {model_path}. Error: {e}")
 
 def count_number_of_parameters(
     model: torch.nn.Module, only_trainable: bool = True
