@@ -48,3 +48,5 @@ seed: 42
 wandb_project: dgi_downstream_results_inductive
 save_results: true
 confirm_before_run: true
+# Number of times to repeat each experiment with different family seeds for computing std (default: 1)
+repeat_on_different_family_seed: 4

@@ -69,6 +69,7 @@ _TRANSDUCTIVE_SCRIPT_DEFAULTS = {
     "confirm_before_run": True,
     "parallel_workers": 1,
     "eval_devices": None,
+    "repeat_on_different_family_seed": 1,
 }
 
 
@@ -100,6 +101,7 @@ def generate_grid_configs(
     data_seed: int = 0,
     run_infos: List[Dict[str, Any]] = None,
     graphuniverse_overrides: List[Dict[str, Any] | None] | None = None,
+    repeat_on_different_family_seed: int = 1,
 ) -> List[Dict[str, Any]]:
     """Generate all combinations of grid parameters for transductive setting."""
     if graphuniverse_overrides is None:
@@ -119,25 +121,31 @@ def generate_grid_configs(
             for graphuniverse_override in graphuniverse_overrides:
                 if n_train_values is not None:
                     for n_train in n_train_values:
+                        for repeat_idx in range(repeat_on_different_family_seed):
+                            configs.append({
+                                "run_dir": run_dir,
+                                "mode": mode,
+                                "n_train": n_train,
+                                "n_evaluation": n_evaluation,
+                                "data_seed": data_seed,
+                                "graphuniverse_override": graphuniverse_override,
+                                "pretrain_config": pretrain_config,
+                                "repeat_idx": repeat_idx,
+                                "repeat_on_different_family_seed": repeat_on_different_family_seed,
+                            })
+                else:
+                    for repeat_idx in range(repeat_on_different_family_seed):
                         configs.append({
                             "run_dir": run_dir,
                             "mode": mode,
-                            "n_train": n_train,
-                            "n_evaluation": n_evaluation,
+                            "n_train": None,
+                            "n_evaluation": None,
                             "data_seed": data_seed,
                             "graphuniverse_override": graphuniverse_override,
                             "pretrain_config": pretrain_config,
+                            "repeat_idx": repeat_idx,
+                            "repeat_on_different_family_seed": repeat_on_different_family_seed,
                         })
-                else:
-                    configs.append({
-                        "run_dir": run_dir,
-                        "mode": mode,
-                        "n_train": None,
-                        "n_evaluation": None,
-                        "data_seed": data_seed,
-                        "graphuniverse_override": graphuniverse_override,
-                        "pretrain_config": pretrain_config,
-                    })
 
     return configs
 
@@ -161,6 +169,9 @@ def get_experiment_name(config: Dict[str, Any], run_dir: str) -> str:
             json.dumps(config["graphuniverse_override"], sort_keys=True).encode()
         ).hexdigest()[:6]
         components.append(f"ov_{override_hash}")
+
+    if config.get("repeat_on_different_family_seed", 1) > 1:
+        components.append(f"rep{config['repeat_idx']}")
 
     return "_".join(components)
 
@@ -198,6 +209,11 @@ def print_grid_summary(
         print(f"Data seed: {data_seed}")
     else:
         print(f"Training mode: Standard (use all available training data)")
+
+    # Check if we have repeat info
+    repeat_count = configs[0].get("repeat_on_different_family_seed", 1) if configs else 1
+    if repeat_count > 1:
+        print(f"Repeats per setting (different family seeds): {repeat_count}")
 
     print(f"\nGraphUniverse Overrides ({len(overrides)}):")
     for i, override_str in enumerate(overrides, 1):
@@ -265,6 +281,9 @@ def run_single_experiment(
     else:
         print(f"  N_train: Use all available (standard)")
 
+    if config.get("repeat_on_different_family_seed", 1) > 1:
+        print(f"  Repeat idx: {config['repeat_idx']} / {config['repeat_on_different_family_seed']}")
+
     if config.get("graphuniverse_override") is not None:
         print(f"  GraphUniverse override: {json.dumps(config['graphuniverse_override'], indent=4)}")
 
@@ -288,6 +307,8 @@ def run_single_experiment(
             data_seed=config.get("data_seed", 0),
             pretraining_config=config.get("pretrain_config"),
             graphuniverse_override=config.get("graphuniverse_override"),
+            repeat_idx=config.get("repeat_idx", 0),
+            repeat_on_different_family_seed=config.get("repeat_on_different_family_seed", 1),
         )
         
         results["success"] = True
@@ -610,6 +631,12 @@ def main():
     )
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--wandb_project", type=str, default=None)
+    parser.add_argument(
+        "--repeat-on-different-family-seed",
+        type=int,
+        default=None,
+        help="Number of times to repeat each experiment with different family seeds (default: 1).",
+    )
     parser.add_argument("-y", "--yes", action="store_true")
     parser.add_argument("--no_save", action="store_true")
 
@@ -663,6 +690,13 @@ def main():
     wandb_project = eff("wandb_project", args.wandb_project)
     fetch_filters = coalesce(file_cfg.get("fetch_filters"), {"state": "finished"})
     min_runs = coalesce(args.min_runs, file_cfg.get("min_runs"), 1)
+    repeat_on_different_family_seed = eff("repeat_on_different_family_seed", args.repeat_on_different_family_seed)
+    if repeat_on_different_family_seed is None:
+        repeat_on_different_family_seed = 1
+    else:
+        repeat_on_different_family_seed = int(repeat_on_different_family_seed)
+        if repeat_on_different_family_seed < 1:
+            parser.error("repeat_on_different_family_seed must be >= 1")
 
     if args.graphuniverse_overrides is not None:
         parsed_overrides = []
@@ -718,6 +752,7 @@ def main():
         data_seed=data_seed,
         run_infos=run_infos,
         graphuniverse_overrides=parsed_overrides,
+        repeat_on_different_family_seed=repeat_on_different_family_seed,
     )
 
     print_grid_summary(

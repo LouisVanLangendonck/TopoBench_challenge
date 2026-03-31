@@ -108,6 +108,7 @@ _INDUCTIVE_SCRIPT_DEFAULTS = {
     "confirm_before_run": True,
     "parallel_workers": 1,
     "eval_devices": None,
+    "repeat_on_different_family_seed": 1,
 }
 
 
@@ -124,6 +125,7 @@ def generate_grid_configs(
     n_evaluation_graphs: int = 200,
     readout_types: List[str] = None,
     run_infos: List[Dict[str, Any]] = None,
+    repeat_on_different_family_seed: int = 1,
 ) -> List[Dict[str, Any]]:
     """Generate all combinations of grid parameters."""
     
@@ -145,16 +147,19 @@ def generate_grid_configs(
                 for mode in modes:
                     for readout_type in readout_types:
                         for override in graphuniverse_overrides:
-                            configs.append({
-                                "run_dir": run_dir,
-                                "n_train": n_train,
-                                "task": task,
-                                "mode": mode,
-                                "graphuniverse_override": override,
-                                "n_evaluation_graphs": n_evaluation_graphs,
-                                "readout_type": readout_type,
-                                "pretrain_config": pretrain_config,
-                            })
+                            for repeat_idx in range(repeat_on_different_family_seed):
+                                configs.append({
+                                    "run_dir": run_dir,
+                                    "n_train": n_train,
+                                    "task": task,
+                                    "mode": mode,
+                                    "graphuniverse_override": override,
+                                    "n_evaluation_graphs": n_evaluation_graphs,
+                                    "readout_type": readout_type,
+                                    "pretrain_config": pretrain_config,
+                                    "repeat_idx": repeat_idx,
+                                    "repeat_on_different_family_seed": repeat_on_different_family_seed,
+                                })
     
     return configs
 
@@ -183,6 +188,9 @@ def get_experiment_name(config: Dict[str, Any], run_dir: str) -> str:
             json.dumps(config["graphuniverse_override"], sort_keys=True).encode()
         ).hexdigest()[:6]
         components.append(f"ov_{override_hash}")
+    
+    if config.get("repeat_on_different_family_seed", 1) > 1:
+        components.append(f"rep{config['repeat_idx']}")
     
     return "_".join(components)
 
@@ -214,6 +222,11 @@ def print_grid_summary(
     print(f"Tasks: {tasks}")
     print(f"Modes: {modes}")
     print(f"Readout types: {readout_types}")
+    
+    # Check if we have repeat info
+    repeat_count = configs[0].get("repeat_on_different_family_seed", 1) if configs else 1
+    if repeat_count > 1:
+        print(f"Repeats per setting (different family seeds): {repeat_count}")
     
     print(f"\nGraphUniverse Overrides ({len(overrides)}):")
     for i, override_str in enumerate(overrides, 1):
@@ -276,6 +289,8 @@ def run_single_experiment(
     print(f"  N_train: {config['n_train']}")
     print(f"  N_evaluation: {config['n_evaluation_graphs']}")
     print(f"  Readout type: {config['readout_type']}")
+    if config.get("repeat_on_different_family_seed", 1) > 1:
+        print(f"  Repeat idx: {config['repeat_idx']} / {config['repeat_on_different_family_seed']}")
     if config["graphuniverse_override"] is not None:
         print(f"  GraphUniverse override: {json.dumps(config['graphuniverse_override'], indent=4)}")
     print("=" * 80)
@@ -300,6 +315,8 @@ def run_single_experiment(
             classifier_dropout=classifier_dropout,
             input_dropout=input_dropout,
             pretraining_config=config.get("pretrain_config"),
+            repeat_idx=config.get("repeat_idx", 0),
+            repeat_on_different_family_seed=config.get("repeat_on_different_family_seed", 1),
         )
         
         results["success"] = True
@@ -679,6 +696,12 @@ def main():
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--wandb_project", type=str, default=None)
     parser.add_argument(
+        "--repeat-on-different-family-seed",
+        type=int,
+        default=None,
+        help="Number of times to repeat each experiment with different family seeds (default: 1).",
+    )
+    parser.add_argument(
         "-y",
         "--yes",
         action="store_true",
@@ -743,6 +766,13 @@ def main():
     wandb_project = eff("wandb_project", args.wandb_project)
     fetch_filters = coalesce(file_cfg.get("fetch_filters"), {"state": "finished"})
     min_runs = coalesce(args.min_runs, file_cfg.get("min_runs"), 1)
+    repeat_on_different_family_seed = eff("repeat_on_different_family_seed", args.repeat_on_different_family_seed)
+    if repeat_on_different_family_seed is None:
+        repeat_on_different_family_seed = 1
+    else:
+        repeat_on_different_family_seed = int(repeat_on_different_family_seed)
+        if repeat_on_different_family_seed < 1:
+            parser.error("repeat_on_different_family_seed must be >= 1")
 
     if args.graphuniverse_overrides is not None:
         parsed_overrides = []
@@ -798,6 +828,7 @@ def main():
         n_evaluation_graphs=n_evaluation_graphs,
         readout_types=readout_types,
         run_infos=run_infos,
+        repeat_on_different_family_seed=repeat_on_different_family_seed,
     )
 
     print_grid_summary(

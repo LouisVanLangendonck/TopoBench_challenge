@@ -296,6 +296,8 @@ def run_downstream_evaluation_transductive(
     data_seed: int = 0,
     pretraining_config: dict | None = None,
     graphuniverse_override: dict | None = None,
+    repeat_idx: int = 0,
+    repeat_on_different_family_seed: int = 1,
 ) -> dict:
     """Run full downstream evaluation pipeline for transductive setting."""
     run_dir = Path(run_dir)
@@ -325,12 +327,16 @@ def run_downstream_evaluation_transductive(
     pretraining_universe_seed = universe_params["seed"]
     pretraining_family_seed = family_params["seed"]
     
+    # For transductive setting with repeats, we still use different family seeds
+    # to generate different graph instances from the same universe
+    family_seed_for_downstream = pretraining_family_seed + 1 + repeat_idx
+    
     # Same universe/family seeds as pretraining; do not override downstream_task (keeps graph identical).
     dataset, data_dir, _ = create_dataset_from_config(
         config,
         n_graphs=1,
         universe_seed=pretraining_universe_seed,
-        family_seed=pretraining_family_seed,
+        family_seed=family_seed_for_downstream,
         dataset_purpose="downstream_transductive",
         downstream_task=None,
         graphuniverse_override=graphuniverse_override,
@@ -475,6 +481,11 @@ def run_downstream_evaluation_transductive(
             "n_evaluation": n_evaluation,
             "few_shot": n_train is not None or n_evaluation is not None,
             "graphuniverse_override": graphuniverse_override,
+            "pretraining_universe_seed": pretraining_universe_seed,
+            "pretraining_family_seed": pretraining_family_seed,
+            "family_seed_for_downstream": family_seed_for_downstream,
+            "repeat_idx": repeat_idx,
+            "repeat_on_different_family_seed": repeat_on_different_family_seed,
         }
         
         def flatten_dict(d, parent_key='', sep='/'):
