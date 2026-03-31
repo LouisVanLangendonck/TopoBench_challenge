@@ -9,6 +9,10 @@
 #   - ORDERING: Prioritizes running all seeds for a config before moving on.
 #   - FILTERING: Skips invalid model+dataset combos (cell + simplicial data).
 # ==============================================================================
+# DO NOT MISS THIS
+
+export SELECTED_GPUS="0,1,2,3,4,5,6,7" 
+wandb_entity="gbg141-hopse"
 
 # ==============================================================================
 # SECTION 1: LOGGING & ENVIRONMENT SETUP
@@ -17,7 +21,7 @@
 # 1.1 Define Project Identifiers
 script_name="$(basename "${BASH_SOURCE[0]}" .sh)"
 project_name="${script_name}"
-log_group="hopse_m_sweep"
+log_group="hopse_m_debug_sweep"
 LOG_DIR="./logs/${log_group}"
 
 echo "=========================================================="
@@ -61,6 +65,12 @@ fi
 # Thresholds: >= 80 GB -> 4 jobs, <= 30 GB -> 2 jobs, between -> 3 jobs.
 _gpu_info=$(python3 -c "
 import subprocess
+import os
+
+# 1. Read the allowed GPUs from the environment variable
+selected_env = os.environ.get('SELECTED_GPUS', '').strip()
+allowed_gpus = [x.strip() for x in selected_env.split(',')] if selected_env else None
+
 try:
     out = subprocess.check_output(
         ['nvidia-smi', '--query-gpu=index,memory.total', '--format=csv,noheader,nounits'],
@@ -69,15 +79,30 @@ try:
     indices, mem_mb = [], []
     for line in out.strip().splitlines():
         idx, mem = line.split(',')
-        indices.append(idx.strip())
+        idx = idx.strip()
+        
+        # 2. Skip this GPU if it's not in our selected list
+        if allowed_gpus and idx not in allowed_gpus:
+            continue
+            
+        indices.append(idx)
         mem_mb.append(int(mem.strip()))
+        
+    # Safety check in case the selected GPUs don't exist
+    if not indices:
+        print('0')
+        exit(0)
+        
     min_mem_gb = min(mem_mb) / 1024
     if min_mem_gb >= 80:
         jobs = 4
+    elif min_mem_gb <= 10:
+        jobs = 1
     elif min_mem_gb <= 30:
         jobs = 2
     else:
         jobs = 3
+        
     print(jobs, ' '.join(indices))
 except Exception:
     print('2 0')
@@ -157,6 +182,7 @@ FIXED_ARGS=(
     "trainer.min_epochs=50"
     "trainer.check_val_every_n_epoch=5"
     "callbacks.early_stopping.patience=10"
+    "delete_checkpoint_after_test=True"
 )
 
 
@@ -383,6 +409,7 @@ while IFS=";" read -r col1 col2; do
         "${DYNAMIC_ARGS_ARRAY[@]}"
         "${FIXED_ARGS[@]}"
         "trainer.devices=[${current_gpu}]"
+        "+logger.wandb.entity=${wandb_entity}"
         "logger.wandb.project=${dynamic_project_name}"
     )
 
