@@ -8,13 +8,17 @@ run_dirs: null
 # run_dirs:
 #   - data/outputs/wandb/run-YYYYMMDD_HHMMSS-xxxxx
 
-wandb_pretrain_project: dgi_grid_inductive
+wandb_pretrain_project: run_bgrl_grid_inductive_rq1
 # wandb_pretrain_project: "entity/MyProject"
 
 # Wandb API fetch (when using wandb_pretrain_project)
 fetch_filters:
   state: finished
 min_runs: 1
+# Local wandb run-* dirs. Non-null = scan ONLY these (matches paths.output_dir + /wandb).
+# If null, set TOPOBENCH_OUTPUT_DIR to paths.output_dir and we scan only $TOPOBENCH_OUTPUT_DIR/wandb.
+wandb_local_roots:
+  - /data/louisvl/TB/outputs/wandb
 
 # Grid axes
 n_train: [10]
@@ -45,6 +49,6 @@ parallel_workers: 4
 # If null and parallel_workers > 1, uses cuda:0, cuda:1, ... cuda:(parallel_workers-1).
 eval_devices: null
 seed: 42
-wandb_project: dgi_downstream_results_inductive
+wandb_project: downstream_bgrl_grid_inductive_rq1
 save_results: true
 confirm_before_run: true

@@ -4,8 +4,6 @@ Based on: https://github.com/kavehhassani/mvgrl
 Paper: "Contrastive Multi-View Representation Learning on Graphs" (ICML 2020)
 """
 
-import torch
-import torch.nn as nn
 import torch_geometric
 from torch_geometric.utils import scatter
 
@@ -38,7 +36,7 @@ class MVGRLReadOut(AbstractZeroCellReadOut):
         hidden_dim: int,
         out_channels: int,
         task_level: str = "graph",
-        **kwargs
+        **kwargs,
     ):
         super().__init__(
             hidden_dim=hidden_dim,
@@ -46,11 +44,11 @@ class MVGRLReadOut(AbstractZeroCellReadOut):
             task_level=task_level,
             pooling_type="sum",
             logits_linear_layer=True,
-            **kwargs
+            **kwargs,
         )
-        
+
         self.hidden_dim = hidden_dim
-    
+
     def forward(
         self, model_out: dict, batch: torch_geometric.data.Data
     ) -> dict:
@@ -75,16 +73,18 @@ class MVGRLReadOut(AbstractZeroCellReadOut):
         if "x_graph" not in model_out and self.task_level == "graph":
             h = model_out["x_0"]
             batch_indices = model_out["batch_0"]
-            model_out["x_graph"] = scatter(h, batch_indices, dim=0, reduce="sum")
-        
+            model_out["x_graph"] = scatter(
+                h, batch_indices, dim=0, reduce="sum"
+            )
+
         # Compute logits for downstream tasks
         if self.task_level == "graph":
             model_out["logits"] = self.linear(model_out["x_graph"])
         else:
             model_out["logits"] = self.linear(model_out["x_0"])
-        
+
         return model_out
-    
+
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}("

@@ -78,7 +78,9 @@ class BGRLGNNWrapper(AbstractWrapper):
     def update_target_encoder(self) -> None:
         """Momentum update target encoder using online encoder parameters."""
         for online_param, target_param in zip(
-            self.online_encoder.parameters(), self.backbone.parameters()
+            self.online_encoder.parameters(),
+            self.backbone.parameters(),
+            strict=False,
         ):
             target_param.data.mul_(self.momentum).add_(
                 online_param.data, alpha=1.0 - self.momentum
@@ -89,14 +91,18 @@ class BGRLGNNWrapper(AbstractWrapper):
         if drop_rate <= 0.0:
             return x
         feature_keep_mask = (
-            torch.rand(x.size(1), device=x.device, dtype=torch.float32) > drop_rate
+            torch.rand(x.size(1), device=x.device, dtype=torch.float32)
+            > drop_rate
         )
         x_aug = x.clone()
         x_aug[:, ~feature_keep_mask] = 0.0
         return x_aug
 
     def _drop_edges(
-        self, edge_index: torch.Tensor, edge_attr: torch.Tensor | None, drop_rate: float
+        self,
+        edge_index: torch.Tensor,
+        edge_attr: torch.Tensor | None,
+        drop_rate: float,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         if drop_rate <= 0.0:
             return edge_index, edge_attr
@@ -145,11 +151,11 @@ class BGRLGNNWrapper(AbstractWrapper):
 
     def forward(self, batch):
         r"""Create two views and cross-encode with online/target encoders.
-        
+
         BGRL architecture per the official paper:
         - Online encoder processes view 1 → predictor → compared with target(view 2)
         - Symmetrically: online encoder processes view 2 → predictor → compared with target(view 1)
-        
+
         Both encoders see both views (with independent augmentations), and the loss
         cross-pairs them. The target encoder EMA update happens AFTER optimizer.step()
         via the on_before_zero_grad hook in TBModel, not during this forward pass.
@@ -180,7 +186,9 @@ class BGRLGNNWrapper(AbstractWrapper):
             x_1,
             edge_index_1,
             batch_indices=batch_indices,
-            edge_weight=edge_weight if edge_index_1.size(1) == edge_index.size(1) else None,
+            edge_weight=edge_weight
+            if edge_index_1.size(1) == edge_index.size(1)
+            else None,
             edge_attr=edge_attr_1,
         )
         online_h_2 = self._encode(
@@ -188,7 +196,9 @@ class BGRLGNNWrapper(AbstractWrapper):
             x_2,
             edge_index_2,
             batch_indices=batch_indices,
-            edge_weight=edge_weight if edge_index_2.size(1) == edge_index.size(1) else None,
+            edge_weight=edge_weight
+            if edge_index_2.size(1) == edge_index.size(1)
+            else None,
             edge_attr=edge_attr_2,
         )
 
@@ -198,7 +208,9 @@ class BGRLGNNWrapper(AbstractWrapper):
                 x_1,
                 edge_index_1,
                 batch_indices=batch_indices,
-                edge_weight=edge_weight if edge_index_1.size(1) == edge_index.size(1) else None,
+                edge_weight=edge_weight
+                if edge_index_1.size(1) == edge_index.size(1)
+                else None,
                 edge_attr=edge_attr_1,
             )
             target_h_2 = self._encode(
@@ -206,7 +218,9 @@ class BGRLGNNWrapper(AbstractWrapper):
                 x_2,
                 edge_index_2,
                 batch_indices=batch_indices,
-                edge_weight=edge_weight if edge_index_2.size(1) == edge_index.size(1) else None,
+                edge_weight=edge_weight
+                if edge_index_2.size(1) == edge_index.size(1)
+                else None,
                 edge_attr=edge_attr_2,
             )
 

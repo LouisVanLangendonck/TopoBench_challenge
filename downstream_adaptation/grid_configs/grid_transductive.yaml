@@ -8,6 +8,9 @@ wandb_pretrain_project: dgi_grid_transductive
 fetch_filters:
   state: finished
 min_runs: 1
+# See grid_inductive.yaml (wandb_local_roots / TOPOBENCH_OUTPUT_DIR).
+wandb_local_roots:
+  - /data/louisvl/TB/outputs/wandb
 
 modes:
   - linear-probe
