@@ -55,7 +55,14 @@ else
     exit 1
 fi
 
-
+# ==============================================================================
+# CPU THREAD LIMITS (Crucial for concurrency)
+# ==============================================================================
+export OMP_NUM_THREADS=1
+export MKL_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export VECLIB_MAXIMUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
 # ==============================================================================
 # SECTION 2: HARDWARE & CONCURRENCY (Auto-Detected)
 # ==============================================================================
@@ -183,6 +190,7 @@ FIXED_ARGS=(
     "trainer.check_val_every_n_epoch=5"
     "callbacks.early_stopping.patience=10"
     "delete_checkpoint_after_test=True"
+    "+combined_feature_encodings.preprocessor_device='cuda'"
 )
 
 

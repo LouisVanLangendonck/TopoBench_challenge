@@ -24,8 +24,8 @@ class ElectrostaticPE(BaseTransform):
         Small value to avoid division by zero.
         Default is 1e-6.
     method : str, optional
-        Computation method: "numpy" (CPU NumPy) or "fast" (GPU PyTorch).
-        Default is "fast".
+        Computation method: "numpy" (CPU NumPy) or "gpu" (GPU PyTorch).
+        Default is "gpu".
     debug : bool, optional
         If True, runs both methods and compares outputs.
         Default is False.
@@ -37,7 +37,7 @@ class ElectrostaticPE(BaseTransform):
         self,
         concat_to_x: bool = True,
         eps: float = 1e-6,
-        method: str = "fast",
+        method: str = "numpy",
         debug: bool = False,
         **kwargs,
     ):
@@ -47,8 +47,8 @@ class ElectrostaticPE(BaseTransform):
         self.debug = debug
         self.pe_dim = 7
 
-        if method not in ["numpy", "fast"]:
-            raise ValueError("Method must be 'numpy' or 'fast'.")
+        if method not in ["numpy", "gpu"]:
+            raise ValueError("Method must be 'numpy' or 'gpu'.")
 
     def forward(self, data: Data) -> Data:
         """Compute the electrostatic positional encodings for the input graph.
@@ -74,23 +74,23 @@ class ElectrostaticPE(BaseTransform):
 
             # Fast Method (Pure PyTorch GPU)
             t0 = time.time()
-            pe_fast = self._compute_fast(data.edge_index, data.num_nodes)
-            t_fast = time.time() - t0
-            print(f"Fast compute time:   {t_fast:.4f}s")
+            pe_gpu = self._compute_gpu(data.edge_index, data.num_nodes)
+            t_gpu = time.time() - t0
+            print(f"Fast compute time:   {t_gpu:.4f}s")
 
             # Compare (Only if non-zero)
-            diff = torch.abs(pe_numpy - pe_fast)
-            speedup = (t_numpy / t_fast) if t_fast > 0 else float("inf")
+            diff = torch.abs(pe_numpy - pe_gpu)
+            speedup = (t_numpy / t_gpu) if t_gpu > 0 else float("inf")
             print(f"Speedup Factor:      {speedup:.2f}x")
             print(f"Mean Abs Error:      {diff.mean().item():.6e}")
             print("------------------------------------\n")
 
-            pe = pe_numpy if self.method == "numpy" else pe_fast
+            pe = pe_numpy if self.method == "numpy" else pe_gpu
         else:
             if self.method == "numpy":
                 pe = self._compute_numpy(data.edge_index, data.num_nodes)
             else:
-                pe = self._compute_fast(data.edge_index, data.num_nodes)
+                pe = self._compute_gpu(data.edge_index, data.num_nodes)
 
         if self.concat_to_x:
             if data.x is None:
@@ -102,7 +102,7 @@ class ElectrostaticPE(BaseTransform):
 
         return data
 
-    def _compute_fast(
+    def _compute_gpu(
         self, edge_index: torch.Tensor, num_nodes: int
     ) -> torch.Tensor:
         """Compute ElectrostaticPE using optimized pure-PyTorch implementation.

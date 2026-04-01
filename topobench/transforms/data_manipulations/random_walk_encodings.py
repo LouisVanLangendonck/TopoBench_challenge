@@ -39,7 +39,7 @@ class RWSE(BaseTransform):
         max_pe_dim: int,
         concat_to_x: bool = True,
         method: str = "batched",
-        batch_size: int = 2048,
+        batch_size: int = 128,
         debug: bool = False,
         **kwargs,
     ):

@@ -34,8 +34,8 @@ class LapPE(BaseTransform):
         Tolerance for the eigenvalue solver.
         Default is 0.001.
     method : str, optional
-        Computation method: "exact" (SciPy CPU) or "fast" (PyTorch GPU).
-        Default is "fast".
+        Computation method: "exact" (SciPy CPU) or "gpu" (PyTorch GPU).
+        Default is "gpu".
     debug : bool, optional
         If True, runs both methods and prints error/timing metrics.
         Default is False.
@@ -51,7 +51,7 @@ class LapPE(BaseTransform):
         concat_to_x: bool = True,
         eps: float = 1e-6,
         tolerance: float = 0.001,
-        method: str = "fast",
+        method: str = "gpu",
         debug: bool = False,
         **kwargs,
     ):
@@ -63,8 +63,8 @@ class LapPE(BaseTransform):
         self.tolerance = tolerance
         self.debug = debug
 
-        if method not in ["exact", "fast"]:
-            raise ValueError("Method must be 'exact' or 'fast'.")
+        if method not in ["exact", "gpu"]:
+            raise ValueError("Method must be 'exact' or 'gpu'.")
         self.method = method
 
     def forward(self, data: Data) -> Data:
@@ -91,23 +91,23 @@ class LapPE(BaseTransform):
 
             # Fast Method (PyTorch GPU)
             t0 = time.time()
-            pe_fast = self._compute_fast(data.edge_index, data.num_nodes)
-            t_fast = time.time() - t0
-            print(f"Fast compute time:   {t_fast:.4f}s")
+            pe_gpu = self._compute_gpu(data.edge_index, data.num_nodes)
+            t_gpu = time.time() - t0
+            print(f"Fast compute time:   {t_gpu:.4f}s")
 
             # Compare Tensors
-            diff = torch.abs(pe_exact - pe_fast)
-            speedup = (t_exact / t_fast) if t_fast > 0 else float("inf")
+            diff = torch.abs(pe_exact - pe_gpu)
+            speedup = (t_exact / t_gpu) if t_gpu > 0 else float("inf")
             print(f"Speedup Factor:      {speedup:.2f}x")
             print(f"Mean Abs Error:      {diff.mean().item():.6e}")
             print("--------------------------\n")
 
-            pe = pe_exact if self.method == "exact" else pe_fast
+            pe = pe_exact if self.method == "exact" else pe_gpu
         else:
             if self.method == "exact":
                 pe = self._compute_exact(data.edge_index, data.num_nodes)
             else:
-                pe = self._compute_fast(data.edge_index, data.num_nodes)
+                pe = self._compute_gpu(data.edge_index, data.num_nodes)
 
         if self.concat_to_x:
             if data.x is None:
@@ -235,10 +235,10 @@ class LapPE(BaseTransform):
         evecs = self._fix_sign_ambiguity(evecs)
         return self._pad_and_concat(evals, evecs, num_nodes, device)
 
-    def _compute_fast(
+    def _compute_gpu(
         self, edge_index: torch.Tensor, num_nodes: int
     ) -> torch.Tensor:
-        """Compute LapPE using fast PyTorch GPU Implementation with Shift Trick.
+        """Compute LapPE using gpu PyTorch GPU Implementation with Shift Trick.
 
         Parameters
         ----------
@@ -272,7 +272,7 @@ class LapPE(BaseTransform):
 
         # 2. Decide solver based on graph size
         if num_nodes < 128 or k_compute >= num_nodes:
-            # For small graphs, dense PyTorch GPU is instantaneously fast and mathematically perfectly stable
+            # For small graphs, dense PyTorch GPU is instantaneously gpu and mathematically perfectly stable
             L_dense = torch.sparse_coo_tensor(
                 edge_index_lap,
                 edge_weight_lap.float(),
