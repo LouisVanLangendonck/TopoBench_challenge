@@ -186,8 +186,10 @@ notebooks/tmp
 /tutorials/lightning_logs/
 /tutorials/datasets/
 /plots/
-/plotting/
-/downstream_adaptation_real_world_dataset/
+/plotting/*.png
+/plotting/*.pdf
+/plotting/*.csv
+/downstream_adaptation_real_world_dataset/analysis_output/
 
 # wandb
 wandb/
