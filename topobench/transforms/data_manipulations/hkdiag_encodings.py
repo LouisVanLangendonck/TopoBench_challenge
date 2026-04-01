@@ -34,8 +34,8 @@ class HKdiagSE(BaseTransform):
         If True, concatenates the encodings with existing node features.
         Default is True.
     method : str, optional
-        Computation method: "exact" (CPU NumPy + loop) or "gpu" (GPU PyTorch + vectorized).
-        Default is "gpu".
+        Computation method: "exact" (CPU NumPy + loop) or "fast" (GPU PyTorch + vectorized).
+        Default is "fast".
     debug : bool, optional
         If True, runs both methods and prints error/timing metrics.
         Default is False.
@@ -50,7 +50,7 @@ class HKdiagSE(BaseTransform):
         include_eigenvalues: bool = False,
         include_first: bool = False,
         concat_to_x: bool = True,
-        method: str = "gpu",
+        method: str = "fast",
         debug: bool = False,
         **kwargs,
     ):
@@ -67,8 +67,8 @@ class HKdiagSE(BaseTransform):
             else kernel_param_HKdiagSE
         )
 
-        if method not in ["exact", "gpu"]:
-            raise ValueError("Method must be 'exact' or 'gpu'.")
+        if method not in ["exact", "fast"]:
+            raise ValueError("Method must be 'exact' or 'fast'.")
 
     def forward(self, data: Data) -> Data:
         """Compute the Heat Kernel Diagonal Structural Encodings for the input graph.
@@ -94,23 +94,23 @@ class HKdiagSE(BaseTransform):
 
             # Fast Method (GPU Vectorized)
             t0 = time.time()
-            pe_gpu = self._compute_gpu(data.edge_index, data.num_nodes)
-            t_gpu = time.time() - t0
-            print(f"Fast compute time:   {t_gpu:.4f}s")
+            pe_fast = self._compute_fast(data.edge_index, data.num_nodes)
+            t_fast = time.time() - t0
+            print(f"Fast compute time:   {t_fast:.4f}s")
 
             # Compare
-            diff = torch.abs(pe_exact - pe_gpu)
-            speedup = (t_exact / t_gpu) if t_gpu > 0 else float("inf")
+            diff = torch.abs(pe_exact - pe_fast)
+            speedup = (t_exact / t_fast) if t_fast > 0 else float("inf")
             print(f"Speedup Factor:      {speedup:.2f}x")
             print(f"Mean Abs Error:      {diff.mean().item():.6e}")
             print("---------------------------\n")
 
-            pe = pe_exact if self.method == "exact" else pe_gpu
+            pe = pe_exact if self.method == "exact" else pe_fast
         else:
             if self.method == "exact":
                 pe = self._compute_exact(data.edge_index, data.num_nodes)
             else:
-                pe = self._compute_gpu(data.edge_index, data.num_nodes)
+                pe = self._compute_fast(data.edge_index, data.num_nodes)
 
         if self.concat_to_x:
             if data.x is None:
@@ -122,7 +122,7 @@ class HKdiagSE(BaseTransform):
 
         return data
 
-    def _compute_gpu(
+    def _compute_fast(
         self, edge_index: torch.Tensor, num_nodes: int
     ) -> torch.Tensor:
         """Compute HKdiagSE using an optimized pure-PyTorch implementation with a vectorized time loop.
@@ -276,4 +276,4 @@ class HKdiagSE(BaseTransform):
         ):
             raise ValueError("HKdiagSE is all zeros")
 
-        return hk_diag.float()
+        return hk_diag.float().to(device)

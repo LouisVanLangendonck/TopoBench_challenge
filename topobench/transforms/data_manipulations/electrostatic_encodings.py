@@ -264,4 +264,4 @@ class ElectrostaticPE(BaseTransform):
         ):
             raise ValueError("ElectrostaticPE is all zeros")
 
-        return electrostatic_encoding.to(device)
+        return electrostatic_encoding.float().to(device)
