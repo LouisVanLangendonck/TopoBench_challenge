@@ -2,7 +2,11 @@
 
 import torch
 import torch.nn as nn
-from torch_geometric.nn import global_mean_pool, global_add_pool, global_max_pool
+from torch_geometric.nn import (
+    global_add_pool,
+    global_max_pool,
+    global_mean_pool,
+)
 from torch_geometric.utils import dropout_edge, subgraph
 
 from topobench.nn.wrappers.base import AbstractWrapper
@@ -76,11 +80,11 @@ class GraphCLGNNWrapper(AbstractWrapper):
         mask_attr_strategy: str = "gaussian",
         edge_perturbation_mode: str = "drop_only",
         subgraph_ratio_meaning: str = "keep",
-        **kwargs
+        **kwargs,
     ):
         kwargs["residual_connections"] = False
         super().__init__(backbone, **kwargs)
-        
+
         self.aug1 = aug1
         self.aug2 = aug2
         self.aug_ratio1 = aug_ratio1
@@ -106,16 +110,20 @@ class GraphCLGNNWrapper(AbstractWrapper):
         self.mask_attr_strategy = mask_attr_strategy
         self.edge_perturbation_mode = edge_perturbation_mode
         self.subgraph_ratio_meaning = subgraph_ratio_meaning
-        
+
         # Get feature dimension from kwargs
-        self.feature_dim = kwargs.get('out_channels', None)
-        
+        self.feature_dim = kwargs.get("out_channels")
+
         if self.feature_dim is None:
-            raise ValueError("Cannot determine feature dimension. Please provide 'out_channels' in kwargs.")
-    
-    def augment(self, x, edge_index, batch_indices, aug_type, aug_ratio, device):
+            raise ValueError(
+                "Cannot determine feature dimension. Please provide 'out_channels' in kwargs."
+            )
+
+    def augment(
+        self, x, edge_index, batch_indices, aug_type, aug_ratio, device
+    ):
         """Apply augmentation to the graph.
-        
+
         Parameters
         ----------
         x : torch.Tensor
@@ -130,7 +138,7 @@ class GraphCLGNNWrapper(AbstractWrapper):
             Ratio of augmentation.
         device : torch.device
             Device to use.
-            
+
         Returns
         -------
         tuple
@@ -138,33 +146,39 @@ class GraphCLGNNWrapper(AbstractWrapper):
         """
         if aug_type == "none":
             return x, edge_index, batch_indices
-        
+
         elif aug_type == "drop_node":
             # Randomly drop nodes
             num_nodes = x.size(0)
             keep_mask = torch.rand(num_nodes, device=device) > aug_ratio
             # Ensure at least one node per graph is kept
             keep_mask = self._ensure_connected(keep_mask, batch_indices)
-            
+
             # Create new node features
             aug_x = x[keep_mask]
-            
+
             # Create mapping from old to new node indices
-            node_idx_mapping = torch.zeros(num_nodes, dtype=torch.long, device=device) - 1
-            node_idx_mapping[keep_mask] = torch.arange(keep_mask.sum(), device=device)
-            
+            node_idx_mapping = (
+                torch.zeros(num_nodes, dtype=torch.long, device=device) - 1
+            )
+            node_idx_mapping[keep_mask] = torch.arange(
+                keep_mask.sum(), device=device
+            )
+
             # Filter edges and remap indices
             edge_mask = keep_mask[edge_index[0]] & keep_mask[edge_index[1]]
             aug_edge_index = node_idx_mapping[edge_index[:, edge_mask]]
-            
+
             # Update batch indices
             new_batch_indices = batch_indices[keep_mask]
-            
+
             return aug_x, aug_edge_index, new_batch_indices
-        
+
         elif aug_type == "drop_edge":
             if self.edge_perturbation_mode == "drop_only":
-                aug_edge_index, _ = dropout_edge(edge_index, p=aug_ratio, training=True)
+                aug_edge_index, _ = dropout_edge(
+                    edge_index, p=aug_ratio, training=True
+                )
             else:
                 # Drop some edges and add random ones (semisupervised variants)
                 num_edges = edge_index.size(1)
@@ -175,13 +189,17 @@ class GraphCLGNNWrapper(AbstractWrapper):
                 kept_edges = edge_index[:, keep_idx]
 
                 num_nodes = x.size(0)
-                new_src = torch.randint(0, num_nodes, (permute_num,), device=device)
-                new_dst = torch.randint(0, num_nodes, (permute_num,), device=device)
+                new_src = torch.randint(
+                    0, num_nodes, (permute_num,), device=device
+                )
+                new_dst = torch.randint(
+                    0, num_nodes, (permute_num,), device=device
+                )
                 added_edges = torch.stack([new_src, new_dst], dim=0)
 
                 aug_edge_index = torch.cat([kept_edges, added_edges], dim=1)
             return x, aug_edge_index, batch_indices
-        
+
         elif aug_type == "mask_attr":
             num_nodes = x.size(0)
             num_mask = max(int(num_nodes * aug_ratio), 1)
@@ -191,9 +209,11 @@ class GraphCLGNNWrapper(AbstractWrapper):
 
             if self.mask_attr_strategy == "gaussian":
                 aug_x[idx_mask] = torch.normal(
-                    mean=0.5, std=0.5,
+                    mean=0.5,
+                    std=0.5,
                     size=(num_mask, x.size(1)),
-                    device=device, dtype=x.dtype,
+                    device=device,
+                    dtype=x.dtype,
                 )
             elif self.mask_attr_strategy == "zeros":
                 aug_x[idx_mask] = 0.0
@@ -201,7 +221,7 @@ class GraphCLGNNWrapper(AbstractWrapper):
                 aug_x[idx_mask] = x.mean(dim=0)
 
             return aug_x, edge_index, batch_indices
-        
+
         elif aug_type == "subgraph":
             # Random-walk-based subgraph sampling (per graph in the batch)
             num_nodes = x.size(0)
@@ -226,7 +246,9 @@ class GraphCLGNNWrapper(AbstractWrapper):
                 local_col = col[edge_in_graph]
 
                 # Start a random walk from a random node in this graph
-                start = graph_nodes[torch.randint(n, (1,), device=device).item()]
+                start = graph_nodes[
+                    torch.randint(n, (1,), device=device).item()
+                ]
                 visited = {start.item()}
                 current = start.item()
 
@@ -235,39 +257,52 @@ class GraphCLGNNWrapper(AbstractWrapper):
                     if neighbors.numel() == 0:
                         # Restart from a random visited node if stuck
                         visited_t = torch.tensor(list(visited), device=device)
-                        current = visited_t[torch.randint(len(visited_t), (1,), device=device).item()].item()
+                        current = visited_t[
+                            torch.randint(
+                                len(visited_t), (1,), device=device
+                            ).item()
+                        ].item()
                         neighbors = local_col[local_row == current]
                         if neighbors.numel() == 0:
                             break
-                    current = neighbors[torch.randint(neighbors.numel(), (1,), device=device).item()].item()
+                    current = neighbors[
+                        torch.randint(
+                            neighbors.numel(), (1,), device=device
+                        ).item()
+                    ].item()
                     visited.add(current)
 
-                visited_idx = torch.tensor(list(visited), dtype=torch.long, device=device)
+                visited_idx = torch.tensor(
+                    list(visited), dtype=torch.long, device=device
+                )
                 keep_mask[visited_idx] = True
 
             keep_mask = self._ensure_connected(keep_mask, batch_indices)
 
             aug_edge_index, _, edge_mask = subgraph(
-                keep_mask, edge_index, relabel_nodes=True, return_edge_mask=True
+                keep_mask,
+                edge_index,
+                relabel_nodes=True,
+                return_edge_mask=True,
             )
             aug_x = x[keep_mask]
             new_batch_indices = batch_indices[keep_mask]
 
             return aug_x, aug_edge_index, new_batch_indices
-        
+
         else:
             raise ValueError(f"Unknown augmentation type: {aug_type}")
-    
+
     def _ensure_connected(self, keep_mask, batch_indices):
         """Ensure at least one node per graph is kept.
-        
+
         Parameters
         ----------
         keep_mask : torch.Tensor
             Boolean mask of nodes to keep.
         batch_indices : torch.Tensor
             Batch assignment for each node.
-            
+
         Returns
         -------
         torch.Tensor
@@ -275,7 +310,7 @@ class GraphCLGNNWrapper(AbstractWrapper):
         """
         # Get unique batch indices
         unique_batches = torch.unique(batch_indices)
-        
+
         for b in unique_batches:
             batch_mask = batch_indices == b
             if not keep_mask[batch_mask].any():
@@ -283,19 +318,19 @@ class GraphCLGNNWrapper(AbstractWrapper):
                 indices = batch_mask.nonzero(as_tuple=True)[0]
                 random_idx = indices[torch.randint(len(indices), (1,))]
                 keep_mask[random_idx] = True
-        
+
         return keep_mask
-    
+
     def pool_graph(self, x, batch_indices):
         """Pool node embeddings to get graph-level representation.
-        
+
         Parameters
         ----------
         x : torch.Tensor
             Node embeddings of shape (num_nodes, hidden_dim).
         batch_indices : torch.Tensor
             Batch assignment for each node.
-            
+
         Returns
         -------
         torch.Tensor
@@ -309,7 +344,7 @@ class GraphCLGNNWrapper(AbstractWrapper):
             return global_add_pool(x, batch_indices)
         else:
             raise ValueError(f"Unknown readout type: {self.readout_type}")
-    
+
     def forward(self, batch):
         r"""Forward pass for GraphCL encoding with augmentations.
 
@@ -350,14 +385,18 @@ class GraphCLGNNWrapper(AbstractWrapper):
             aug_x1,
             aug_edge_index1,
             batch=aug_batch1,
-            edge_weight=edge_weight if self.aug1 not in ["drop_edge", "drop_node", "subgraph"] else None,
+            edge_weight=edge_weight
+            if self.aug1 not in ["drop_edge", "drop_node", "subgraph"]
+            else None,
         )
 
         enc2 = self.backbone(
             aug_x2,
             aug_edge_index2,
             batch=aug_batch2,
-            edge_weight=edge_weight if self.aug2 not in ["drop_edge", "drop_node", "subgraph"] else None,
+            edge_weight=edge_weight
+            if self.aug2 not in ["drop_edge", "drop_node", "subgraph"]
+            else None,
         )
 
         z1 = self.pool_graph(enc1, aug_batch1)
@@ -367,9 +406,8 @@ class GraphCLGNNWrapper(AbstractWrapper):
             "x_0": enc1,
             "z1": z1,
             "z2": z2,
-            "labels": batch.y if hasattr(batch, 'y') else None,
+            "labels": batch.y if hasattr(batch, "y") else None,
             "batch_0": batch_indices,
         }
 
         return model_out
-

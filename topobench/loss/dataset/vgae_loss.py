@@ -20,17 +20,21 @@ class VAELoss(AbstractLoss):
         labels = model_out["labels"]
 
         if self.pos_weight != 1.0:
-            pos_weight_tensor = torch.tensor([self.pos_weight], device=logits.device)
+            pos_weight_tensor = torch.tensor(
+                [self.pos_weight], device=logits.device
+            )
             recon = F.binary_cross_entropy_with_logits(
                 logits, labels, pos_weight=pos_weight_tensor
             )
         else:
             recon = F.binary_cross_entropy_with_logits(logits, labels)
 
-        logvar = model_out.get("logvar", None)
+        logvar = model_out.get("logvar")
         if self.kl_weight != 0.0 and logvar is not None:
             mu = model_out["mu"]
-            kl_per_node = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
+            kl_per_node = -0.5 * torch.sum(
+                1 + logvar - mu.pow(2) - logvar.exp(), dim=1
+            )
             kl = kl_per_node.mean()
             return recon + self.kl_weight * kl
 

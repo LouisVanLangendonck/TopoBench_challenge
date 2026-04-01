@@ -1,6 +1,5 @@
 """GraphCL Readout with Projection Head for Graph Contrastive Learning."""
 
-import torch
 import torch.nn as nn
 import torch_geometric
 
@@ -36,36 +35,32 @@ class GraphCLReadOut(AbstractZeroCellReadOut):
         projection_type: str = "mlp",
         projection_hidden_dim: int = None,
         task_level: str = "graph",
-        **kwargs
+        **kwargs,
     ):
         super().__init__(
             hidden_dim=hidden_dim,
             out_channels=out_channels,
             task_level=task_level,
             logits_linear_layer=False,  # We handle our own projection
-            **kwargs
+            **kwargs,
         )
-        
+
         self.projection_type = projection_type
-        
+
         # Default projection hidden dim to same as hidden_dim
         if projection_hidden_dim is None:
             projection_hidden_dim = hidden_dim
-        
+
         # Build projection head
         self.projection_head = self._build_projection_head(
             projection_type, hidden_dim, out_channels, projection_hidden_dim
         )
-    
+
     def _build_projection_head(
-        self, 
-        projection_type: str, 
-        in_dim: int, 
-        out_dim: int,
-        hidden_dim: int
+        self, projection_type: str, in_dim: int, out_dim: int, hidden_dim: int
     ) -> nn.Module:
         """Build the projection head module.
-        
+
         Parameters
         ----------
         projection_type : str
@@ -76,7 +71,7 @@ class GraphCLReadOut(AbstractZeroCellReadOut):
             Output dimension.
         hidden_dim : int
             Hidden dimension for MLP.
-            
+
         Returns
         -------
         nn.Module
@@ -90,14 +85,14 @@ class GraphCLReadOut(AbstractZeroCellReadOut):
             return nn.Sequential(
                 nn.Linear(in_dim, hidden_dim),
                 nn.ReLU(inplace=True),
-                nn.Linear(hidden_dim, out_dim)
+                nn.Linear(hidden_dim, out_dim),
             )
         else:
             raise ValueError(
                 f"Unknown projection type: {projection_type}. "
                 "Available options: 'none', 'linear', 'mlp'"
             )
-    
+
     def forward(
         self, model_out: dict, batch: torch_geometric.data.Data
     ) -> dict:
@@ -124,24 +119,23 @@ class GraphCLReadOut(AbstractZeroCellReadOut):
         # Get graph embeddings from both views
         z1 = model_out["z1"]
         z2 = model_out["z2"]
-        
+
         # Project through projection head
         z1_proj = self.projection_head(z1)
         z2_proj = self.projection_head(z2)
-        
+
         # Update model output
         model_out["z1_proj"] = z1_proj
         model_out["z2_proj"] = z2_proj
-        
+
         # Logits for compatibility
         model_out["logits"] = z1_proj
-        
+
         return model_out
-    
+
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__}("
             f"projection_type={self.projection_type}, "
             f"task_level={self.task_level})"
         )
-

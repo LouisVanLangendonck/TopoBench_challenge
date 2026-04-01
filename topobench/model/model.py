@@ -51,8 +51,16 @@ class TBModel(LightningModule):
         # also ensures init params will be stored in ckpt
         # Ignore nn.Module and complex objects to make checkpoints portable
         self.save_hyperparameters(
-            logger=False, 
-            ignore=["backbone", "readout", "feature_encoder", "loss", "evaluator", "optimizer", "backbone_wrapper"]
+            logger=False,
+            ignore=[
+                "backbone",
+                "readout",
+                "feature_encoder",
+                "loss",
+                "evaluator",
+                "optimizer",
+                "backbone_wrapper",
+            ],
         )
 
         self.feature_encoder = (
@@ -167,8 +175,10 @@ class TBModel(LightningModule):
         self.state_str = "Training"
         model_out = self.model_step(batch)
 
-         # Get actual batch size (if graph, num_graphs, if node, num_nodes)
-        actual_batch_size = batch.num_graphs if hasattr(batch, "num_graphs") else 1
+        # Get actual batch size (if graph, num_graphs, if node, num_nodes)
+        actual_batch_size = (
+            batch.num_graphs if hasattr(batch, "num_graphs") else 1
+        )
 
         # Log optimization objective (avoid naming it train/loss for VGAE — see VGAEEvaluator).
         loss_value = model_out["loss"].item()
@@ -208,7 +218,9 @@ class TBModel(LightningModule):
         model_out = self.model_step(batch)
 
         # Get actual batch size (if graph, num_graphs, if node, num_nodes)
-        actual_batch_size = batch.num_graphs if hasattr(batch, "num_graphs") else 1
+        actual_batch_size = (
+            batch.num_graphs if hasattr(batch, "num_graphs") else 1
+        )
 
         if not self._uses_vgae_evaluator():
             loss_value = model_out["loss"].item()
@@ -235,7 +247,9 @@ class TBModel(LightningModule):
         model_out = self.model_step(batch)
 
         # Get actual batch size (if graph, num_graphs, if node, num_nodes)
-        actual_batch_size = batch.num_graphs if hasattr(batch, "num_graphs") else 1
+        actual_batch_size = (
+            batch.num_graphs if hasattr(batch, "num_graphs") else 1
+        )
 
         if not self._uses_vgae_evaluator():
             loss_value = model_out["loss"].item()
@@ -269,13 +283,17 @@ class TBModel(LightningModule):
             # (GraphMAEv2 uses train/val/test splits for evaluation)
             is_dgi = "x_0_corrupted" in model_out  # DGI
             is_grace = "z_1" in model_out and "z_2" in model_out  # GRACE
-            is_vgae_edges = "pos_edge_index" in model_out and "neg_edge_index" in model_out
-            is_bgrl = "pred_h_1" in model_out and "target_h_2" in model_out  # BGRL
+            is_vgae_edges = (
+                "pos_edge_index" in model_out and "neg_edge_index" in model_out
+            )
+            is_bgrl = (
+                "pred_h_1" in model_out and "target_h_2" in model_out
+            )  # BGRL
 
             if is_dgi or is_grace or is_vgae_edges or is_bgrl:
                 # Skip masking for self-supervised pre-training outputs
                 return model_out
-            
+
             if self.state_str == "Training":
                 mask = batch.train_mask
             elif self.state_str == "Validation":
@@ -356,12 +374,12 @@ class TBModel(LightningModule):
 
     def on_before_zero_grad(self, optimizer) -> None:
         r"""Lightning hook called after optimizer.step() and before optimizer.zero_grad().
-        
+
         This is the correct place to update the target encoder in BGRL:
         - After the online encoder has been updated by the optimizer
         - Before the next forward pass
         """
-        if hasattr(self.backbone, 'update_target_encoder'):
+        if hasattr(self.backbone, "update_target_encoder"):
             self.backbone.update_target_encoder()
 
     def on_train_epoch_start(self) -> None:
