@@ -1,5 +1,6 @@
 """Main entry point for training and testing models."""
 
+import os
 import random
 from pathlib import Path
 from typing import Any
@@ -166,6 +167,7 @@ OmegaConf.register_new_resolver(
     infer_list_length_plus_one,
     replace=True,
 )
+OmegaConf.register_new_resolver("pid", lambda: os.getpid())
 
 
 def initialize_hydra() -> DictConfig:
@@ -409,13 +411,19 @@ def rerun_best_model_checkpoint(
             if isinstance(lgr, WandbLogger):
                 lgr.log_metrics(logged)
 
-    if cfg.get("delete_checkpoint_after_test", False):
-        if model_path and model_path.exists():
-            log.info(f"Cleaning up: Deleting checkpoint at {model_path}")
-            try:
-                model_path.unlink()
-            except Exception as e:
-                log.warning(f"Failed to delete checkpoint at {model_path}. Error: {e}")
+    if (
+        cfg.get("delete_checkpoint_after_test", False)
+        and model_path
+        and model_path.exists()
+    ):
+        log.info(f"Cleaning up: Deleting checkpoint at {model_path}")
+        try:
+            model_path.unlink()
+        except Exception as e:
+            log.warning(
+                f"Failed to delete checkpoint at {model_path}. Error: {e}"
+            )
+
 
 def count_number_of_parameters(
     model: torch.nn.Module, only_trainable: bool = True

@@ -6,6 +6,7 @@ import time
 
 import torch
 import torch_geometric
+from filelock import FileLock
 from torch_geometric.io import fs
 from tqdm import tqdm
 
@@ -42,17 +43,28 @@ class PreProcessor(torch_geometric.data.InMemoryDataset):
             pre_transform = self.instantiate_pre_transform(
                 data_dir, transforms_config
             )
-            # Record the time taken for preprocessing
-            start_time = time.time()
-            super().__init__(
-                self.processed_data_dir, None, pre_transform, **kwargs
+
+            # 1. Ensure the target directory exists so we can place a lock file in it
+            os.makedirs(self.processed_data_dir, exist_ok=True)
+            lock_path = os.path.join(
+                self.processed_data_dir, "preprocessing.lock"
             )
+
+            start_time = time.time()
+
+            with FileLock(lock_path):
+                # When Process 1 finishes, Process 2 checks, sees data.pt, and skips.
+                super().__init__(
+                    self.processed_data_dir, None, pre_transform, **kwargs
+                )
+                self.save_transform_parameters()
+
             end_time = time.time()
             self.preprocessing_time = end_time - start_time
+
             self.transform = (
                 dataset.transform if hasattr(dataset, "transform") else None
             )
-            self.save_transform_parameters()
             self.load(self.processed_paths[0])
             self.data_list = [data for data in self]
         else:
