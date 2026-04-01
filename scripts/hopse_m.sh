@@ -21,7 +21,7 @@ wandb_entity="gbg141-hopse"
 # 1.1 Define Project Identifiers
 script_name="$(basename "${BASH_SOURCE[0]}" .sh)"
 project_name="${script_name}"
-log_group="hopse_m_debug_sweep"
+log_group="hopse_m_sweep"
 LOG_DIR="./logs/${log_group}"
 
 echo "=========================================================="
@@ -145,14 +145,14 @@ models=(
 
 # --- Datasets ---
 datasets=(
-    "graph/MUTAG"
-    "graph/cocitation_cora"
-    "graph/PROTEINS"
-    "graph/NCI1"
-    "graph/NCI109"
-    "graph/ZINC"
-    "graph/cocitation_citeseer"
-    "graph/cocitation_pubmed"
+    # "graph/MUTAG"
+    # "graph/cocitation_cora"
+    # "graph/PROTEINS"
+    # "graph/NCI1"
+    # "graph/NCI109"
+    # "graph/ZINC"
+    # "graph/cocitation_citeseer"
+    # "graph/cocitation_pubmed"
     "simplicial/mantra_name"
     "simplicial/mantra_orientation"
     "simplicial/mantra_betti_numbers"
