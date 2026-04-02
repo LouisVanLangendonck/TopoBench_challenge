@@ -483,6 +483,19 @@ def run_downstream_evaluation(
         torch.cuda.manual_seed_all(seed)
 
     config = load_wandb_config(run_dir)
+    
+    # DEBUG: Print config structure to understand the issue
+    print(f"DEBUG: Config keys: {list(config.keys())}")
+    if "dataset" in config:
+        print(f"DEBUG: Found 'dataset' in config")
+    elif "pretrain/dataset/loader/parameters/generation_parameters/universe_parameters/K" in config:
+        print(f"DEBUG: Found flattened config key with K = {config['pretrain/dataset/loader/parameters/generation_parameters/universe_parameters/K']}")
+    else:
+        print(f"DEBUG: Neither 'dataset' nor flattened key found")
+        # Print a sample of keys to see the structure
+        sample_keys = list(config.keys())[:10]
+        print(f"DEBUG: Sample config keys: {sample_keys}")
+    
     task_level = detect_task_level(config)
 
     checkpoint_path = None
@@ -496,9 +509,60 @@ def run_downstream_evaluation(
     )
     family_params = gen_params.get("family_parameters", {})
     universe_params = gen_params.get("universe_parameters", {})
-    pretraining_universe_seed = universe_params["seed"]
-    pretraining_family_seed = family_params["seed"]
-    num_classes = universe_params.get("K", 10)
+    # CRITICAL: Get seeds - FAIL if not found (no defaults!)
+    try:
+        pretraining_universe_seed = universe_params["seed"]
+        pretraining_family_seed = family_params["seed"]
+        print(f"✓ Found seeds - universe: {pretraining_universe_seed}, family: {pretraining_family_seed}")
+    except KeyError as e:
+        print(f"❌ CRITICAL ERROR: Missing seed in config: {e}")
+        print(f"❌ Universe params: {universe_params}")
+        print(f"❌ Family params: {family_params}")
+        raise ValueError(
+            f"CRITICAL CONFIG ERROR: Missing required seed parameter: {e}. "
+            "Seeds are required for reproducible dataset generation."
+        ) from e
+    
+    # CRITICAL: Get num_classes - FAIL if not found (no defaults!)
+    num_classes_from_config = universe_params.get("K")
+    if num_classes_from_config is None:
+        print(f"❌ ERROR: K not found in universe_params: {universe_params}")
+        print(f"❌ Checking generation_parameters: {gen_params}")
+        
+        # Try flattened config structure (wandb format)
+        flattened_k_key = "pretrain/dataset/loader/parameters/generation_parameters/universe_parameters/K"
+        if flattened_k_key in config:
+            num_classes_from_config = config[flattened_k_key]
+            print(f"✓ Found K in flattened config: {num_classes_from_config}")
+        else:
+            # Try other possible locations
+            alt_k = gen_params.get("K") or config.get("dataset", {}).get("loader", {}).get("parameters", {}).get("K")
+            if alt_k is not None:
+                num_classes_from_config = alt_k
+                print(f"✓ Found K in alternative location: {num_classes_from_config}")
+            else:
+                # FAIL FAST - no defaults!
+                print(f"❌ CRITICAL ERROR: Cannot find num_classes (K) in any config location!")
+                print(f"❌ Available config keys: {list(config.keys())[:20]}...")
+                print(f"❌ Universe params: {universe_params}")
+                print(f"❌ Generation params: {gen_params}")
+                raise ValueError(
+                    "CRITICAL CONFIG ERROR: Cannot find num_classes (K) parameter in config. "
+                    "This is required and no defaults are allowed. "
+                    "Check that the wandb config contains the correct dataset parameters."
+                )
+    else:
+        print(f"✓ Found num_classes (K) in universe_params: {num_classes_from_config}")
+    
+    # Validate num_classes value
+    if not isinstance(num_classes_from_config, int) or num_classes_from_config <= 0:
+        raise ValueError(
+            f"CRITICAL CONFIG ERROR: Invalid num_classes value: {num_classes_from_config}. "
+            f"Must be a positive integer, got {type(num_classes_from_config).__name__}."
+        )
+    
+    # Use config value initially, but we'll verify against actual data later
+    num_classes = num_classes_from_config
 
     family_evaluation_seed = pretraining_family_seed + 1
     family_training_seed = pretraining_family_seed + 2 + repeat_idx
@@ -607,6 +671,24 @@ def run_downstream_evaluation(
     )
     train_data = train_preprocessor.data_list
     print(f"✓ Train dataset: {len(train_data)} graphs with {train_data[0].x.shape[1]} features")
+    
+    # CRITICAL: Verify num_classes against actual data (like transductive does)
+    actual_num_classes = int(train_data[0].y.max().item()) + 1
+    print(f"✓ Config num_classes: {num_classes}")
+    print(f"✓ Actual num_classes (from data): {actual_num_classes}")
+    
+    if num_classes != actual_num_classes:
+        # This is now an ERROR, not a warning - config should match data!
+        print(f"❌ CRITICAL ERROR: Config num_classes ({num_classes}) != actual ({actual_num_classes})")
+        print(f"❌ This indicates a serious configuration or data loading problem!")
+        raise ValueError(
+            f"CONFIG-DATA MISMATCH: Config specifies {num_classes} classes but data has {actual_num_classes} classes. "
+            f"This indicates either incorrect config loading or dataset generation problems. "
+            f"Config and data must be consistent - no automatic fallbacks allowed."
+        )
+    else:
+        print(f"✓ Config and actual num_classes match: {num_classes}")
+    
     print("=" * 80)
 
     random.seed(pretraining_universe_seed)

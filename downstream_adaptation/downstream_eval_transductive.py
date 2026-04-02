@@ -761,27 +761,27 @@ def main():
     )
     parser.add_argument("--epochs", type=int, default=300)
     parser.add_argument("--lr", type=float, default=0.001)
-    parser.add_argument("--patience", type=int, default=100)
+    parser.add_argument("--patience", type=int, default=10)
     parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--wandb", action="store_true")
     parser.add_argument(
         "--wandb_project", type=str, default="downstream_eval_transductive"
     )
-    parser.add_argument("--classifier_dropout", type=float, default=0.3)
+    parser.add_argument("--classifier_dropout", type=float, default=0.0)
     parser.add_argument("--input_dropout", type=float, default=None)
 
     # Few-shot learning parameters
     parser.add_argument(
         "--n_train",
         type=int,
-        default=30,
+        default=50,
         help="Number of training nodes for few-shot learning (default: 30)",
     )
     parser.add_argument(
         "--n_evaluation",
         type=int,
-        default=200,
+        default=500,
         help="Number of evaluation nodes (val+test, max 50%% of total). Default: 400 nodes",
     )
     parser.add_argument(
