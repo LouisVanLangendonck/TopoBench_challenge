@@ -18,6 +18,7 @@ sys.path.insert(0, str(_THIS_DIR))
 
 try:
     import wandb
+
     WANDB_AVAILABLE = True
 except ImportError:
     print("ERROR: wandb not installed. This script requires wandb.")
@@ -25,11 +26,11 @@ except ImportError:
 
 from downstream_eval import run_downstream_evaluation
 from downstream_eval_utils import (
-    fetch_runs_from_wandb_project,
-    load_wandb_config,
-    get_checkpoint_path_from_summary,
-    downstream_mode_requires_checkpoint,
     DOWNSTREAM_MODES,
+    downstream_mode_requires_checkpoint,
+    fetch_runs_from_wandb_project,
+    get_checkpoint_path_from_summary,
+    load_wandb_config,
 )
 from grid_config_loader import (
     build_worker_devices,
@@ -42,12 +43,36 @@ from grid_config_loader import (
 )
 
 
+def coerce_optional_float_list(field: str, val: Any) -> list[float] | None:
+    """Accept YAML null, a single float/int, or a list of floats/ints."""
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        raise TypeError(f"{field}: bool is not allowed; use floats or null")
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        return [float(val)]
+    if isinstance(val, list):
+        out: list[float] = []
+        for i, x in enumerate(val):
+            if isinstance(x, bool):
+                raise TypeError(f"{field}[{i}] must be float/int, got bool")
+            if not isinstance(x, (int, float)):
+                raise TypeError(f"{field}[{i}] must be float/int, got {x!r}")
+            out.append(float(x))
+        return out
+    raise TypeError(
+        f"{field} must be null, float/int, or list[float/int]; got {type(val).__name__}"
+    )
+
+
 # =============================================================================
 # JSON Serialization Helper
 # =============================================================================
 
+
 class NumpyEncoder(json.JSONEncoder):
     """Custom JSON encoder that handles numpy types."""
+
     def default(self, obj):
         if isinstance(obj, np.integer):
             return int(obj)
@@ -63,23 +88,23 @@ class NumpyEncoder(json.JSONEncoder):
 # =============================================================================
 
 DEFAULT_GRAPHUNIVERSE_OVERRIDES = [
-    {'family_parameters': {'homophily_range': [0.0, 0.1]}},
-    {'family_parameters': {'homophily_range': [0.4, 0.6]}},
-    {'family_parameters': {'homophily_range': [0.9, 1.0]}},
-    {'family_parameters': {'avg_degree_range': [1.0,2.0]}},
-    {'family_parameters': {'avg_degree_range': [2.0,3.0]}},
-    {'family_parameters': {'avg_degree_range': [4.0,5.0]}},
-    {'family_parameters': {'power_law_exponent_range': [1.0,1.0]}},
-    {'family_parameters': {'power_law_exponent_range': [2.5,2.5]}},
-    {'family_parameters': {'power_law_exponent_range': [5.0,5.0]}},
-    {'universe_parameters': {'cluster_variance': 0.2}},
-    {'universe_parameters': {'cluster_variance': 0.4}},
-    {'universe_parameters': {'edge_propensity_variance': 0.1}},
-    {'universe_parameters': {'edge_propensity_variance': 0.5}},
-    {'universe_parameters': {'edge_propensity_variance': 0.9}},
-    {'family_parameters': {'degree_separation_range': [0.1,0.1]}},
-    {'family_parameters': {'degree_separation_range': [0.5,0.5]}},
-    {'family_parameters': {'degree_separation_range': [0.9,0.9]}},
+    {"family_parameters": {"homophily_range": [0.0, 0.1]}},
+    {"family_parameters": {"homophily_range": [0.4, 0.6]}},
+    {"family_parameters": {"homophily_range": [0.9, 1.0]}},
+    {"family_parameters": {"avg_degree_range": [1.0, 2.0]}},
+    {"family_parameters": {"avg_degree_range": [2.0, 3.0]}},
+    {"family_parameters": {"avg_degree_range": [4.0, 5.0]}},
+    {"family_parameters": {"power_law_exponent_range": [1.0, 1.0]}},
+    {"family_parameters": {"power_law_exponent_range": [2.5, 2.5]}},
+    {"family_parameters": {"power_law_exponent_range": [5.0, 5.0]}},
+    {"universe_parameters": {"cluster_variance": 0.2}},
+    {"universe_parameters": {"cluster_variance": 0.4}},
+    {"universe_parameters": {"edge_propensity_variance": 0.1}},
+    {"universe_parameters": {"edge_propensity_variance": 0.5}},
+    {"universe_parameters": {"edge_propensity_variance": 0.9}},
+    {"family_parameters": {"degree_separation_range": [0.1, 0.1]}},
+    {"family_parameters": {"degree_separation_range": [0.5, 0.5]}},
+    {"family_parameters": {"degree_separation_range": [0.9, 0.9]}},
 ]
 
 _INDUCTIVE_SCRIPT_DEFAULTS = {
@@ -116,118 +141,155 @@ _INDUCTIVE_SCRIPT_DEFAULTS = {
 # Grid Configuration
 # =============================================================================
 
+
 def generate_grid_configs(
-    run_dirs: List[str],
-    n_train_values: List[int],
-    tasks: List[str],
-    modes: List[str],
-    graphuniverse_overrides: List[Dict | None],
+    run_dirs: list[str],
+    n_train_values: list[int],
+    tasks: list[str],
+    modes: list[str],
+    graphuniverse_overrides: list[dict | None],
     n_evaluation_graphs: int = 200,
     readout_types: List[str] = None,
     run_infos: List[Dict[str, Any]] = None,
     repeat_on_different_family_seed: int = 1,
+    lr_values: List[float] = None,
+    classifier_dropout_values: List[float] = None,
 ) -> List[Dict[str, Any]]:
     """Generate all combinations of grid parameters."""
-    
+
     if readout_types is None:
         readout_types = ["mean"]
-    
+    if lr_values is None:
+        lr_values = [0.001]
+    if classifier_dropout_values is None:
+        classifier_dropout_values = [0.0]
+
     run_dir_to_config = {}
     if run_infos is not None:
         for info in run_infos:
             run_dir_to_config[info["run_dir"]] = info.get("pretrain_config")
-    
+
     configs = []
-    
+
     for run_dir in run_dirs:
         pretrain_config = run_dir_to_config.get(run_dir)
-        
+
         for n_train in n_train_values:
             for task in tasks:
                 for mode in modes:
                     for readout_type in readout_types:
                         for override in graphuniverse_overrides:
-                            for repeat_idx in range(repeat_on_different_family_seed):
-                                configs.append({
-                                    "run_dir": run_dir,
-                                    "n_train": n_train,
-                                    "task": task,
-                                    "mode": mode,
-                                    "graphuniverse_override": override,
-                                    "n_evaluation_graphs": n_evaluation_graphs,
-                                    "readout_type": readout_type,
-                                    "pretrain_config": pretrain_config,
-                                    "repeat_idx": repeat_idx,
-                                    "repeat_on_different_family_seed": repeat_on_different_family_seed,
-                                })
-    
+                            for lr in lr_values:
+                                for (
+                                    classifier_dropout
+                                ) in classifier_dropout_values:
+                                    for repeat_idx in range(
+                                        repeat_on_different_family_seed
+                                    ):
+                                        configs.append(
+                                            {
+                                                "run_dir": run_dir,
+                                                "n_train": n_train,
+                                                "task": task,
+                                                "mode": mode,
+                                                "graphuniverse_override": override,
+                                                "n_evaluation_graphs": n_evaluation_graphs,
+                                                "readout_type": readout_type,
+                                                "pretrain_config": pretrain_config,
+                                                "repeat_idx": repeat_idx,
+                                                "repeat_on_different_family_seed": repeat_on_different_family_seed,
+                                                "lr": lr,
+                                                "classifier_dropout": classifier_dropout,
+                                            }
+                                        )
+
     return configs
 
 
-def get_experiment_name(config: Dict[str, Any], run_dir: str) -> str:
+def get_experiment_name(config: dict[str, Any], run_dir: str) -> str:
     """Generate a descriptive name for the experiment."""
     run_id = Path(run_dir).name
-    
+
     task_abbrev = {
         "community_detection": "CD",
         "community_presence": "CP",
     }
-    
+
     components = [
         run_id,
         task_abbrev.get(config["task"], config["task"][:3].upper()),
         config["mode"],
         f"n{config['n_train']}",
     ]
-    
+
     components.append(f"ro_{config['readout_type']}")
-    
+
+    # Add lr and classifier_dropout to experiment name
+    components.append(f"lr{config['lr']}")
+    components.append(f"drop{config['classifier_dropout']}")
+
     if config["graphuniverse_override"] is not None:
         import hashlib
+
         override_hash = hashlib.md5(
-            json.dumps(config["graphuniverse_override"], sort_keys=True).encode()
+            json.dumps(
+                config["graphuniverse_override"], sort_keys=True
+            ).encode()
         ).hexdigest()[:6]
         components.append(f"ov_{override_hash}")
-    
+
     if config.get("repeat_on_different_family_seed", 1) > 1:
         components.append(f"rep{config['repeat_idx']}")
-    
+
     return "_".join(components)
 
 
 def print_grid_summary(
-    configs: List[Dict[str, Any]],
+    configs: list[dict[str, Any]],
     *,
     parallel_workers: int = 1,
     device: str = "cuda:0",
-    eval_devices: List[str] | None = None,
+    eval_devices: list[str] | None = None,
 ):
     """Print a summary of the grid configuration."""
     print("\n" + "=" * 80)
     print("DOWNSTREAM EVALUATION GRID SUMMARY")
     print("=" * 80)
-    
+
     run_dirs = sorted(set(c["run_dir"] for c in configs))
     n_trains = sorted(set(c["n_train"] for c in configs))
     tasks = sorted(set(c["task"] for c in configs))
     modes = sorted(set(c["mode"] for c in configs))
-    overrides = list(set(json.dumps(c["graphuniverse_override"], sort_keys=True) for c in configs))
+    overrides = list(
+        set(
+            json.dumps(c["graphuniverse_override"], sort_keys=True)
+            for c in configs
+        )
+    )
     readout_types = sorted(set(c["readout_type"] for c in configs))
-    
+    lr_values = sorted(set(c["lr"] for c in configs))
+    classifier_dropout_values = sorted(
+        set(c["classifier_dropout"] for c in configs)
+    )
+
     print(f"\nRun Directories ({len(run_dirs)}):")
     for i, run_dir in enumerate(run_dirs, 1):
         print(f"  [{i}] {run_dir}")
-    
+
     print(f"\nN_train values: {n_trains}")
     print(f"Tasks: {tasks}")
     print(f"Modes: {modes}")
     print(f"Readout types: {readout_types}")
-    
+    print(f"Learning rates: {lr_values}")
+    print(f"Classifier dropout values: {classifier_dropout_values}")
+
     # Check if we have repeat info
-    repeat_count = configs[0].get("repeat_on_different_family_seed", 1) if configs else 1
+    repeat_count = (
+        configs[0].get("repeat_on_different_family_seed", 1) if configs else 1
+    )
     if repeat_count > 1:
         print(f"Repeats per setting (different family seeds): {repeat_count}")
-    
+
     print(f"\nGraphUniverse Overrides ({len(overrides)}):")
     for i, override_str in enumerate(overrides, 1):
         override = json.loads(override_str)
@@ -235,7 +297,7 @@ def print_grid_summary(
             print(f"  [{i}] None (use pretraining config)")
         else:
             print(f"  [{i}] {json.dumps(override, indent=6)}")
-    
+
     print(f"\nTotal experiments: {len(configs)}")
     try:
         wdev = build_worker_devices(parallel_workers, device, eval_devices)
@@ -243,7 +305,9 @@ def print_grid_summary(
         print(f"\nDevice layout: (invalid — {e})")
     else:
         if parallel_workers > 1:
-            print(f"\nParallel workers: {parallel_workers} (max concurrent jobs)")
+            print(
+                f"\nParallel workers: {parallel_workers} (max concurrent jobs)"
+            )
             print(f"  GPU map (round-robin): {wdev}")
         else:
             print(f"\nExecution: sequential on {wdev[0]}")
@@ -254,21 +318,24 @@ def print_grid_summary(
 # Execution
 # =============================================================================
 
+
 def run_single_experiment(
-    config: Dict[str, Any],
+    config: dict[str, Any],
     device: str,
     seed: int,
     wandb_project: str,
     epochs: int,
-    lr: float,
     batch_size: int,
     patience: int,
-    classifier_dropout: float,
     input_dropout: float | None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run a single downstream evaluation experiment."""
-    
+
     run_dir = config["run_dir"]
+
+    # Get lr and classifier_dropout from config (grid parameters)
+    lr = config.get("lr", 0.001)
+    classifier_dropout = config.get("classifier_dropout", 0.0)
 
     if downstream_mode_requires_checkpoint(config["mode"]):
         checkpoint_path = get_checkpoint_path_from_summary(run_dir)
@@ -278,7 +345,7 @@ def run_single_experiment(
         checkpoint_path = get_checkpoint_path_from_summary(run_dir)
 
     exp_name = get_experiment_name(config, run_dir)
-    
+
     print("\n" + "=" * 80)
     print(f"EXPERIMENT: {exp_name}")
     print("=" * 80)
@@ -289,12 +356,18 @@ def run_single_experiment(
     print(f"  N_train: {config['n_train']}")
     print(f"  N_evaluation: {config['n_evaluation_graphs']}")
     print(f"  Readout type: {config['readout_type']}")
+    print(f"  Learning rate: {lr}")
+    print(f"  Classifier dropout: {classifier_dropout}")
     if config.get("repeat_on_different_family_seed", 1) > 1:
-        print(f"  Repeat idx: {config['repeat_idx']} / {config['repeat_on_different_family_seed']}")
+        print(
+            f"  Repeat idx: {config['repeat_idx']} / {config['repeat_on_different_family_seed']}"
+        )
     if config["graphuniverse_override"] is not None:
-        print(f"  GraphUniverse override: {json.dumps(config['graphuniverse_override'], indent=4)}")
+        print(
+            f"  GraphUniverse override: {json.dumps(config['graphuniverse_override'], indent=4)}"
+        )
     print("=" * 80)
-    
+
     try:
         results = run_downstream_evaluation(
             run_dir=run_dir,
@@ -316,12 +389,14 @@ def run_single_experiment(
             input_dropout=input_dropout,
             pretraining_config=config.get("pretrain_config"),
             repeat_idx=config.get("repeat_idx", 0),
-            repeat_on_different_family_seed=config.get("repeat_on_different_family_seed", 1),
+            repeat_on_different_family_seed=config.get(
+                "repeat_on_different_family_seed", 1
+            ),
         )
-        
+
         results["success"] = True
         results["experiment_name"] = exp_name
-        
+
         if results.get("task_type") == "multilabel_bce":
             mae = results.get("test_mae", "N/A")
             if mae != "N/A":
@@ -338,29 +413,31 @@ def run_single_experiment(
     except Exception as e:
         print(f"\n❌ ERROR: {e}")
         import traceback
+
         traceback.print_exc()
-        
+
         results = {
             "success": False,
             "error": str(e),
             "experiment_name": exp_name,
         }
-    
+
     finally:
         try:
             import wandb
+
             if wandb.run is not None:
                 wandb.finish()
                 print("\n✓ Wandb run properly closed")
         except:
             pass
-    
+
     results["config"] = config
-    
+
     return results
 
 
-def _grid_worker(payload: Dict[str, Any]) -> Dict[str, Any]:
+def _grid_worker(payload: dict[str, Any]) -> dict[str, Any]:
     """Picklable entry point for ``ProcessPoolExecutor`` (must stay at module level)."""
     return run_single_experiment(
         config=payload["config"],
@@ -368,25 +445,23 @@ def _grid_worker(payload: Dict[str, Any]) -> Dict[str, Any]:
         seed=payload["seed"],
         wandb_project=payload["wandb_project"],
         epochs=payload["epochs"],
-        lr=payload["lr"],
         batch_size=payload["batch_size"],
         patience=payload["patience"],
-        classifier_dropout=payload["classifier_dropout"],
         input_dropout=payload["input_dropout"],
     )
 
 
 def _grid_worker_indexed(
-    item: tuple[int, Dict[str, Any]],
-) -> tuple[int, Dict[str, Any]]:
+    item: tuple[int, dict[str, Any]],
+) -> tuple[int, dict[str, Any]]:
     """Return (grid index, result) so the parent can preserve experiment order."""
     idx, payload = item
     return idx, _grid_worker(payload)
 
 
 def _save_grid_results_json(
-    configs: List[Dict[str, Any]],
-    all_results: List[Dict[str, Any]],
+    configs: list[dict[str, Any]],
+    all_results: list[dict[str, Any]],
     total_duration,
 ) -> None:
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -408,29 +483,27 @@ def _save_grid_results_json(
 
 
 def _run_grid_parallel(
-    configs: List[Dict[str, Any]],
-    worker_devices: List[str],
+    configs: list[dict[str, Any]],
+    worker_devices: list[str],
     seed: int,
     wandb_project: str,
     epochs: int,
-    lr: float,
     batch_size: int,
     patience: int,
-    classifier_dropout: float,
     input_dropout: float | None,
     save_results: bool = True,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Run grid with up to ``len(worker_devices)`` experiments at a time (spawn + CUDA-safe)."""
     n_slots = len(worker_devices)
     start_time = datetime.now()
-    all_results: List[Dict[str, Any] | None] = [None] * len(configs)
+    all_results: list[dict[str, Any] | None] = [None] * len(configs)
 
     print("\n" + "=" * 80)
     print(f"STARTING GRID EXECUTION (parallel, {n_slots} workers)")
     print(f"  Devices: {worker_devices}")
     print("=" * 80)
 
-    tasks: List[tuple[int, Dict[str, Any]]] = []
+    tasks: list[tuple[int, dict[str, Any]]] = []
     for i, config in enumerate(configs):
         dev = worker_devices[i % n_slots]
         payload = {
@@ -439,10 +512,8 @@ def _run_grid_parallel(
             "seed": seed,
             "wandb_project": wandb_project,
             "epochs": epochs,
-            "lr": lr,
             "batch_size": batch_size,
             "patience": patience,
-            "classifier_dropout": classifier_dropout,
             "input_dropout": input_dropout,
         }
         tasks.append((i, payload))
@@ -458,7 +529,9 @@ def _run_grid_parallel(
                 _, result = fut.result()
                 all_results[idx] = result
             except Exception as e:
-                print(f"\n❌ CRITICAL ERROR (job {idx + 1}/{len(configs)}): {e}")
+                print(
+                    f"\n❌ CRITICAL ERROR (job {idx + 1}/{len(configs)}): {e}"
+                )
                 import traceback
 
                 traceback.print_exc()
@@ -468,7 +541,7 @@ def _run_grid_parallel(
                     "config": configs[idx],
                 }
 
-    resolved: List[Dict[str, Any]] = [
+    resolved: list[dict[str, Any]] = [
         r
         if r is not None
         else {
@@ -499,23 +572,23 @@ def _run_grid_parallel(
 
 
 def run_grid(
-    configs: List[Dict[str, Any]],
+    configs: list[dict[str, Any]],
     device: str,
     seed: int,
     wandb_project: str,
     epochs: int,
-    lr: float,
     batch_size: int,
     patience: int,
-    classifier_dropout: float,
     input_dropout: float | None,
     save_results: bool = True,
     *,
     parallel_workers: int = 1,
-    eval_devices: List[str] | None = None,
-) -> List[Dict[str, Any]]:
+    eval_devices: list[str] | None = None,
+) -> list[dict[str, Any]]:
     """Run the full grid of downstream evaluations (sequential or multi-GPU parallel)."""
-    worker_devices = build_worker_devices(parallel_workers, device, eval_devices)
+    worker_devices = build_worker_devices(
+        parallel_workers, device, eval_devices
+    )
     if parallel_workers > 1:
         return _run_grid_parallel(
             configs=configs,
@@ -523,16 +596,14 @@ def run_grid(
             seed=seed,
             wandb_project=wandb_project,
             epochs=epochs,
-            lr=lr,
             batch_size=batch_size,
             patience=patience,
-            classifier_dropout=classifier_dropout,
             input_dropout=input_dropout,
             save_results=save_results,
         )
 
     start_time = datetime.now()
-    all_results: List[Dict[str, Any]] = []
+    all_results: list[dict[str, Any]] = []
 
     print("\n" + "=" * 80)
     print("STARTING GRID EXECUTION (sequential)")
@@ -550,10 +621,8 @@ def run_grid(
                 seed=seed,
                 wandb_project=wandb_project,
                 epochs=epochs,
-                lr=lr,
                 batch_size=batch_size,
                 patience=patience,
-                classifier_dropout=classifier_dropout,
                 input_dropout=input_dropout,
             )
             all_results.append(results)
@@ -568,16 +637,18 @@ def run_grid(
 
             traceback.print_exc()
 
-            all_results.append({
-                "success": False,
-                "error": str(e),
-                "config": config,
-            })
+            all_results.append(
+                {
+                    "success": False,
+                    "error": str(e),
+                    "config": config,
+                }
+            )
 
     total_duration = datetime.now() - start_time
     successful = sum(1 for r in all_results if r.get("success", False))
     failed = len(all_results) - successful
-    
+
     print("\n" + "=" * 80)
     print("GRID EXECUTION COMPLETE")
     print("=" * 80)
@@ -597,6 +668,7 @@ def run_grid(
 # CLI
 # =============================================================================
 
+
 def main():
     parser = argparse.ArgumentParser(
         description="Grid search for downstream evaluation (YAML + CLI).",
@@ -611,7 +683,7 @@ def main():
         "--config",
         "-c",
         type=str,
-        default=None,
+        default="downstream_adaptation/grid_configs/grid_inductive.yaml",
         help="YAML file with grid settings (see grid_configs/grid_inductive.yaml).",
     )
     run_selection = parser.add_mutually_exclusive_group(required=False)
@@ -627,6 +699,16 @@ def main():
         type=str,
         default=None,
         help="Wandb project to fetch runs from (overrides config).",
+    )
+    parser.add_argument(
+        "--wandb-local-root",
+        type=str,
+        nargs="+",
+        default=None,
+        help=(
+            "If set: scan ONLY these wandb roots (run-* live under <paths.output_dir>/wandb). "
+            "If omitted: use TOPOBENCH_OUTPUT_DIR/wandb or legacy repo-relative paths."
+        ),
     )
     parser.add_argument(
         "--min_runs",
@@ -717,12 +799,22 @@ def main():
     file_cfg = load_grid_yaml(args.config) if args.config else {}
 
     def eff(key: str, arg_val):
-        return coalesce(arg_val, file_cfg.get(key), _INDUCTIVE_SCRIPT_DEFAULTS.get(key))
+        return coalesce(
+            arg_val, file_cfg.get(key), _INDUCTIVE_SCRIPT_DEFAULTS.get(key)
+        )
 
     run_dirs = coalesce(args.run_dirs, file_cfg.get("run_dirs"))
     if isinstance(run_dirs, str):
         run_dirs = [run_dirs]
-    wandb_pretrain = coalesce(args.wandb_pretrain_project, file_cfg.get("wandb_pretrain_project"))
+    wandb_pretrain = coalesce(
+        args.wandb_pretrain_project, file_cfg.get("wandb_pretrain_project")
+    )
+    wandb_local_roots = coalesce(
+        args.wandb_local_root, file_cfg.get("wandb_local_roots")
+    )
+    if isinstance(wandb_local_roots, str):
+        wandb_local_roots = [wandb_local_roots]
+
     if not run_dirs and not wandb_pretrain:
         parser.error(
             "Provide run_dirs or wandb_pretrain_project via --config YAML or CLI "
@@ -732,13 +824,18 @@ def main():
     n_train = coerce_optional_int_list("n_train", eff("n_train", args.n_train))
     tasks = coerce_str_list("tasks", eff("tasks", args.tasks))
     modes = coerce_str_list("modes", eff("modes", args.modes))
-    readout_types = coerce_str_list("readout_types", eff("readout_types", args.readout_types))
+    readout_types = coerce_str_list(
+        "readout_types", eff("readout_types", args.readout_types)
+    )
     n_evaluation_graphs = eff("n_evaluation_graphs", args.n_evaluation_graphs)
     epochs = eff("epochs", args.epochs)
-    lr = eff("lr", args.lr)
+    lr_values = coerce_optional_float_list("lr", eff("lr", args.lr))
     batch_size = eff("batch_size", args.batch_size)
     patience = eff("patience", args.patience)
-    classifier_dropout = eff("classifier_dropout", args.classifier_dropout)
+    classifier_dropout_values = coerce_optional_float_list(
+        "classifier_dropout",
+        eff("classifier_dropout", args.classifier_dropout),
+    )
     input_dropout = eff("input_dropout", args.input_dropout)
     device = eff("device", args.device)
     pw_arg = eff("parallel_workers", args.parallel_workers)
@@ -749,7 +846,7 @@ def main():
         if parallel_workers < 1:
             parser.error("parallel_workers must be >= 1")
     if args.eval_devices is not None:
-        eval_devices: List[str] | None = list(args.eval_devices)
+        eval_devices: list[str] | None = list(args.eval_devices)
     elif file_cfg.get("eval_devices") is not None:
         eval_devices = coerce_optional_str_list(
             "eval_devices", file_cfg["eval_devices"]
@@ -764,9 +861,13 @@ def main():
 
     seed = eff("seed", args.seed)
     wandb_project = eff("wandb_project", args.wandb_project)
-    fetch_filters = coalesce(file_cfg.get("fetch_filters"), {"state": "finished"})
+    fetch_filters = coalesce(
+        file_cfg.get("fetch_filters"), {"state": "finished"}
+    )
     min_runs = coalesce(args.min_runs, file_cfg.get("min_runs"), 1)
-    repeat_on_different_family_seed = eff("repeat_on_different_family_seed", args.repeat_on_different_family_seed)
+    repeat_on_different_family_seed = eff(
+        "repeat_on_different_family_seed", args.repeat_on_different_family_seed
+    )
     if repeat_on_different_family_seed is None:
         repeat_on_different_family_seed = 1
     else:
@@ -777,26 +878,41 @@ def main():
     if args.graphuniverse_overrides is not None:
         parsed_overrides = []
         for override_str in args.graphuniverse_overrides:
-            if override_str is None or str(override_str).lower() in ("null", "none"):
+            if override_str is None or str(override_str).lower() in (
+                "null",
+                "none",
+            ):
                 parsed_overrides.append(None)
             else:
                 try:
                     parsed_overrides.append(json.loads(override_str))
                 except json.JSONDecodeError as e:
-                    print(f"ERROR: Invalid JSON in GraphUniverse override: {override_str}\n  {e}")
+                    print(
+                        f"ERROR: Invalid JSON in GraphUniverse override: {override_str}\n  {e}"
+                    )
                     sys.exit(1)
-        print(f"\n✓ GraphUniverse overrides from CLI ({len(parsed_overrides)} entries)")
+        print(
+            f"\n✓ GraphUniverse overrides from CLI ({len(parsed_overrides)} entries)"
+        )
     elif file_cfg.get("graphuniverse_overrides") is not None:
-        parsed_overrides = normalize_graphuniverse_overrides(file_cfg["graphuniverse_overrides"])
-        print(f"\n✓ GraphUniverse overrides from YAML ({len(parsed_overrides)} entries)")
+        parsed_overrides = normalize_graphuniverse_overrides(
+            file_cfg["graphuniverse_overrides"]
+        )
+        print(
+            f"\n✓ GraphUniverse overrides from YAML ({len(parsed_overrides)} entries)"
+        )
     else:
         parsed_overrides = list(DEFAULT_GRAPHUNIVERSE_OVERRIDES)
-        print(f"\n✓ Using built-in DEFAULT_GRAPHUNIVERSE_OVERRIDES ({len(parsed_overrides)} entries)")
+        print(
+            f"\n✓ Using built-in DEFAULT_GRAPHUNIVERSE_OVERRIDES ({len(parsed_overrides)} entries)"
+        )
 
     save_results = coalesce(file_cfg.get("save_results"), True)
     if args.no_save:
         save_results = False
-    confirm_before_run = coalesce(file_cfg.get("confirm_before_run"), True) and not args.yes
+    confirm_before_run = (
+        coalesce(file_cfg.get("confirm_before_run"), True) and not args.yes
+    )
 
     if wandb_pretrain:
         print(f"\n{'=' * 80}")
@@ -807,6 +923,7 @@ def main():
             project_path=wandb_pretrain,
             filters=fetch_filters,
             min_runs=min_runs,
+            wandb_local_roots=wandb_local_roots,
         )
         run_dirs = [info["run_dir"] for info in run_infos]
         print(f"\n✓ Found {len(run_dirs)} runs")
@@ -816,7 +933,9 @@ def main():
         run_infos = []
         for run_dir in run_dirs:
             pretrain_config = load_wandb_config(run_dir)
-            run_infos.append({"run_dir": run_dir, "pretrain_config": pretrain_config})
+            run_infos.append(
+                {"run_dir": run_dir, "pretrain_config": pretrain_config}
+            )
         print(f"  Loaded pretraining configs for {len(run_infos)} runs")
 
     configs = generate_grid_configs(
@@ -829,6 +948,8 @@ def main():
         readout_types=readout_types,
         run_infos=run_infos,
         repeat_on_different_family_seed=repeat_on_different_family_seed,
+        lr_values=lr_values,
+        classifier_dropout_values=classifier_dropout_values,
     )
 
     print_grid_summary(
@@ -842,7 +963,7 @@ def main():
         response = input("\nProceed with grid execution? [y/N]: ")
         if response.lower() != "y":
             print("Aborted.")
-            return
+            return None
 
     results = run_grid(
         configs=configs,
@@ -850,10 +971,8 @@ def main():
         seed=seed,
         wandb_project=wandb_project,
         epochs=epochs,
-        lr=lr,
         batch_size=batch_size,
         patience=patience,
-        classifier_dropout=classifier_dropout,
         input_dropout=input_dropout,
         save_results=save_results,
         parallel_workers=parallel_workers,
@@ -869,4 +988,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

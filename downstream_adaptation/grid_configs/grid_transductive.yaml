@@ -3,13 +3,18 @@
 #   python downstream_adaptation/run_downstream_eval_grid_transductive.py --config downstream_adaptation/grid_configs/grid_transductive.yaml
 
 run_dirs: null
-wandb_pretrain_project: dgi_grid_transductive
+wandb_pretrain_project: run_graphmaev2_grid_transductive_rq1
 
 fetch_filters:
   state: finished
 min_runs: 1
+# See grid_inductive.yaml (wandb_local_roots / TOPOBENCH_OUTPUT_DIR).
+wandb_local_roots:
+  - /data/louisvl/TB/outputs/wandb
 
 modes:
+  - full-finetune
+  - random-init-full-finetune
   - linear-probe
   - random-init-linear-probe
 
@@ -23,17 +28,17 @@ graphuniverse_overrides:
   - null
 
 epochs: 200
-lr: 0.001
+lr: [0.001]
 patience: 10
-classifier_dropout: 0.0
+classifier_dropout: [0.0,0.2]
 input_dropout: null
 device: cuda:0
 # Max concurrent jobs; each uses a distinct GPU (see eval_devices). 1 = sequential.
 parallel_workers: 4
-eval_devices: null
+eval_devices: [cuda:0, cuda:1, cuda:2, cuda:3]
 seed: 42
-wandb_project: dgi_downstream_results_transductive
+wandb_project: downstream_graphmaev2_grid_transductive_rq1
 save_results: true
 confirm_before_run: true
-# Number of times to repeat each experiment with different family seeds for computing std (default: 1)
-repeat_on_different_family_seed: 1
+# Number of times to repeat each experiment with different train/val splits (same graph, same test set) for computing std (default: 1)
+repeat_on_different_family_seed: 3
