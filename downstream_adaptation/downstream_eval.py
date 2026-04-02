@@ -463,7 +463,12 @@ def run_downstream_evaluation(
     repeat_idx: int = 0,
     repeat_on_different_family_seed: int = 1,
 ) -> dict:
-    """Run inductive downstream evaluation: community_detection (node CE) or community_presence (graph BCE)."""
+    """Run inductive downstream evaluation: community_detection (node CE) or community_presence (graph BCE).
+    
+    INDUCTIVE SETTING: Uses different graphs for train/val/test splits.
+    - repeat_on_different_family_seed: Generates different training graphs with different family seeds
+    - Each repeat uses the same evaluation graphs but different training graphs
+    """
     run_dir = Path(run_dir)
 
     if mode not in DOWNSTREAM_MODES:
@@ -498,6 +503,79 @@ def run_downstream_evaluation(
     family_evaluation_seed = pretraining_family_seed + 1
     family_training_seed = pretraining_family_seed + 2 + repeat_idx
 
+    # INDUCTIVE DATASET LOADING: Use TopoBench logic for consistent transforms
+    # Unlike transductive, we DO want to generate new datasets (different family seeds, n_graphs)
+    # but we want the transforms to be applied consistently using TopoBench's logic
+    
+    print("\n" + "=" * 80)
+    print("LOADING INDUCTIVE DATASETS USING TOPOBENCH LOGIC")
+    print("=" * 80)
+    
+    # Register ALL the same OmegaConf resolvers as TopoBench run.py
+    try:
+        from topobench.utils.config_resolvers import (
+            get_default_metrics, get_default_trainer, get_default_transform,
+            get_flattened_channels, get_monitor_metric, get_monitor_mode,
+            get_non_relational_out_channels, get_required_lifting,
+            infer_in_channels, infer_num_cell_dimensions,
+            infer_topotune_num_cell_dimensions,
+        )
+        from omegaconf import OmegaConf
+        
+        # Register all resolvers exactly like TopoBench run.py
+        OmegaConf.register_new_resolver("get_default_metrics", get_default_metrics, replace=True)
+        OmegaConf.register_new_resolver("get_default_trainer", get_default_trainer, replace=True)
+        OmegaConf.register_new_resolver("get_default_transform", get_default_transform, replace=True)
+        OmegaConf.register_new_resolver("get_flattened_channels", get_flattened_channels, replace=True)
+        OmegaConf.register_new_resolver("get_required_lifting", get_required_lifting, replace=True)
+        OmegaConf.register_new_resolver("get_monitor_metric", get_monitor_metric, replace=True)
+        OmegaConf.register_new_resolver("get_monitor_mode", get_monitor_mode, replace=True)
+        OmegaConf.register_new_resolver("get_non_relational_out_channels", get_non_relational_out_channels, replace=True)
+        OmegaConf.register_new_resolver("infer_in_channels", infer_in_channels, replace=True)
+        OmegaConf.register_new_resolver("infer_num_cell_dimensions", infer_num_cell_dimensions, replace=True)
+        OmegaConf.register_new_resolver("infer_topotune_num_cell_dimensions", infer_topotune_num_cell_dimensions, replace=True)
+        OmegaConf.register_new_resolver("parameter_multiplication", lambda x, y: int(int(x) * int(y)), replace=True)
+        print("✓ Registered ALL OmegaConf resolvers from TopoBench")
+    except ImportError as e:
+        print(f"⚠️  Could not import config resolvers: {e} - may cause config differences")
+    
+    # Get the original config components from wandb
+    dataset_name = config["dataset"]["loader"]["parameters"]["data_name"]
+    model_name = config["model"].get("model_name", "gps_graphmaev2")
+    
+    print(f"Using dataset: {dataset_name}, model: {model_name}")
+    
+    # Recreate config using hydra composition (like TopoBench run.py does)
+    import hydra
+    from hydra import compose, initialize
+    
+    # Initialize hydra with the configs directory
+    try:
+        hydra.core.global_hydra.GlobalHydra.instance().clear()
+    except:
+        pass
+    
+    with initialize(version_base="1.3", config_path="../configs", job_name="downstream_eval_inductive"):
+        # Compose config exactly like TopoBench
+        cfg_recreated = compose(
+            config_name="run.yaml",
+            overrides=[
+                f"dataset=graph/{dataset_name.replace('_GraphMAEv2_Transductive', '_transductive_graphmaev2')}",
+                f"model=graph/{model_name}",
+                # Keep the same seed from pretraining for consistency
+                f"seed={config.get('seed', 42)}",
+            ]
+        )
+        
+        print(f"✓ Recreated config using hydra composition")
+        print(f"Dataset config: {cfg_recreated.dataset.loader._target_}")
+        print(f"Model config: {cfg_recreated.model._target_}")
+        
+        # Get the recreated transform config
+        transform_config = cfg_recreated.get("transforms", None)
+        print(f"Recreated transform config: {transform_config}")
+    
+    # Now create datasets using the standard method but with consistent transform config
     eval_dataset, eval_data_dir, _ = create_dataset_from_config(
         config,
         n_graphs=n_evaluation_graphs,
@@ -508,11 +586,12 @@ def run_downstream_evaluation(
         downstream_task=downstream_task,
     )
 
-    transforms_config = config.get("transforms")
+    # Use the recreated transform config for consistent preprocessing
     eval_preprocessor = apply_transforms(
-        eval_dataset, eval_data_dir, transforms_config
+        eval_dataset, eval_data_dir, transform_config
     )
     eval_data_list = eval_preprocessor.data_list
+    print(f"✓ Eval dataset: {len(eval_data_list)} graphs with {eval_data_list[0].x.shape[1]} features")
 
     train_dataset, train_data_dir, _ = create_dataset_from_config(
         config,
@@ -524,9 +603,11 @@ def run_downstream_evaluation(
         downstream_task=downstream_task,
     )
     train_preprocessor = apply_transforms(
-        train_dataset, train_data_dir, transforms_config
+        train_dataset, train_data_dir, transform_config
     )
     train_data = train_preprocessor.data_list
+    print(f"✓ Train dataset: {len(train_data)} graphs with {train_data[0].x.shape[1]} features")
+    print("=" * 80)
 
     random.seed(pretraining_universe_seed)
     eval_indices = list(range(len(eval_data_list)))

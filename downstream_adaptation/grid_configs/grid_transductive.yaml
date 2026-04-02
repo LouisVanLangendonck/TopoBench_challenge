@@ -1,4 +1,5 @@
 # Transductive downstream evaluation grid (run_downstream_eval_grid_transductive.py)
+# TRANSDUCTIVE SETTING: Uses a single large graph with train/val/test node masks
 # Run from repo root, e.g.:
 #   python downstream_adaptation/run_downstream_eval_grid_transductive.py --config downstream_adaptation/grid_configs/grid_transductive.yaml
 
@@ -41,4 +42,5 @@ wandb_project: downstream_graphmaev2_grid_transductive_rq1
 save_results: true
 confirm_before_run: true
 # Number of times to repeat each experiment with different train/val splits (same graph, same test set) for computing std (default: 1)
-repeat_on_different_family_seed: 3
+# TRANSDUCTIVE: Each repeat uses the same graph but different train/val node splits (test set fixed)
+repeat_on_different_split_seed: 3

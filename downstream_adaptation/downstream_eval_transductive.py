@@ -37,9 +37,7 @@ from downstream_eval_utils import (
     LinearClassifier,
     SupervisedCDDownstreamModel,
     TBModelNodeEncoder,
-    apply_transforms,
     build_tb_model_for_downstream,
-    create_dataset_from_config,
     detect_learning_setting,
     detect_task_level,
     downstream_mode_freezes_encoder,
@@ -53,6 +51,8 @@ from downstream_eval_utils import (
     verify_downstream_logits,
     verify_encoder_outputs,
 )
+
+from topobench.data.preprocessor import PreProcessor
 
 
 class TransductiveNodeClassifier(nn.Module):
@@ -318,9 +318,20 @@ def run_downstream_evaluation_transductive(
     pretraining_config: dict | None = None,
     graphuniverse_override: dict | None = None,
     repeat_idx: int = 0,
-    repeat_on_different_family_seed: int = 1,
+    repeat_on_different_split_seed: int = 1,
 ) -> dict:
-    """Run full downstream evaluation pipeline for transductive setting."""
+    """Run full downstream evaluation pipeline for transductive setting.
+    
+    TRANSDUCTIVE SETTING: Uses a single large graph with train/val/test node masks.
+    - repeat_on_different_split_seed: Uses the same graph but different train/val splits
+    - Test set remains fixed across repeats, only train/val splits change
+    
+    Args:
+        repeat_idx: Index of current repeat (0-based)
+        repeat_on_different_split_seed: Number of times to repeat with different train/val splits
+                                       (same graph, same test set, different train/val splits)
+    """
+    from pathlib import Path
     run_dir = Path(run_dir)
 
     if mode not in DOWNSTREAM_MODES:
@@ -356,26 +367,158 @@ def run_downstream_evaluation_transductive(
     # but different train/val splits. The repeat_idx will be used for split randomization.
     family_seed_for_downstream = pretraining_family_seed
 
-    # Same universe/family seeds as pretraining; do not override downstream_task (keeps graph identical).
-    dataset, data_dir, _ = create_dataset_from_config(
-        config,
-        n_graphs=1,
-        universe_seed=pretraining_universe_seed,
-        family_seed=family_seed_for_downstream,
-        dataset_purpose="downstream_transductive",
-        downstream_task=None,
-        graphuniverse_override=graphuniverse_override,
-    )
-
-    transforms_config = config.get("transforms")
-    preprocessor = apply_transforms(dataset, data_dir, transforms_config)
+    # CRITICAL FIX: Use the EXACT same logic as TopoBench run.py
+    # This should automatically find and load the existing dataset from pretraining
+    # instead of creating a new one, since we're using the identical config.
+    
+    import hydra
+    from omegaconf import OmegaConf
+    
+    # Register ALL the same OmegaConf resolvers as TopoBench run.py
+    # This ensures config resolution works identically to pretraining
+    try:
+        from topobench.utils.config_resolvers import (
+            get_default_metrics,
+            get_default_trainer,
+            get_default_transform,
+            get_flattened_channels,
+            get_monitor_metric,
+            get_monitor_mode,
+            get_non_relational_out_channels,
+            get_required_lifting,
+            infer_in_channels,
+            infer_num_cell_dimensions,
+            infer_topotune_num_cell_dimensions,
+        )
+        
+        # Register all resolvers exactly like TopoBench run.py
+        OmegaConf.register_new_resolver(
+            "get_default_metrics", get_default_metrics, replace=True
+        )
+        OmegaConf.register_new_resolver(
+            "get_default_trainer", get_default_trainer, replace=True
+        )
+        OmegaConf.register_new_resolver(
+            "get_default_transform", get_default_transform, replace=True
+        )
+        OmegaConf.register_new_resolver(
+            "get_flattened_channels",
+            get_flattened_channels,
+            replace=True,
+        )
+        OmegaConf.register_new_resolver(
+            "get_required_lifting", get_required_lifting, replace=True
+        )
+        OmegaConf.register_new_resolver(
+            "get_monitor_metric", get_monitor_metric, replace=True
+        )
+        OmegaConf.register_new_resolver(
+            "get_monitor_mode", get_monitor_mode, replace=True
+        )
+        OmegaConf.register_new_resolver(
+            "get_non_relational_out_channels",
+            get_non_relational_out_channels,
+            replace=True,
+        )
+        OmegaConf.register_new_resolver(
+            "infer_in_channels", infer_in_channels, replace=True
+        )
+        OmegaConf.register_new_resolver(
+            "infer_num_cell_dimensions", infer_num_cell_dimensions, replace=True
+        )
+        OmegaConf.register_new_resolver(
+            "infer_topotune_num_cell_dimensions",
+            infer_topotune_num_cell_dimensions,
+            replace=True,
+        )
+        OmegaConf.register_new_resolver(
+            "parameter_multiplication", lambda x, y: int(int(x) * int(y)), replace=True
+        )
+        print("✓ Registered ALL OmegaConf resolvers from TopoBench")
+    except ImportError as e:
+        print(f"⚠️  Could not import config resolvers: {e} - may cause config differences")
+    
+    print("=" * 80)
+    print("LOADING DATASET USING TOPOBENCH LOGIC")
+    print("=" * 80)
+    
+    # CRITICAL FIX: Reconstruct the config exactly like TopoBench does during pretraining
+    # The issue is that wandb config has different parameter order/types than original construction
+    
+    # Step 1: Recreate the original hydra config composition process
+    # Instead of using wandb's serialized config, recreate it from original config files
+    
+    # Get the original config components from wandb
+    dataset_name = config["dataset"]["loader"]["parameters"]["data_name"]  # GraphUniverse_GraphMAEv2_Transductive
+    model_name = config["model"].get("model_name", "gps_graphmaev2")
+    
+    print(f"Reconstructing config for dataset: {dataset_name}, model: {model_name}")
+    
+    # Recreate config using hydra composition (like TopoBench run.py does)
+    import hydra
+    from hydra import compose, initialize
+    from omegaconf import OmegaConf
+    
+    # Initialize hydra with the configs directory
+    try:
+        hydra.core.global_hydra.GlobalHydra.instance().clear()
+    except:
+        pass
+    
+    with initialize(version_base="1.3", config_path="../configs", job_name="downstream_eval"):
+        # Compose config exactly like TopoBench, using the same dataset and model
+        # This should create identical parameter order and types as pretraining
+        cfg = compose(
+            config_name="run.yaml",
+            overrides=[
+                f"dataset=graph/{dataset_name.replace('_GraphMAEv2_Transductive', '_transductive_graphmaev2')}",
+                f"model=graph/{model_name}",
+                # Keep the same seeds and parameters from pretraining
+                f"seed={config.get('seed', 42)}",
+            ]
+        )
+        
+        print(f"✓ Recreated config using hydra composition")
+        print(f"Dataset config: {cfg.dataset.loader._target_}")
+        print(f"Model config: {cfg.model._target_}")
+        
+        # Now use the recreated config for dataset loading
+        dataset_loader = hydra.utils.instantiate(cfg.dataset.loader)
+        dataset, dataset_dir = dataset_loader.load()
+        
+        # Use the recreated transform config
+        transform_config = cfg.get("transforms", None)
+    
+        print(f"✓ Dataset loaded from: {dataset_dir}")
+        print(f"✓ Dataset size: {len(dataset)}")
+        
+        # Step 2: Apply transforms using the recreated config
+        print(f"Recreated transform config: {transform_config}")
+        preprocessor = PreProcessor(dataset, dataset_dir, transform_config)
+    
+    # For transductive, we need the raw data list before splitting
     data_list = preprocessor.data_list
+    
+    # Step 3: Verify we got the right features (should be 35: 15 base + 10 LapPE + 10 RWSE)
+    if len(data_list) > 0:
+        sample_data = data_list[0]
+        if hasattr(sample_data, 'x') and sample_data.x is not None:
+            n_features = sample_data.x.shape[1]
+            print(f"✓ Loaded dataset with {n_features} features")
+            if n_features == 35:
+                print("✓ SUCCESS: 35 features (15 base + 10 LapPE + 10 RWSE)")
+            elif n_features == 15:
+                print("⚠️  WARNING: Only 15 features - missing positional encodings!")
+            else:
+                print(f"⚠️  WARNING: Unexpected {n_features} features")
+        else:
+            print("⚠️  WARNING: No node features found in dataset")
+    
+    print("=" * 80)
 
     assert len(data_list) == 1, (
         f"Expected 1 graph for transductive setting, got {len(data_list)}"
     )
-
-    from omegaconf import OmegaConf
 
     from topobench.data.utils.split_utils import load_transductive_splits
     from topobench.dataloader import DataloadDataset
@@ -534,7 +677,7 @@ def run_downstream_evaluation_transductive(
             "pretraining_family_seed": pretraining_family_seed,
             "family_seed_for_downstream": family_seed_for_downstream,
             "repeat_idx": repeat_idx,
-            "repeat_on_different_family_seed": repeat_on_different_family_seed,
+            "repeat_on_different_split_seed": repeat_on_different_split_seed,
             "split_seed": data_seed + 1000 + repeat_idx,
             "transductive_split_strategy": "fixed_test_varying_trainval",
         }

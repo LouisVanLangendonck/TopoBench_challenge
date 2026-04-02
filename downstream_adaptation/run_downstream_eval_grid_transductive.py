@@ -92,7 +92,7 @@ _TRANSDUCTIVE_SCRIPT_DEFAULTS = {
     "confirm_before_run": True,
     "parallel_workers": 1,
     "eval_devices": None,
-    "repeat_on_different_family_seed": 1,
+    "repeat_on_different_split_seed": 1,
 }
 
 
@@ -127,7 +127,7 @@ def generate_grid_configs(
     data_seed: int = 0,
     run_infos: List[Dict[str, Any]] = None,
     graphuniverse_overrides: List[Dict[str, Any] | None] | None = None,
-    repeat_on_different_family_seed: int = 1,  # NOTE: In transductive, this means different train/val splits, not different graphs
+    repeat_on_different_split_seed: int = 1,  # NOTE: In transductive, this means different train/val splits, not different graphs
     lr_values: List[float] = None,
     classifier_dropout_values: List[float] = None,
 ) -> List[Dict[str, Any]]:
@@ -155,27 +155,27 @@ def generate_grid_configs(
                     for classifier_dropout in classifier_dropout_values:
                         if n_train_values is not None:
                             for n_train in n_train_values:
-                                for repeat_idx in range(
-                                    repeat_on_different_family_seed
-                                ):
-                                    configs.append(
-                                        {
-                                            "run_dir": run_dir,
-                                            "mode": mode,
-                                            "n_train": n_train,
-                                            "n_evaluation": n_evaluation,
-                                            "data_seed": data_seed,
-                                            "graphuniverse_override": graphuniverse_override,
-                                            "pretrain_config": pretrain_config,
-                                            "repeat_idx": repeat_idx,
-                                            "repeat_on_different_family_seed": repeat_on_different_family_seed,
-                                            "lr": lr,
-                                            "classifier_dropout": classifier_dropout,
-                                        }
-                                    )
+                                    for repeat_idx in range(
+                                        repeat_on_different_split_seed
+                                    ):
+                                        configs.append(
+                                            {
+                                                "run_dir": run_dir,
+                                                "mode": mode,
+                                                "n_train": n_train,
+                                                "n_evaluation": n_evaluation,
+                                                "data_seed": data_seed,
+                                                "graphuniverse_override": graphuniverse_override,
+                                                "pretrain_config": pretrain_config,
+                                                "repeat_idx": repeat_idx,
+                                                "repeat_on_different_split_seed": repeat_on_different_split_seed,
+                                                "lr": lr,
+                                                "classifier_dropout": classifier_dropout,
+                                            }
+                                        )
                         else:
                             for repeat_idx in range(
-                                repeat_on_different_family_seed
+                                repeat_on_different_split_seed
                             ):
                                 configs.append(
                                     {
@@ -187,7 +187,7 @@ def generate_grid_configs(
                                         "graphuniverse_override": graphuniverse_override,
                                         "pretrain_config": pretrain_config,
                                         "repeat_idx": repeat_idx,
-                                        "repeat_on_different_family_seed": repeat_on_different_family_seed,
+                                        "repeat_on_different_split_seed": repeat_on_different_split_seed,
                                         "lr": lr,
                                         "classifier_dropout": classifier_dropout,
                                     }
@@ -223,7 +223,7 @@ def get_experiment_name(config: dict[str, Any], run_dir: str) -> str:
         ).hexdigest()[:6]
         components.append(f"ov_{override_hash}")
 
-    if config.get("repeat_on_different_family_seed", 1) > 1:
+    if config.get("repeat_on_different_split_seed", 1) > 1:
         components.append(f"split{config['repeat_idx']}")
 
     return "_".join(components)
@@ -276,7 +276,7 @@ def print_grid_summary(
 
     # Check if we have repeat info
     repeat_count = (
-        configs[0].get("repeat_on_different_family_seed", 1) if configs else 1
+        configs[0].get("repeat_on_different_split_seed", 1) if configs else 1
     )
     if repeat_count > 1:
         print(
@@ -356,9 +356,9 @@ def run_single_experiment(
     else:
         print("  N_train: Use all available (standard)")
 
-    if config.get("repeat_on_different_family_seed", 1) > 1:
+    if config.get("repeat_on_different_split_seed", 1) > 1:
         print(
-            f"  Split idx: {config['repeat_idx']} / {config['repeat_on_different_family_seed']} (same graph, different train/val split)"
+            f"  Split idx: {config['repeat_idx']} / {config['repeat_on_different_split_seed']} (same graph, different train/val split)"
         )
 
     if config.get("graphuniverse_override") is not None:
@@ -387,8 +387,8 @@ def run_single_experiment(
             pretraining_config=config.get("pretrain_config"),
             graphuniverse_override=config.get("graphuniverse_override"),
             repeat_idx=config.get("repeat_idx", 0),
-            repeat_on_different_family_seed=config.get(
-                "repeat_on_different_family_seed", 1
+            repeat_on_different_split_seed=config.get(
+                "repeat_on_different_split_seed", 1
             ),
         )
 
@@ -723,7 +723,7 @@ def main():
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--wandb_project", type=str, default=None)
     parser.add_argument(
-        "--repeat-on-different-family-seed",
+        "--repeat-on-different-split-seed",
         type=int,
         default=None,
         help="Number of times to repeat each experiment with different train/val splits (same graph, same test set) (default: 1).",
@@ -796,15 +796,15 @@ def main():
         file_cfg.get("fetch_filters"), {"state": "finished"}
     )
     min_runs = coalesce(args.min_runs, file_cfg.get("min_runs"), 1)
-    repeat_on_different_family_seed = eff(
-        "repeat_on_different_family_seed", args.repeat_on_different_family_seed
+    repeat_on_different_split_seed = eff(
+        "repeat_on_different_split_seed", args.repeat_on_different_split_seed
     )
-    if repeat_on_different_family_seed is None:
-        repeat_on_different_family_seed = 1
+    if repeat_on_different_split_seed is None:
+        repeat_on_different_split_seed = 1
     else:
-        repeat_on_different_family_seed = int(repeat_on_different_family_seed)
-        if repeat_on_different_family_seed < 1:
-            parser.error("repeat_on_different_family_seed must be >= 1")
+        repeat_on_different_split_seed = int(repeat_on_different_split_seed)
+        if repeat_on_different_split_seed < 1:
+            parser.error("repeat_on_different_split_seed must be >= 1")
 
     if args.graphuniverse_overrides is not None:
         parsed_overrides = []
@@ -874,7 +874,7 @@ def main():
         data_seed=data_seed,
         run_infos=run_infos,
         graphuniverse_overrides=parsed_overrides,
-        repeat_on_different_family_seed=repeat_on_different_family_seed,
+        repeat_on_different_split_seed=repeat_on_different_split_seed,
         lr_values=lr_values,
         classifier_dropout_values=classifier_dropout_values,
     )
