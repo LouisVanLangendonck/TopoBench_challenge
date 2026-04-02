@@ -248,13 +248,13 @@ def load_transductive_splits(dataset, parameters):
     )
 
     # Handle both data_list and data_lst attributes
-    if hasattr(dataset, 'data_list'):
+    if hasattr(dataset, "data_list"):
         data = dataset.data_list[0]
-    elif hasattr(dataset, 'data_lst'):
+    elif hasattr(dataset, "data_lst"):
         data = dataset.data_lst[0]
     else:
         data = dataset[0]
-    
+
     labels = data.y.numpy()
 
     # Ensure labels are one dimensional array
@@ -262,9 +262,11 @@ def load_transductive_splits(dataset, parameters):
 
     # Get root directory for saving splits
     root = None
-    if hasattr(dataset, 'dataset') and hasattr(dataset.dataset, "get_data_dir"):
+    if hasattr(dataset, "dataset") and hasattr(
+        dataset.dataset, "get_data_dir"
+    ):
         root = dataset.dataset.get_data_dir()
-    elif hasattr(data, 'root'):
+    elif hasattr(data, "root"):
         root = data.root
 
     if parameters.split_type == "random":

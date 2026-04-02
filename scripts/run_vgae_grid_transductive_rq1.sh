@@ -43,7 +43,7 @@ python -m topobench \
     trainer.check_val_every_n_epoch=2 \
     callbacks.early_stopping.patience=5 \
     logger.wandb.project=run_vgae_grid_transductive_rq1 \
-    tags="[run_vgae_grid_transductive_rq1,gps,graphmaev2]" \
+    tags="[run_vgae_grid_transductive_rq1,gps,vgae]" \
     --multirun &
 
 # Feature signal: Low (center_variance=0.01, cluster_variance=1.0) | Structural signal: Medium (edge_propensity_variance=0.5, degree_separation_range=[0.5,0.5]) | trainer.devices=[1]
@@ -83,7 +83,7 @@ python -m topobench \
     trainer.check_val_every_n_epoch=2 \
     callbacks.early_stopping.patience=5 \
     logger.wandb.project=run_vgae_grid_transductive_rq1 \
-    tags="[run_vgae_grid_transductive_rq1,gps,graphmaev2]" \
+    tags="[run_vgae_grid_transductive_rq1,gps,vgae]" \
     --multirun &
 
 # Feature signal: Low (center_variance=0.01, cluster_variance=1.0) | Structural signal: High (edge_propensity_variance=1.0, degree_separation_range=[0.9,0.9]) | trainer.devices=[2]
@@ -123,7 +123,7 @@ python -m topobench \
     trainer.check_val_every_n_epoch=2 \
     callbacks.early_stopping.patience=5 \
     logger.wandb.project=run_vgae_grid_transductive_rq1 \
-    tags="[run_vgae_grid_transductive_rq1,gps,graphmaev2]" \
+    tags="[run_vgae_grid_transductive_rq1,gps,vgae]" \
     --multirun &
 
 # Feature signal: Medium (center_variance=0.2, cluster_variance=0.4) | Structural signal: Low (edge_propensity_variance=0.0, degree_separation_range=[0.0,0.0]) | trainer.devices=[3]
@@ -163,7 +163,7 @@ python -m topobench \
     trainer.check_val_every_n_epoch=2 \
     callbacks.early_stopping.patience=5 \
     logger.wandb.project=run_vgae_grid_transductive_rq1 \
-    tags="[run_vgae_grid_transductive_rq1,gps,graphmaev2]" \
+    tags="[run_vgae_grid_transductive_rq1,gps,vgae]" \
     --multirun &
 
 # Feature signal: Medium (center_variance=0.2, cluster_variance=0.4) | Structural signal: Medium (edge_propensity_variance=0.5, degree_separation_range=[0.5,0.5]) | trainer.devices=[0]
@@ -203,7 +203,7 @@ python -m topobench \
     trainer.check_val_every_n_epoch=2 \
     callbacks.early_stopping.patience=5 \
     logger.wandb.project=run_vgae_grid_transductive_rq1 \
-    tags="[run_vgae_grid_transductive_rq1,gps,graphmaev2]" \
+    tags="[run_vgae_grid_transductive_rq1,gps,vgae]" \
     --multirun &
 
 # Feature signal: Medium (center_variance=0.2, cluster_variance=0.4) | Structural signal: High (edge_propensity_variance=1.0, degree_separation_range=[0.9,0.9]) | trainer.devices=[1]
@@ -243,7 +243,7 @@ python -m topobench \
     trainer.check_val_every_n_epoch=2 \
     callbacks.early_stopping.patience=5 \
     logger.wandb.project=run_vgae_grid_transductive_rq1 \
-    tags="[run_vgae_grid_transductive_rq1,gps,graphmaev2]" \
+    tags="[run_vgae_grid_transductive_rq1,gps,vgae]" \
     --multirun &
 
 # Feature signal: High (center_variance=0.4, cluster_variance=0.2) | Structural signal: Low (edge_propensity_variance=0.0, degree_separation_range=[0.0,0.0]) | trainer.devices=[2]
@@ -283,7 +283,7 @@ python -m topobench \
     trainer.check_val_every_n_epoch=2 \
     callbacks.early_stopping.patience=5 \
     logger.wandb.project=run_vgae_grid_transductive_rq1 \
-    tags="[run_vgae_grid_transductive_rq1,gps,graphmaev2]" \
+    tags="[run_vgae_grid_transductive_rq1,gps,vgae]" \
     --multirun &
 
 # Feature signal: High (center_variance=0.4, cluster_variance=0.2) | Structural signal: Medium (edge_propensity_variance=0.5, degree_separation_range=[0.5,0.5]) | trainer.devices=[3]
@@ -323,7 +323,7 @@ python -m topobench \
     trainer.check_val_every_n_epoch=2 \
     callbacks.early_stopping.patience=5 \
     logger.wandb.project=run_vgae_grid_transductive_rq1 \
-    tags="[run_vgae_grid_transductive_rq1,gps,graphmaev2]" \
+    tags="[run_vgae_grid_transductive_rq1,gps,vgae]" \
     --multirun &
 
 # Feature signal: High (center_variance=0.4, cluster_variance=0.2) | Structural signal: High (edge_propensity_variance=1.0, degree_separation_range=[0.9,0.9]) | trainer.devices=[0]
@@ -363,5 +363,5 @@ python -m topobench \
     trainer.check_val_every_n_epoch=2 \
     callbacks.early_stopping.patience=5 \
     logger.wandb.project=run_vgae_grid_transductive_rq1 \
-    tags="[run_vgae_grid_transductive_rq1,gps,graphmaev2]" \
+    tags="[run_vgae_grid_transductive_rq1,gps,vgae]" \
     --multirun &
