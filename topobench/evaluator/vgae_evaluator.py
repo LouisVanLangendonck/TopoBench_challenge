@@ -2,7 +2,7 @@
 
 import torch
 import torch.nn.functional as F
-from torchmetrics import MeanMetric, MetricCollection, Accuracy, AUROC
+from torchmetrics import AUROC, Accuracy, MeanMetric, MetricCollection
 
 from topobench.evaluator import AbstractEvaluator
 
@@ -26,9 +26,7 @@ class VGAEEvaluator(AbstractEvaluator):
 
         metrics_dict = {}
         for metric_name in metrics:
-            if metric_name == "loss":
-                metrics_dict[metric_name] = MeanMetric()
-            elif metric_name == "elbo":
+            if metric_name == "loss" or metric_name == "elbo":
                 metrics_dict[metric_name] = MeanMetric()
             elif metric_name == "accuracy":
                 metrics_dict[metric_name] = Accuracy(task="binary")

@@ -163,7 +163,7 @@ class DGIGNNWrapper(AbstractWrapper):
                 "batch_0": batch_indices,
                 "batch_0_corrupted": batch_indices,  # Same batch structure
                 "edge_index": edge_index,
-                "labels": batch.y if hasattr(batch, 'y') else None,
+                "labels": batch.y if hasattr(batch, "y") else None,
             }
             
         elif self.corruption_type == "graph_diffusion":
@@ -229,7 +229,7 @@ class DGIGNNWrapper(AbstractWrapper):
                 # Create batch indices (renumber to be consecutive)
                 new_graph_idx = len(positive_batch_indices)
                 positive_batch_indices.append(
-                    torch.full((len(pos_indices),), new_graph_idx, 
+                    torch.full((len(pos_indices),), new_graph_idx,
                               dtype=batch_indices.dtype, device=batch_indices.device)
                 )
                 negative_batch_indices.append(
@@ -239,7 +239,7 @@ class DGIGNNWrapper(AbstractWrapper):
             
             # Log pairings
             if self.verbose or self.forward_count <= 3:
-                print(f"\nGraph pairings (positive -> negative):")
+                print("\nGraph pairings (positive -> negative):")
                 for pos_id, neg_id in pairings:
                     print(f"  Graph {pos_id} paired with Graph {neg_id} (as negative)")
                 print(f"{'='*80}\n")
@@ -256,7 +256,7 @@ class DGIGNNWrapper(AbstractWrapper):
                 "batch_0": batch_positive,  # Batch indices for positive samples
                 "batch_0_corrupted": batch_negative,  # Batch indices for negative samples
                 "edge_index": edge_index,  # Original edge index (may not be used)
-                "labels": batch.y if hasattr(batch, 'y') else None,
+                "labels": batch.y if hasattr(batch, "y") else None,
             }
         
         else:

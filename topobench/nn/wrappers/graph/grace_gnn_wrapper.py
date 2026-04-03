@@ -2,7 +2,6 @@
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 from torch_geometric.utils import degree, to_undirected
 from torch_scatter import scatter
 
@@ -34,7 +33,7 @@ def compute_pagerank(edge_index, num_nodes, damp=0.85, k=10):
     
     for _ in range(k):
         edge_msg = x[edge_index[0]] / (deg_out[edge_index[0]] + 1e-8)
-        agg_msg = scatter(edge_msg, edge_index[1], dim=0, dim_size=num_nodes, reduce='sum')
+        agg_msg = scatter(edge_msg, edge_index[1], dim=0, dim_size=num_nodes, reduce="sum")
         x = (1 - damp) * x + damp * agg_msg
     
     return x
@@ -63,7 +62,7 @@ def compute_eigenvector_centrality_approx(edge_index, num_nodes, k=10):
     
     for _ in range(k):
         # Aggregate from neighbors
-        x_new = scatter(x[edge_index[0]], edge_index[1], dim=0, dim_size=num_nodes, reduce='sum')
+        x_new = scatter(x[edge_index[0]], edge_index[1], dim=0, dim_size=num_nodes, reduce="sum")
         # Normalize
         x = x_new / (x_new.norm() + 1e-8)
     
@@ -379,7 +378,7 @@ class GRACEGNNWrapper(AbstractWrapper):
             "x_0": z_1,  # View 1 embeddings
             "z_1": z_1,  # View 1 embeddings (explicit)
             "z_2": z_2,  # View 2 embeddings
-            "labels": batch.y if hasattr(batch, 'y') else None,
+            "labels": batch.y if hasattr(batch, "y") else None,
             "batch_0": batch_indices,
             "edge_index": edge_index,
         }

@@ -32,10 +32,10 @@ from torch_scatter import scatter_add
 
 from topobench.nn.wrappers.base import AbstractWrapper
 from topobench.nn.wrappers.graph.mvgrl_utils import (
+    MLP,
+    MVGRLGCNLayer,
     add_self_loops,
     symmetric_normalize,
-    MVGRLGCNLayer,
-    MLP,
 )
 
 
@@ -170,7 +170,7 @@ class MVGRLWrapper(AbstractWrapper):
         diff_edge_weight_attr: str = "edge_weight_diff",
         **kwargs
     ):
-        kwargs['residual_connections'] = False
+        kwargs["residual_connections"] = False
         super().__init__(backbone, **kwargs)
 
         if negative_sampling not in ["cross_graph", "feature_shuffle"]:
@@ -186,13 +186,13 @@ class MVGRLWrapper(AbstractWrapper):
         self.subsample_batch_size = subsample_batch_size
 
         # Get feature dimensions
-        self.hidden_dim = kwargs.get('out_channels', None)
+        self.hidden_dim = kwargs.get("out_channels")
         if self.hidden_dim is None:
             raise ValueError("Please provide 'out_channels' in kwargs.")
         
-        in_channels = kwargs.get('in_channels', None)
+        in_channels = kwargs.get("in_channels")
         if in_channels is None:
-            if hasattr(backbone, 'in_channels'):
+            if hasattr(backbone, "in_channels"):
                 in_channels = backbone.in_channels
             else:
                 in_channels = self.hidden_dim
@@ -374,8 +374,8 @@ class MVGRLWrapper(AbstractWrapper):
         # Get precomputed diffusion edges
         if not hasattr(batch, self.diff_edge_index_attr) or getattr(batch, self.diff_edge_index_attr) is None:
             raise ValueError(
-                f"MVGRL requires precomputed diffusion edges. "
-                f"Add PPRDiffusion or HeatDiffusion transform to your pipeline."
+                "MVGRL requires precomputed diffusion edges. "
+                "Add PPRDiffusion or HeatDiffusion transform to your pipeline."
             )
         
         edge_index_diff = getattr(batch, self.diff_edge_index_attr)
@@ -423,7 +423,7 @@ class MVGRLWrapper(AbstractWrapper):
             "gv1_proj": gv1_proj,
             "gv2_proj": gv2_proj,
             "negative_sampling": self.negative_sampling,  # For loss module to know which mode
-            "labels": batch.y if hasattr(batch, 'y') else None,
+            "labels": batch.y if hasattr(batch, "y") else None,
             "batch_0": batch_indices,
             "edge_index": edge_index,
             "num_nodes": num_nodes,

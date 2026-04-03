@@ -1,6 +1,7 @@
 """Wrapper for GraphMAEv2 pre-training with GNN models."""
 
 import copy
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -68,7 +69,7 @@ class GraphMAEv2GNNWrapper(AbstractWrapper):
         self.mask_token_rate = 1 - self.replace_rate
         
         # Get feature dimension from kwargs
-        self.feature_dim = kwargs.get('out_channels', None)
+        self.feature_dim = kwargs.get("out_channels")
         
         if self.feature_dim is None:
             raise ValueError("Cannot determine feature dimension. Please provide 'out_channels' in kwargs.")
@@ -217,7 +218,7 @@ class GraphMAEv2GNNWrapper(AbstractWrapper):
         device = x_0.device
         
         # Store ORIGINAL RAW features for reconstruction
-        if hasattr(batch, 'x_raw'): # Normally we have this cause I added it as pre-transform
+        if hasattr(batch, "x_raw"): # Normally we have this cause I added it as pre-transform
             x_raw_original = batch.x_raw.clone()
         else:
             # Fallback
@@ -273,7 +274,7 @@ class GraphMAEv2GNNWrapper(AbstractWrapper):
             "mask_nodes": mask_nodes,  # Which nodes were masked
             "keep_nodes": keep_nodes,  # Which nodes were kept
             "latent_loss": latent_loss,  # Latent representation loss
-            "labels": batch.y if hasattr(batch, 'y') else None,
+            "labels": batch.y if hasattr(batch, "y") else None,
             "batch_0": batch_indices,
             "edge_index": edge_index,  # For GNN decoder (re-masking requires message passing)
             "edge_weight": edge_weight,  # For GNN decoder (if available)

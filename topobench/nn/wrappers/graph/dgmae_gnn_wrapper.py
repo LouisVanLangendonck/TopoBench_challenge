@@ -7,9 +7,9 @@ Paper: "Discrepancy-Aware Graph Mask Auto-Encoder" (KDD 2025)
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_scatter import scatter_add
-from torch_geometric.utils import add_self_loops
 from torch_geometric.nn.dense.linear import Linear
+from torch_geometric.utils import add_self_loops
+from torch_scatter import scatter_add
 
 from topobench.nn.wrappers.base import AbstractWrapper
 
@@ -102,7 +102,7 @@ class DGMAEGNNWrapper(AbstractWrapper):
         self.mask_token_rate = 1 - self.replace_rate
 
         # Get feature dimension from kwargs
-        self.feature_dim = kwargs.get('out_channels', None)
+        self.feature_dim = kwargs.get("out_channels")
 
         if self.feature_dim is None:
             raise ValueError("Cannot determine feature dimension. Please provide 'out_channels' in kwargs.")
@@ -117,10 +117,10 @@ class DGMAEGNNWrapper(AbstractWrapper):
         # Maps: hidden_dim -> in_dim (to match original feature space)
         # Using PyG's Linear with glorot initialization (matches original)
         self.hetero_mlp = nn.Sequential(
-            Linear(self.feature_dim, self.feature_dim, bias=False, weight_initializer='glorot'),
+            Linear(self.feature_dim, self.feature_dim, bias=False, weight_initializer="glorot"),
             nn.PReLU(),
             nn.Dropout(0.2),
-            Linear(self.feature_dim, self.in_channels, bias=False, weight_initializer='glorot'),
+            Linear(self.feature_dim, self.in_channels, bias=False, weight_initializer="glorot"),
         )
 
     def encoding_mask_noise(self, x, num_nodes, device):
@@ -301,7 +301,7 @@ class DGMAEGNNWrapper(AbstractWrapper):
         # Compute degree
         deg = scatter_add(torch.ones(row.size(0), device=device), row, dim=0, dim_size=num_nodes)
         deg_inv_sqrt = deg.pow(-0.5)
-        deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
+        deg_inv_sqrt[deg_inv_sqrt == float("inf")] = 0
         
         # Normalized edge weights: D^-0.5 * A * D^-0.5
         norm_weights = deg_inv_sqrt[row] * deg_inv_sqrt[col]
@@ -356,7 +356,7 @@ class DGMAEGNNWrapper(AbstractWrapper):
         device = x_0.device
 
         # Store ORIGINAL RAW features for reconstruction and high-pass filter
-        if hasattr(batch, 'x_raw'):
+        if hasattr(batch, "x_raw"):
             x_raw_original = batch.x_raw.clone()
         else:
             # Fallback
@@ -444,7 +444,7 @@ class DGMAEGNNWrapper(AbstractWrapper):
             
             # Select edges based on heterophily weights
             selected_edges, _, _ = self.drop_edge_weighted(
-                edge_index, weights_hp, 
+                edge_index, weights_hp,
                 self.attn_edge_p, self.attn_edge_threshold, device
             )
             
@@ -464,7 +464,7 @@ class DGMAEGNNWrapper(AbstractWrapper):
             "x_raw_original": x_raw_original,  # ORIGINAL RAW features
             "mask_nodes": mask_nodes,  # Which nodes were masked
             "keep_nodes": keep_nodes,  # Which nodes were kept
-            "labels": batch.y if hasattr(batch, 'y') else None,
+            "labels": batch.y if hasattr(batch, "y") else None,
             "batch_0": batch_indices,
             "edge_index": edge_index,  # Full edge_index for decoder
             "edge_weight": edge_weight,

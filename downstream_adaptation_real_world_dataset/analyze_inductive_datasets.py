@@ -11,20 +11,20 @@ from __future__ import annotations
 
 import argparse
 import os
-import sys
 import shutil
 import warnings
 
 import matplotlib
 
 matplotlib.use("Agg")
+from collections import Counter
+
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
-from collections import Counter
-from torch_geometric.datasets import AQSOL, TUDataset, ZINC
-from tqdm import tqdm
 from kneed import KneeLocator
+from torch_geometric.datasets import AQSOL, ZINC, TUDataset
+from tqdm import tqdm
 
 # sklearn KMeans can warn on tiny graphs in IMDB-MULTI
 warnings.filterwarnings(
@@ -478,8 +478,8 @@ def find_knee_k(k_vals: list[int], sil_means: list[float]) -> int | None:
         kn = KneeLocator(
             valid_k,
             valid_s,
-            curve='concave',
-            direction='increasing',
+            curve="concave",
+            direction="increasing",
             S=1.0
         )
         return kn.knee

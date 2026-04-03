@@ -55,8 +55,8 @@ from __future__ import annotations
 import argparse
 import ast
 import re
+from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Iterable, Iterator
 
 import matplotlib.pyplot as plt
 import numpy as np

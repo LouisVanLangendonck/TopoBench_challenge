@@ -55,7 +55,7 @@ def symmetric_normalize(edge_index, edge_weight, num_nodes):
     
     deg = scatter_add(edge_weight, col, dim=0, dim_size=num_nodes)
     deg_inv_sqrt = deg.pow(-0.5)
-    deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
+    deg_inv_sqrt[deg_inv_sqrt == float("inf")] = 0
     
     normalized_weight = deg_inv_sqrt[row] * edge_weight * deg_inv_sqrt[col]
     return normalized_weight
@@ -88,7 +88,7 @@ class MVGRLGCNLayer(nn.Module):
             self.bias = nn.Parameter(torch.FloatTensor(out_ft))
             self.bias.data.fill_(0.0)
         else:
-            self.register_parameter('bias', None)
+            self.register_parameter("bias", None)
         
         nn.init.xavier_uniform_(self.fc.weight.data)
     

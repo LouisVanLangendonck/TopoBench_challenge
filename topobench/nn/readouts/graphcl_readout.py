@@ -1,6 +1,5 @@
 """GraphCL Readout with Projection Head for Graph Contrastive Learning."""
 
-import torch
 import torch.nn as nn
 import torch_geometric
 
@@ -58,9 +57,9 @@ class GraphCLReadOut(AbstractZeroCellReadOut):
         )
     
     def _build_projection_head(
-        self, 
-        projection_type: str, 
-        in_dim: int, 
+        self,
+        projection_type: str,
+        in_dim: int,
         out_dim: int,
         hidden_dim: int
     ) -> nn.Module:

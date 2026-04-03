@@ -62,7 +62,7 @@ class GraphCLLoss(AbstractLoss):
 
         # Mask diagonal (positive pairs) so they are excluded from the denominator
         diag_mask = torch.eye(batch_size, device=z1.device, dtype=torch.bool)
-        neg_sim = sim_matrix.masked_fill(diag_mask, float('-inf'))
+        neg_sim = sim_matrix.masked_fill(diag_mask, float("-inf"))
 
         # -log( exp(pos) / sum_neg ) = -pos + logsumexp(neg)
         loss = -pos_sim + torch.logsumexp(neg_sim, dim=1)

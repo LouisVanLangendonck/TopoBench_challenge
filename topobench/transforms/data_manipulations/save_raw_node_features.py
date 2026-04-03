@@ -1,6 +1,5 @@
 """Transform that saves raw node features before any encoding."""
 
-import torch
 import torch_geometric
 
 
@@ -41,7 +40,7 @@ class SaveRawNodeFeatures(torch_geometric.transforms.BaseTransform):
             Data with x_raw attribute containing a copy of the original features.
         """
         # Save a copy of the original node features
-        if hasattr(data, 'x') and data.x is not None:
+        if hasattr(data, "x") and data.x is not None:
             data.x_raw = data.x.clone()
         
         return data

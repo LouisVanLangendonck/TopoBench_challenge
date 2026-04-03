@@ -8,7 +8,6 @@ This ensures the backbone sees the same architecture/feature distribution as dur
 pre-training, preventing negative transfer.
 """
 
-import torch
 import torch.nn as nn
 
 
@@ -74,8 +73,8 @@ class CleanInferenceWrapper(nn.Module):
             Node embeddings.
         """
         # DEBUG: Print once to verify correct forward path
-        if not hasattr(self, '_debug_printed'):
-            print(f"[DEBUG CleanInferenceWrapper]")
+        if not hasattr(self, "_debug_printed"):
+            print("[DEBUG CleanInferenceWrapper]")
             print(f"  Input shape: {x.shape}")
             print(f"  Backbone type: {type(self.backbone).__name__}")
             print(f"  Has 'convs' attribute: {hasattr(self.backbone, 'convs')}")
@@ -89,7 +88,7 @@ class CleanInferenceWrapper(nn.Module):
         # IMPORTANT: We must use the SAME forward path as during pre-training
         # - S2GAE: manually iterates through layers with intermediate activations
         # - DGI/GraphCL/etc.: calls backbone() directly
-        if self.manual_iteration and hasattr(self.backbone, 'convs'):
+        if self.manual_iteration and hasattr(self.backbone, "convs"):
             # Use S2GAE's manual layer iteration (same as pre-training)
             import torch.nn.functional as F
             x_out = x
@@ -107,14 +106,14 @@ class CleanInferenceWrapper(nn.Module):
                 # Apply activation and dropout between layers (same as S2GAE)
                 if i < len(self.backbone.convs) - 1:
                     x_out = F.relu(x_out)
-                    if hasattr(self.backbone, 'dropout'):
+                    if hasattr(self.backbone, "dropout"):
                         x_out = F.dropout(x_out, p=self.backbone.dropout, training=self.training)
         else:
             # For non-S2GAE models (DGI, GraphCL, etc.), use standard forward
             x_out = self.backbone(x, edge_index, batch=batch, edge_weight=edge_weight)
         
         # DEBUG: Check backbone output
-        if not hasattr(self, '_debug_backbone_printed'):
+        if not hasattr(self, "_debug_backbone_printed"):
             print(f"  After backbone: {x_out.shape}")
             self._debug_backbone_printed = True
         
@@ -126,7 +125,7 @@ class CleanInferenceWrapper(nn.Module):
             x_out = self.ln_0(x_out)
             
             # DEBUG: Check after residual + LayerNorm
-            if not hasattr(self, '_debug_residual_printed'):
+            if not hasattr(self, "_debug_residual_printed"):
                 print(f"  After residual + LayerNorm: {x_out.shape}")
                 print(f"  Output mean: {x_out.mean().item():.4f}, std: {x_out.std().item():.4f}")
                 self._debug_residual_printed = True

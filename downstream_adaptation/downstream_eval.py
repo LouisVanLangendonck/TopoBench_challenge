@@ -1,4 +1,4 @@
-"""Inductive downstream eval: graph-level train/val/test splits.
+r"""Inductive downstream eval: graph-level train/val/test splits.
 
 Transductive (single graph, masks): ``downstream_eval_transductive.py``.
 
@@ -47,30 +47,31 @@ from tqdm import tqdm
 
 try:
     import wandb
+
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
 
 from downstream_eval_utils import (
+    DOWNSTREAM_MODES,
+    DownstreamModel,
+    LinearClassifier,
+    SupervisedCDDownstreamModel,
+    TBModelGraphLevelEncoder,
+    TBModelNodeEncoder,
     apply_transforms,
     build_tb_model_for_downstream,
     create_dataset_from_config,
     detect_task_level,
     downstream_mode_freezes_encoder,
     downstream_mode_requires_checkpoint,
-    DownstreamModel,
     get_checkpoint_path_from_summary,
     hidden_dim_from_downstream_config,
-    LinearClassifier,
     load_wandb_config,
     prepare_batch_for_topobench,
-    SupervisedCDDownstreamModel,
-    TBModelGraphLevelEncoder,
-    TBModelNodeEncoder,
     use_supervised_cd_full_tbmodel,
     verify_downstream_logits,
     verify_encoder_outputs,
-    DOWNSTREAM_MODES,
 )
 
 
@@ -96,13 +97,20 @@ def train_downstream(
     optimizer = Adam(trainable_params, lr=lr, weight_decay=weight_decay)
 
     criterion = nn.CrossEntropyLoss()
-    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=10)
+    scheduler = ReduceLROnPlateau(
+        optimizer, mode="max", factor=0.5, patience=10
+    )
     metric_name = "accuracy"
 
     best_val_metric = 0.0
     best_model_state = None
     patience_counter = 0
-    history = {"train_loss": [], f"train_{metric_name}": [], "val_loss": [], f"val_{metric_name}": []}
+    history = {
+        "train_loss": [],
+        f"train_{metric_name}": [],
+        "val_loss": [],
+        f"val_{metric_name}": [],
+    }
 
     pbar = tqdm(range(epochs), desc="Training")
     for epoch in pbar:
@@ -120,7 +128,11 @@ def train_downstream(
 
             if task_type == "multilabel_bce":
                 bs = batch.num_graphs
-                y = batch.property_community_presence.float().to(device).view(bs, num_classes)
+                y = (
+                    batch.property_community_presence.float()
+                    .to(device)
+                    .view(bs, num_classes)
+                )
                 loss = criterion(out, y)
                 metric = torch.abs(torch.sigmoid(out) - y).mean()
                 num_samples = bs
@@ -178,7 +190,11 @@ def train_downstream(
 
                 if task_type == "multilabel_bce":
                     bs = batch.num_graphs
-                    y = batch.property_community_presence.float().to(device).view(bs, num_classes)
+                    y = (
+                        batch.property_community_presence.float()
+                        .to(device)
+                        .view(bs, num_classes)
+                    )
                     loss = criterion(out, y)
                     metric = torch.abs(torch.sigmoid(out) - y).mean()
                     num_samples = bs
@@ -226,15 +242,17 @@ def train_downstream(
         history[f"val_{metric_name}"].append(val_metric)
 
         if use_wandb and WANDB_AVAILABLE:
-            wandb.log({
-                "epoch": epoch,
-                "train/loss": train_loss,
-                f"train/{metric_name}": train_metric,
-                "val/loss": val_loss,
-                f"val/{metric_name}": val_metric,
-                f"best_val_{metric_name}": best_val_metric,
-                "lr": optimizer.param_groups[0]['lr'],
-            })
+            wandb.log(
+                {
+                    "epoch": epoch,
+                    "train/loss": train_loss,
+                    f"train/{metric_name}": train_metric,
+                    "val/loss": val_loss,
+                    f"val/{metric_name}": val_metric,
+                    f"best_val_{metric_name}": best_val_metric,
+                    "lr": optimizer.param_groups[0]["lr"],
+                }
+            )
 
         scheduler.step(val_metric)
 
@@ -246,17 +264,21 @@ def train_downstream(
 
         if is_better:
             best_val_metric = val_metric
-            best_model_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+            best_model_state = {
+                k: v.cpu().clone() for k, v in model.state_dict().items()
+            }
             patience_counter = 0
         else:
             patience_counter += 1
 
-        pbar.set_postfix({
-            "train_loss": f"{train_loss:.4f}",
-            f"train_{metric_name}": f"{train_metric:.4f}",
-            f"val_{metric_name}": f"{val_metric:.4f}",
-            "best": f"{best_val_metric:.4f}",
-        })
+        pbar.set_postfix(
+            {
+                "train_loss": f"{train_loss:.4f}",
+                f"train_{metric_name}": f"{train_metric:.4f}",
+                f"val_{metric_name}": f"{val_metric:.4f}",
+                "best": f"{best_val_metric:.4f}",
+            }
+        )
 
         if patience_counter >= patience:
             break
@@ -290,7 +312,9 @@ def evaluate(
                 batch = prepare_batch_for_topobench(batch)
                 out = model(batch)
                 bs = batch.num_graphs
-                y = batch.property_community_presence.float().view(bs, num_classes)
+                y = batch.property_community_presence.float().view(
+                    bs, num_classes
+                )
                 probs = torch.sigmoid(out)
                 all_probs.append(probs.cpu())
                 all_targets.append(y.cpu())
@@ -308,12 +332,14 @@ def evaluate(
             "num_graphs": n_graphs,
         }
         if use_wandb and WANDB_AVAILABLE:
-            wandb.log({
-                "test/mae_community_presence": mae,
-                "test/mse": mse,
-                "test/rmse": rmse,
-                "test/num_graphs": n_graphs,
-            })
+            wandb.log(
+                {
+                    "test/mae_community_presence": mae,
+                    "test/mse": mse,
+                    "test/rmse": rmse,
+                    "test/num_graphs": n_graphs,
+                }
+            )
         return result
 
     test_total = 0
@@ -350,7 +376,9 @@ def evaluate(
             test_total += num_samples
 
     if task_type == "classification":
-        test_correct = sum([1 for p, l in zip(all_preds, all_labels) if p == l])
+        test_correct = sum(
+            [1 for p, l in zip(all_preds, all_labels) if p == l]
+        )
         test_acc = test_correct / test_total
 
         result = {
@@ -361,10 +389,12 @@ def evaluate(
         }
 
         if use_wandb and WANDB_AVAILABLE:
-            wandb.log({
-                "test/accuracy": test_acc,
-                f"test/num_{model.task_level}s": test_total,
-            })
+            wandb.log(
+                {
+                    "test/accuracy": test_acc,
+                    f"test/num_{model.task_level}s": test_total,
+                }
+            )
     else:
         all_preds_np = np.array(all_preds)
         all_labels_np = np.array(all_labels)
@@ -383,12 +413,14 @@ def evaluate(
         }
 
         if use_wandb and WANDB_AVAILABLE:
-            wandb.log({
-                "test/mae": mae,
-                "test/mse": mse,
-                "test/rmse": rmse,
-                f"test/num_{model.task_level}s": test_total,
-            })
+            wandb.log(
+                {
+                    "test/mae": mae,
+                    "test/mse": mse,
+                    "test/rmse": rmse,
+                    f"test/num_{model.task_level}s": test_total,
+                }
+            )
 
     return result
 
@@ -417,7 +449,7 @@ def run_downstream_evaluation(
     repeat_on_different_family_seed: int = 1,
 ) -> dict:
     """Run inductive downstream evaluation: community_detection (node CE) or community_presence (graph BCE).
-    
+
     INDUCTIVE SETTING: Uses different graphs for train/val/test splits.
     - repeat_on_different_family_seed: Generates different training graphs with different family seeds
     - Each repeat uses the same evaluation graphs but different training graphs
@@ -425,7 +457,9 @@ def run_downstream_evaluation(
     run_dir = Path(run_dir)
 
     if mode not in DOWNSTREAM_MODES:
-        raise ValueError(f"Unknown mode {mode!r}; expected one of {DOWNSTREAM_MODES}")
+        raise ValueError(
+            f"Unknown mode {mode!r}; expected one of {DOWNSTREAM_MODES}"
+        )
 
     random.seed(seed)
     np.random.seed(seed)
@@ -433,20 +467,29 @@ def run_downstream_evaluation(
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
-    config = load_wandb_config(run_dir)
-    
+    # Use pretraining_config if provided, otherwise load from run_dir
+    if pretraining_config is not None:
+        config = pretraining_config
+    else:
+        config = load_wandb_config(run_dir)
+
     # DEBUG: Print config structure to understand the issue
     print(f"DEBUG: Config keys: {list(config.keys())}")
     if "dataset" in config:
-        print(f"DEBUG: Found 'dataset' in config")
-    elif "pretrain/dataset/loader/parameters/generation_parameters/universe_parameters/K" in config:
-        print(f"DEBUG: Found flattened config key with K = {config['pretrain/dataset/loader/parameters/generation_parameters/universe_parameters/K']}")
+        print("DEBUG: Found 'dataset' in config")
+    elif (
+        "pretrain/dataset/loader/parameters/generation_parameters/universe_parameters/K"
+        in config
+    ):
+        print(
+            f"DEBUG: Found flattened config key with K = {config['pretrain/dataset/loader/parameters/generation_parameters/universe_parameters/K']}"
+        )
     else:
-        print(f"DEBUG: Neither 'dataset' nor flattened key found")
+        print("DEBUG: Neither 'dataset' nor flattened key found")
         # Print a sample of keys to see the structure
         sample_keys = list(config.keys())[:10]
         print(f"DEBUG: Sample config keys: {sample_keys}")
-    
+
     task_level = detect_task_level(config)
 
     checkpoint_path = None
@@ -456,14 +499,18 @@ def run_downstream_evaluation(
             raise ValueError("No checkpoint path found in wandb-summary.json")
 
     # Get seeds from generation parameters
-    gen_params = config["dataset"]["loader"]["parameters"].get("generation_parameters", {})
+    gen_params = config["dataset"]["loader"]["parameters"].get(
+        "generation_parameters", {}
+    )
     family_params = gen_params.get("family_parameters", {})
     universe_params = gen_params.get("universe_parameters", {})
 
     try:
         pretraining_universe_seed = universe_params["seed"]
         pretraining_family_seed = family_params["seed"]
-        print(f"✓ Found seeds - universe: {pretraining_universe_seed}, family: {pretraining_family_seed}")
+        print(
+            f"✓ Found seeds - universe: {pretraining_universe_seed}, family: {pretraining_family_seed}"
+        )
     except KeyError as e:
         print(f"Missing seed in config: {e}")
         print(f"Universe params: {universe_params}")
@@ -472,34 +519,38 @@ def run_downstream_evaluation(
             f"Missing required seed parameter: {e}. "
             "Seeds are required for reproducible dataset generation."
         ) from e
-    
+
     # Get num_classes from universe parameters
     num_classes_from_config = universe_params.get("K")
     if num_classes_from_config is None:
         print(f"❌ K not found in universe_params: {universe_params}")
         print(f"❌ Checking generation_parameters: {gen_params}")
         raise ValueError(f"K not found in universe_params: {universe_params}")
-    else:
-        print(f"✓ Found num_classes (K) in universe_params: {num_classes_from_config}")
-    
+    print(
+        f"✓ Found num_classes (K) in universe_params: {num_classes_from_config}"
+    )
+
     # Validate num_classes value
-    if not isinstance(num_classes_from_config, int) or num_classes_from_config <= 0:
+    if (
+        not isinstance(num_classes_from_config, int)
+        or num_classes_from_config <= 0
+    ):
         raise ValueError(
             f"Invalid num_classes value: {num_classes_from_config}. "
             f"Must be a positive integer, got {type(num_classes_from_config).__name__}."
         )
-    
+
     # Use config value initially, but we'll verify against actual data later
     num_classes = num_classes_from_config
     family_evaluation_seed = pretraining_family_seed + 1
     family_training_seed = pretraining_family_seed + 2 + repeat_idx
-    
+
     # Get the original config components from wandb
     dataset_name = config["dataset"]["loader"]["parameters"]["data_name"]
     model_name = config["model"]["model_name"]
 
     print(config)
-    
+
     # Now create datasets using the standard method but with consistent transform config
     eval_dataset, eval_data_dir, _ = create_dataset_from_config(
         config,
@@ -516,9 +567,13 @@ def run_downstream_evaluation(
     print(f"Transforms config: {transforms_config}")
 
     # Apply the transforms to the evaluation dataset with model_name for correct ordering
-    eval_preprocessor = apply_transforms(eval_dataset, eval_data_dir, transforms_config, model_name=model_name)
+    eval_preprocessor = apply_transforms(
+        eval_dataset, eval_data_dir, transforms_config, model_name=model_name
+    )
     eval_data_list = eval_preprocessor.data_list
-    print(f"✓ Eval dataset: {len(eval_data_list)} graphs with {eval_data_list[0].x.shape[1]} features")
+    print(
+        f"✓ Eval dataset: {len(eval_data_list)} graphs with {eval_data_list[0].x.shape[1]} features"
+    )
 
     # Create the training dataset
     train_dataset, train_data_dir, _ = create_dataset_from_config(
@@ -530,10 +585,14 @@ def run_downstream_evaluation(
         graphuniverse_override=graphuniverse_override,
         downstream_task=downstream_task,
     )
-    train_preprocessor = apply_transforms(train_dataset, train_data_dir, transforms_config, model_name=model_name)
+    train_preprocessor = apply_transforms(
+        train_dataset, train_data_dir, transforms_config, model_name=model_name
+    )
     train_data = train_preprocessor.data_list
-    print(f"✓ Train dataset: {len(train_data)} graphs with {train_data[0].x.shape[1]} features")
-    
+    print(
+        f"✓ Train dataset: {len(train_data)} graphs with {train_data[0].x.shape[1]} features"
+    )
+
     print("=" * 80)
 
     random.seed(pretraining_universe_seed)
@@ -569,7 +628,9 @@ def run_downstream_evaluation(
         )
         downstream_task_level = "node"
         eval_task_type = "classification"
-        verify_result = verify_downstream_logits(downstream_model, train_loader, device=device)
+        verify_result = verify_downstream_logits(
+            downstream_model, train_loader, device=device
+        )
         print(f"Downstream model verification: {verify_result['status']}")
         if verify_result["status"] != "OK":
             print(f"  Issues: {verify_result.get('issues', [])}")
@@ -589,10 +650,14 @@ def run_downstream_evaluation(
         else:
             graph_level = task_level == "graph"
         if graph_level:
-            encoder = TBModelGraphLevelEncoder(tb_model, readout_type=readout_type)
+            encoder = TBModelGraphLevelEncoder(
+                tb_model, readout_type=readout_type
+            )
             downstream_task_level = "graph"
             eval_task_type = (
-                "multilabel_bce" if downstream_task == "community_presence" else "classification"
+                "multilabel_bce"
+                if downstream_task == "community_presence"
+                else "classification"
             )
         else:
             encoder = TBModelNodeEncoder(tb_model)
@@ -607,7 +672,10 @@ def run_downstream_evaluation(
             dropout=classifier_dropout,
         )
         downstream_model = DownstreamModel(
-            encoder, classifier, freeze_encoder, task_level=downstream_task_level
+            encoder,
+            classifier,
+            freeze_encoder,
+            task_level=downstream_task_level,
         )
 
     if use_wandb and WANDB_AVAILABLE:
@@ -636,7 +704,7 @@ def run_downstream_evaluation(
             "repeat_on_different_family_seed": repeat_on_different_family_seed,
         }
 
-        def flatten_dict(d, parent_key='', sep='/'):
+        def flatten_dict(d, parent_key="", sep="/"):
             items = []
             for k, v in d.items():
                 new_key = f"{parent_key}{sep}{k}" if parent_key else k
@@ -698,8 +766,12 @@ def run_downstream_evaluation(
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Inductive downstream evaluation (classification).")
-    parser.add_argument("--run_dir", type=str, required=True, help="Wandb run directory")
+    parser = argparse.ArgumentParser(
+        description="Inductive downstream evaluation (classification)."
+    )
+    parser.add_argument(
+        "--run_dir", type=str, required=True, help="Wandb run directory"
+    )
     parser.add_argument(
         "--downstream_task",
         type=str,
@@ -715,7 +787,12 @@ def main():
         "--mode",
         type=str,
         default="linear-probe",
-        choices=["full-finetune","random-init-full-finetune","linear-probe","random-init-linear-probe"],
+        choices=[
+            "full-finetune",
+            "random-init-full-finetune",
+            "linear-probe",
+            "random-init-linear-probe",
+        ],
         help="full-finetune | linear-probe: pretrained checkpoint; random-init-*: fresh weights.",
     )
     parser.add_argument("--epochs", type=int, default=200)
@@ -729,7 +806,12 @@ def main():
     parser.add_argument("--graphuniverse_override", type=str, default=None)
     parser.add_argument("--classifier_dropout", type=float, default=0.0)
     parser.add_argument("--input_dropout", type=float, default=None)
-    parser.add_argument("--readout_type", type=str, default="mean", choices=["mean", "max", "sum"])
+    parser.add_argument(
+        "--readout_type",
+        type=str,
+        default="mean",
+        choices=["mean", "max", "sum"],
+    )
 
     args = parser.parse_args()
 
@@ -767,7 +849,9 @@ def main():
         print(f"Test MAE (community presence): {results['test_mae']:.4f}")
     else:
         print(f"Test accuracy: {results['test_accuracy']:.4f}")
-    print(f"Train: {results['n_train']}, Val: {results['n_val']}, Test: {results['n_test']}")
+    print(
+        f"Train: {results['n_train']}, Val: {results['n_val']}, Test: {results['n_test']}"
+    )
     print("=" * 60)
 
     return results

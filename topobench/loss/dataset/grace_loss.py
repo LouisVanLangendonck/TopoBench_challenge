@@ -67,12 +67,12 @@ class GRACELoss(AbstractLoss):
         
         # Loss for view 1 -> view 2
         pos_sim_12 = torch.diag(sim_12)  # Positive pairs
-        neg_sim_1 = torch.cat([sim_12, sim_11.masked_fill(mask, float('-inf'))], dim=1)
+        neg_sim_1 = torch.cat([sim_12, sim_11.masked_fill(mask, float("-inf"))], dim=1)
         loss_1 = -pos_sim_12 + torch.logsumexp(neg_sim_1, dim=1)
         
         # Loss for view 2 -> view 1
         pos_sim_21 = torch.diag(sim_21)  # Positive pairs
-        neg_sim_2 = torch.cat([sim_21, sim_22.masked_fill(mask, float('-inf'))], dim=1)
+        neg_sim_2 = torch.cat([sim_21, sim_22.masked_fill(mask, float("-inf"))], dim=1)
         loss_2 = -pos_sim_21 + torch.logsumexp(neg_sim_2, dim=1)
         
         # Average loss

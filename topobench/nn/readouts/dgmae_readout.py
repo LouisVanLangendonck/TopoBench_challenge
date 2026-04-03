@@ -4,7 +4,6 @@ Based on: https://github.com/zhengziyu77/DGMAE
 Paper: "Discrepancy-Aware Graph Mask Auto-Encoder" (KDD 2025)
 """
 
-import torch
 import torch.nn as nn
 import torch_geometric
 
@@ -62,10 +61,10 @@ class DGMAEReadOut(AbstractZeroCellReadOut):
         )
     
     def _build_decoder(
-        self, 
-        decoder_type: str, 
-        in_dim: int, 
-        out_dim: int, 
+        self,
+        decoder_type: str,
+        in_dim: int,
+        out_dim: int,
         hidden_dim: int
     ) -> nn.Module:
         """Build the decoder module."""

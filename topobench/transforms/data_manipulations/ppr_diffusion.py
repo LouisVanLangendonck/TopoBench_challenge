@@ -9,7 +9,7 @@ import torch
 from scipy.linalg import fractional_matrix_power, inv
 from torch_geometric.data import Data
 from torch_geometric.transforms import BaseTransform
-from torch_geometric.utils import to_dense_adj, add_self_loops
+from torch_geometric.utils import to_dense_adj
 
 
 class PPRDiffusion(BaseTransform):

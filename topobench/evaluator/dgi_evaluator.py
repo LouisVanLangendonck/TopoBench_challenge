@@ -1,7 +1,7 @@
 """DGI Evaluator for Deep Graph Infomax pre-training."""
 
 import torch
-from torchmetrics import MeanMetric, MetricCollection, Accuracy
+from torchmetrics import Accuracy, MeanMetric, MetricCollection
 
 from topobench.evaluator.base import AbstractEvaluator
 

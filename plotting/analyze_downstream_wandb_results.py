@@ -725,7 +725,7 @@ def main():
     )
     parser.add_argument(
         "--filters", type=str, default='{"state": "finished"}',
-        help='JSON wandb run filters.',
+        help="JSON wandb run filters.",
     )
     parser.add_argument(
         "--include-running", action="store_true",

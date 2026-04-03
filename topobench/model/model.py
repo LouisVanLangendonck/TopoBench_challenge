@@ -51,7 +51,7 @@ class TBModel(LightningModule):
         # also ensures init params will be stored in ckpt
         # Ignore nn.Module and complex objects to make checkpoints portable
         self.save_hyperparameters(
-            logger=False, 
+            logger=False,
             ignore=["backbone", "readout", "feature_encoder", "loss", "evaluator", "optimizer", "backbone_wrapper"]
         )
 
@@ -361,7 +361,7 @@ class TBModel(LightningModule):
         - After the online encoder has been updated by the optimizer
         - Before the next forward pass
         """
-        if hasattr(self.backbone, 'update_target_encoder'):
+        if hasattr(self.backbone, "update_target_encoder"):
             self.backbone.update_target_encoder()
 
     def on_train_epoch_start(self) -> None:

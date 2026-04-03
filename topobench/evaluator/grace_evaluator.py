@@ -1,6 +1,5 @@
 """GRACE Evaluator for tracking contrastive learning metrics."""
 
-import torch
 import torch.nn.functional as F
 from torchmetrics import MeanMetric, MetricCollection
 

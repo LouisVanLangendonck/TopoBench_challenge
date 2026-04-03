@@ -31,13 +31,12 @@ Testing:
     python tutorials/graph_properties.py
 """
 
-import torch
-import numpy as np
+
 import networkx as nx
+import numpy as np
+import torch
 from torch_geometric.data import Data
 from torch_geometric.utils import degree, to_networkx
-from typing import Dict, List, Union
-from pathlib import Path
 
 
 class GraphPropertyComputer:
@@ -314,9 +313,9 @@ class GraphPropertyComputer:
     
     def compute_all_properties(
         self,
-        data_list: List[Data],
+        data_list: list[Data],
         include_complex: bool = True,
-    ) -> Dict[str, torch.Tensor]:
+    ) -> dict[str, torch.Tensor]:
         """
         Compute all graph properties for a list of graphs.
         
@@ -344,35 +343,35 @@ class GraphPropertyComputer:
         
         # Initialize storage for simple properties
         properties = {
-            'homophily': torch.zeros(batch_size, 1),
-            'avg_degree': torch.zeros(batch_size, 1),
-            'size': torch.zeros(batch_size, 1),
-            'gini': torch.zeros(batch_size, 1),
-            'diameter': torch.zeros(batch_size, 1),
+            "homophily": torch.zeros(batch_size, 1),
+            "avg_degree": torch.zeros(batch_size, 1),
+            "size": torch.zeros(batch_size, 1),
+            "gini": torch.zeros(batch_size, 1),
+            "diameter": torch.zeros(batch_size, 1),
         }
         
         # Initialize storage for complex properties
         if include_complex:
-            properties['community_presence'] = torch.zeros(batch_size, self.K)
-            properties['edge_prob_matrix'] = torch.zeros(batch_size, self.K, self.K)
+            properties["community_presence"] = torch.zeros(batch_size, self.K)
+            properties["edge_prob_matrix"] = torch.zeros(batch_size, self.K, self.K)
         
         # Compute properties for each graph
         for i, data in enumerate(data_list):
             # Simple properties
-            properties['homophily'][i, 0] = self.compute_homophily(data)
-            properties['avg_degree'][i, 0] = self.compute_avg_degree(data)
-            properties['size'][i, 0] = self.compute_size(data)
-            properties['gini'][i, 0] = self.compute_gini(data)
-            properties['diameter'][i, 0] = self.compute_diameter(data)
+            properties["homophily"][i, 0] = self.compute_homophily(data)
+            properties["avg_degree"][i, 0] = self.compute_avg_degree(data)
+            properties["size"][i, 0] = self.compute_size(data)
+            properties["gini"][i, 0] = self.compute_gini(data)
+            properties["diameter"][i, 0] = self.compute_diameter(data)
             
             # Complex properties
             if include_complex:
-                properties['community_presence'][i] = self.compute_community_presence(data)
-                properties['edge_prob_matrix'][i] = self.compute_edge_prob_matrix(data)
+                properties["community_presence"][i] = self.compute_community_presence(data)
+                properties["edge_prob_matrix"][i] = self.compute_edge_prob_matrix(data)
         
         return properties
     
-    def compute_simple_properties_only(self, data_list: List[Data]) -> Dict[str, torch.Tensor]:
+    def compute_simple_properties_only(self, data_list: list[Data]) -> dict[str, torch.Tensor]:
         """
         Compute only simple (scalar) properties for faster processing.
         
@@ -386,11 +385,11 @@ class GraphPropertyComputer:
 # =============================================================================
 
 def add_properties_to_dataset(
-    data_list: List[Data],
+    data_list: list[Data],
     K: int,
     include_complex: bool = True,
     verbose: bool = True,
-) -> List[Data]:
+) -> list[Data]:
     """
     Add computed properties as attributes to each Data object.
     
@@ -422,16 +421,16 @@ def add_properties_to_dataset(
     # Add properties as attributes to each Data object
     for i, data in enumerate(data_list):
         # Simple properties
-        data.property_homophily = properties['homophily'][i]
-        data.property_avg_degree = properties['avg_degree'][i]
-        data.property_size = properties['size'][i]
-        data.property_gini = properties['gini'][i]
-        data.property_diameter = properties['diameter'][i]
+        data.property_homophily = properties["homophily"][i]
+        data.property_avg_degree = properties["avg_degree"][i]
+        data.property_size = properties["size"][i]
+        data.property_gini = properties["gini"][i]
+        data.property_diameter = properties["diameter"][i]
         
         # Complex properties
         if include_complex:
-            data.property_community_presence = properties['community_presence'][i]
-            data.property_edge_prob_matrix = properties['edge_prob_matrix'][i]
+            data.property_community_presence = properties["community_presence"][i]
+            data.property_edge_prob_matrix = properties["edge_prob_matrix"][i]
     
     if verbose:
         print("✓ Properties added to dataset")
@@ -475,7 +474,7 @@ def extract_K_from_config(config: dict) -> int:
 # Testing & Visualization
 # =============================================================================
 
-def create_graphuniverse_test_graphs(K: int = 3, n_graphs: int = 5) -> List[Data]:
+def create_graphuniverse_test_graphs(K: int = 3, n_graphs: int = 5) -> list[Data]:
     """
     Create test graphs using GraphUniverse for realistic community structure.
     
@@ -492,7 +491,7 @@ def create_graphuniverse_test_graphs(K: int = 3, n_graphs: int = 5) -> List[Data
         List of test graphs generated by GraphUniverse (converted to PyG Data format).
     """
     try:
-        from graph_universe import GraphUniverse, GraphFamilyGenerator
+        from graph_universe import GraphFamilyGenerator, GraphUniverse
     except ImportError:
         raise ImportError(
             "GraphUniverse not installed. Install with: pip install graph-universe"
@@ -502,8 +501,8 @@ def create_graphuniverse_test_graphs(K: int = 3, n_graphs: int = 5) -> List[Data
     
     # Create universe with detailed parameters
     universe = GraphUniverse(
-        K=K, 
-        edge_propensity_variance=0.3, 
+        K=K,
+        edge_propensity_variance=0.3,
         feature_dim=10,
         seed=42
     )
@@ -532,8 +531,8 @@ def create_graphuniverse_test_graphs(K: int = 3, n_graphs: int = 5) -> List[Data
 
 
 def visualize_graph_with_properties(
-    data: Data, 
-    properties: Dict[str, torch.Tensor], 
+    data: Data,
+    properties: dict[str, torch.Tensor],
     graph_idx: int = 0,
     K: int = None
 ):
@@ -555,7 +554,7 @@ def visualize_graph_with_properties(
     
     # Infer K from edge_prob_matrix if not provided
     if K is None:
-        K = properties['edge_prob_matrix'].shape[1]
+        K = properties["edge_prob_matrix"].shape[1]
     
     # Create figure with subplots
     fig, axes = plt.subplots(1, 3, figsize=(20, 5))
@@ -568,9 +567,9 @@ def visualize_graph_with_properties(
     node_colors = data.y.cpu().numpy()
     
     nx.draw(
-        G, pos, 
-        node_color=node_colors, 
-        cmap='tab10',
+        G, pos,
+        node_color=node_colors,
+        cmap="tab10",
         node_size=300,
         with_labels=True,
         ax=axes[0]
@@ -580,27 +579,27 @@ def visualize_graph_with_properties(
     
     # 2. Simple properties (bar plot)
     simple_props = {
-        'Homophily': properties['homophily'][graph_idx, 0].item(),
-        'Avg Degree': properties['avg_degree'][graph_idx, 0].item(),
-        'Size': properties['size'][graph_idx, 0].item(),
-        'GINI': properties['gini'][graph_idx, 0].item(),
-        'Diameter': properties['diameter'][graph_idx, 0].item(),
+        "Homophily": properties["homophily"][graph_idx, 0].item(),
+        "Avg Degree": properties["avg_degree"][graph_idx, 0].item(),
+        "Size": properties["size"][graph_idx, 0].item(),
+        "GINI": properties["gini"][graph_idx, 0].item(),
+        "Diameter": properties["diameter"][graph_idx, 0].item(),
     }
     
     axes[1].bar(range(len(simple_props)), list(simple_props.values()))
     axes[1].set_xticks(range(len(simple_props)))
-    axes[1].set_xticklabels(simple_props.keys(), rotation=45, ha='right')
-    axes[1].set_ylabel('Value')
-    axes[1].set_title('Simple Properties (5 scalars)')
+    axes[1].set_xticklabels(simple_props.keys(), rotation=45, ha="right")
+    axes[1].set_ylabel("Value")
+    axes[1].set_title("Simple Properties (5 scalars)")
     axes[1].grid(True, alpha=0.3)
     
     # 3. Edge probability matrix (heatmap) - ALWAYS K×K
-    edge_prob = properties['edge_prob_matrix'][graph_idx].cpu().numpy()
+    edge_prob = properties["edge_prob_matrix"][graph_idx].cpu().numpy()
     
-    im = axes[2].imshow(edge_prob, cmap='YlOrRd', vmin=0, vmax=1, aspect='auto')
-    axes[2].set_xlabel('Community ID')
-    axes[2].set_ylabel('Community ID')
-    axes[2].set_title(f'Inter-Community Edge Probability\n({K}×{K} matrix, zeros for absent communities)')
+    im = axes[2].imshow(edge_prob, cmap="YlOrRd", vmin=0, vmax=1, aspect="auto")
+    axes[2].set_xlabel("Community ID")
+    axes[2].set_ylabel("Community ID")
+    axes[2].set_title(f"Inter-Community Edge Probability\n({K}×{K} matrix, zeros for absent communities)")
     
     # Set ticks to show all community IDs
     tick_positions = list(range(K))
@@ -610,7 +609,7 @@ def visualize_graph_with_properties(
     axes[2].set_yticklabels(tick_positions)
     
     # Add colorbar
-    plt.colorbar(im, ax=axes[2], label='Edge Probability')
+    plt.colorbar(im, ax=axes[2], label="Edge Probability")
     
     # Add values to heatmap (only if K is small enough to read)
     if K <= 10:
@@ -620,13 +619,13 @@ def visualize_graph_with_properties(
                 val = edge_prob[i, j]
                 # Only show non-zero values to avoid clutter
                 if val > 0.001:
-                    text = axes[2].text(j, i, f'{val:.2f}',
-                                       ha="center", va="center", 
+                    text = axes[2].text(j, i, f"{val:.2f}",
+                                       ha="center", va="center",
                                        color="black" if val < 0.5 else "white",
                                        fontsize=fontsize)
     
     plt.tight_layout()
-    plt.savefig('graph_properties_test.png', dpi=150, bbox_inches='tight')
+    plt.savefig("graph_properties_test.png", dpi=150, bbox_inches="tight")
     print("✓ Saved visualization to 'graph_properties_test.png'")
     plt.close()
 
@@ -652,7 +651,7 @@ def test_property_computation():
     print(f"   Example graph communities: {list(unique_comms)}")
     
     # Initialize property computer
-    print(f"\n2. Computing properties...")
+    print("\n2. Computing properties...")
     computer = GraphPropertyComputer(K=K)
     properties = computer.compute_all_properties(graphs, include_complex=True)
     
@@ -729,7 +728,7 @@ def test_property_computation():
     print(f"   Community presence: {props_incomplete['community_presence'][0]}")
     print(f"   Edge prob matrix shape: {props_incomplete['edge_prob_matrix'].shape}")
     
-    edge_prob_incomplete = props_incomplete['edge_prob_matrix'][0]
+    edge_prob_incomplete = props_incomplete["edge_prob_matrix"][0]
     
     # Verify that absent communities have zero rows/columns
     absent_comms = [c for c in range(K_large) if c not in active_comms]

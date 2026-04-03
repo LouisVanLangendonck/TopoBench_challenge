@@ -29,11 +29,10 @@ import re
 import sys
 from pathlib import Path
 
-import matplotlib.pyplot as plt
 import matplotlib.colors as mcolors
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-
 from mpl_toolkits.mplot3d import Axes3D  # noqa: F401
 
 # Standalone run: sibling script import

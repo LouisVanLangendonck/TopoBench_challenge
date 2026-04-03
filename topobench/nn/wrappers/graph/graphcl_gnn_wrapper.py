@@ -2,7 +2,11 @@
 
 import torch
 import torch.nn as nn
-from torch_geometric.nn import global_mean_pool, global_add_pool, global_max_pool
+from torch_geometric.nn import (
+    global_add_pool,
+    global_max_pool,
+    global_mean_pool,
+)
 from torch_geometric.utils import dropout_edge, subgraph
 
 from topobench.nn.wrappers.base import AbstractWrapper
@@ -108,7 +112,7 @@ class GraphCLGNNWrapper(AbstractWrapper):
         self.subgraph_ratio_meaning = subgraph_ratio_meaning
         
         # Get feature dimension from kwargs
-        self.feature_dim = kwargs.get('out_channels', None)
+        self.feature_dim = kwargs.get("out_channels")
         
         if self.feature_dim is None:
             raise ValueError("Cannot determine feature dimension. Please provide 'out_channels' in kwargs.")
@@ -367,7 +371,7 @@ class GraphCLGNNWrapper(AbstractWrapper):
             "x_0": enc1,
             "z1": z1,
             "z2": z2,
-            "labels": batch.y if hasattr(batch, 'y') else None,
+            "labels": batch.y if hasattr(batch, "y") else None,
             "batch_0": batch_indices,
         }
 

@@ -33,7 +33,7 @@ class TBLoss(AbstractLoss):
         # Model losses
         # Filter out None values and non-instantiated DictConfig objects
         self.losses.extend(
-            [loss for loss in modules_losses.values() 
+            [loss for loss in modules_losses.values()
              if loss is not None and isinstance(loss, AbstractLoss)]
         )
 

@@ -4,8 +4,6 @@ Based on: https://github.com/kavehhassani/mvgrl
 Paper: "Contrastive Multi-View Representation Learning on Graphs" (ICML 2020)
 """
 
-import torch
-import torch.nn as nn
 import torch_geometric
 from torch_geometric.utils import scatter
 
