@@ -56,15 +56,13 @@ class GraphCLLoss(AbstractLoss):
         z1_norm = F.normalize(z1, p=2, dim=1)
         z2_norm = F.normalize(z2, p=2, dim=1)
 
-        sim_matrix = (
-            torch.mm(z1_norm, z2_norm.t()) / self.temperature
-        )  # (N, N)
+        sim_matrix = torch.mm(z1_norm, z2_norm.t()) / self.temperature  # (N, N)
 
         pos_sim = sim_matrix.diag()  # (N,)
 
         # Mask diagonal (positive pairs) so they are excluded from the denominator
         diag_mask = torch.eye(batch_size, device=z1.device, dtype=torch.bool)
-        neg_sim = sim_matrix.masked_fill(diag_mask, float("-inf"))
+        neg_sim = sim_matrix.masked_fill(diag_mask, float('-inf'))
 
         # -log( exp(pos) / sum_neg ) = -pos + logsumexp(neg)
         loss = -pos_sim + torch.logsumexp(neg_sim, dim=1)
@@ -90,3 +88,4 @@ class GraphCLLoss(AbstractLoss):
         z1 = model_out["z1_proj"]
         z2 = model_out["z2_proj"]
         return self.nt_xent_loss(z1, z2)
+

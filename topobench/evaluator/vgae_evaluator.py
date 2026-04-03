@@ -2,7 +2,7 @@
 
 import torch
 import torch.nn.functional as F
-from torchmetrics import AUROC, Accuracy, MeanMetric, MetricCollection
+from torchmetrics import MeanMetric, MetricCollection, Accuracy, AUROC
 
 from topobench.evaluator import AbstractEvaluator
 
@@ -26,7 +26,9 @@ class VGAEEvaluator(AbstractEvaluator):
 
         metrics_dict = {}
         for metric_name in metrics:
-            if metric_name == "loss" or metric_name == "elbo":
+            if metric_name == "loss":
+                metrics_dict[metric_name] = MeanMetric()
+            elif metric_name == "elbo":
                 metrics_dict[metric_name] = MeanMetric()
             elif metric_name == "accuracy":
                 metrics_dict[metric_name] = Accuracy(task="binary")
@@ -59,8 +61,9 @@ class VGAEEvaluator(AbstractEvaluator):
             recon_bce = F.binary_cross_entropy_with_logits(logits, labels)
             self.metrics["loss"].update(recon_bce)
 
-        if "elbo" in self.metric_names and "loss" in model_out:
-            self.metrics["elbo"].update(model_out["loss"].detach().cpu())
+        if "elbo" in self.metric_names:
+            if "loss" in model_out:
+                self.metrics["elbo"].update(model_out["loss"].detach().cpu())
 
         if "accuracy" in self.metric_names:
             self.metrics["accuracy"].update(preds, labels.long())

@@ -9,7 +9,7 @@ import torch
 from scipy.linalg import fractional_matrix_power, inv
 from torch_geometric.data import Data
 from torch_geometric.transforms import BaseTransform
-from torch_geometric.utils import to_dense_adj
+from torch_geometric.utils import to_dense_adj, add_self_loops
 
 
 class PPRDiffusion(BaseTransform):
@@ -21,7 +21,7 @@ class PPRDiffusion(BaseTransform):
 
     The PPR diffusion matrix is computed as:
         S^{PPR} = α(I - (1-α)Ã)^{-1}
-
+    
     where Ã = D^{-1/2} A D^{-1/2} is the symmetrically normalized adjacency.
 
     Parameters
@@ -75,11 +75,7 @@ class PPRDiffusion(BaseTransform):
         # Handle empty graphs
         if edge_index.size(1) == 0 or num_nodes <= 1:
             setattr(data, self.attr_name_edge_index, edge_index)
-            setattr(
-                data,
-                self.attr_name_edge_weight,
-                torch.ones(edge_index.size(1), device=device),
-            )
+            setattr(data, self.attr_name_edge_weight, torch.ones(edge_index.size(1), device=device))
             return data
 
         # Compute PPR diffusion matrix
@@ -95,7 +91,7 @@ class PPRDiffusion(BaseTransform):
 
     def _compute_ppr(self, adj: np.ndarray) -> np.ndarray:
         """Compute PPR diffusion matrix.
-
+        
         Matches original MVGRL implementation:
         S^{PPR} = α(I - (1-α)Ã)^{-1}
 
@@ -111,15 +107,15 @@ class PPRDiffusion(BaseTransform):
         """
         n = adj.shape[0]
         d = np.diag(np.sum(adj, axis=1))
-
+        
         # Handle isolated nodes (degree 0)
         d_diag = np.diag(d)
         d_diag[d_diag == 0] = 1  # Prevent division by zero
         d = np.diag(d_diag)
-
+        
         dinv = fractional_matrix_power(d, -0.5)
         at = np.matmul(np.matmul(dinv, adj), dinv)  # Ã = D^{-1/2} A D^{-1/2}
-
+        
         return self.alpha * inv(np.eye(n) - (1 - self.alpha) * at)
 
     def _compute_ppr_sparse(
@@ -142,28 +138,23 @@ class PPRDiffusion(BaseTransform):
             (edge_index_diff, edge_weight_diff)
         """
         # Convert to dense adjacency
-        adj = (
-            to_dense_adj(edge_index, max_num_nodes=num_nodes)
-            .squeeze(0)
-            .cpu()
-            .numpy()
-        )
-
+        adj = to_dense_adj(edge_index, max_num_nodes=num_nodes).squeeze(0).cpu().numpy()
+        
         # Add self-loops if requested
         if self.self_loop:
             adj = adj + np.eye(num_nodes)
-
+        
         # Compute PPR diffusion
         ppr_matrix = self._compute_ppr(adj)
-
+        
         # Convert to torch tensor
         ppr_tensor = torch.from_numpy(ppr_matrix).float().to(device)
-
+        
         # Sparsify: keep edges above threshold
         mask = ppr_tensor > self.threshold
         edge_index_diff = mask.nonzero(as_tuple=False).t().contiguous()
         edge_weight_diff = ppr_tensor[mask]
-
+        
         return edge_index_diff, edge_weight_diff
 
     def __repr__(self) -> str:
@@ -235,11 +226,7 @@ class HeatDiffusion(BaseTransform):
         # Handle empty graphs
         if edge_index.size(1) == 0 or num_nodes <= 1:
             setattr(data, self.attr_name_edge_index, edge_index)
-            setattr(
-                data,
-                self.attr_name_edge_weight,
-                torch.ones(edge_index.size(1), device=device),
-            )
+            setattr(data, self.attr_name_edge_weight, torch.ones(edge_index.size(1), device=device))
             return data
 
         # Compute heat diffusion matrix
@@ -255,7 +242,7 @@ class HeatDiffusion(BaseTransform):
 
     def _compute_heat(self, adj: np.ndarray) -> np.ndarray:
         """Compute heat kernel diffusion matrix.
-
+        
         Matches original MVGRL implementation:
         S^{heat} = exp(t * (AD^{-1} - 1))  (element-wise)
 
@@ -270,12 +257,12 @@ class HeatDiffusion(BaseTransform):
             Heat kernel diffusion matrix.
         """
         d = np.diag(np.sum(adj, axis=1))
-
+        
         # Handle isolated nodes (degree 0)
         d_diag = np.diag(d)
         d_diag[d_diag == 0] = 1  # Prevent division by zero
         d = np.diag(d_diag)
-
+        
         return np.exp(self.t * (np.matmul(adj, inv(d)) - 1))
 
     def _compute_heat_sparse(
@@ -298,28 +285,23 @@ class HeatDiffusion(BaseTransform):
             (edge_index_diff, edge_weight_diff)
         """
         # Convert to dense adjacency
-        adj = (
-            to_dense_adj(edge_index, max_num_nodes=num_nodes)
-            .squeeze(0)
-            .cpu()
-            .numpy()
-        )
-
+        adj = to_dense_adj(edge_index, max_num_nodes=num_nodes).squeeze(0).cpu().numpy()
+        
         # Add self-loops if requested
         if self.self_loop:
             adj = adj + np.eye(num_nodes)
-
+        
         # Compute heat diffusion
         heat_matrix = self._compute_heat(adj)
-
+        
         # Convert to torch tensor
         heat_tensor = torch.from_numpy(heat_matrix).float().to(device)
-
+        
         # Sparsify: keep edges above threshold
         mask = heat_tensor > self.threshold
         edge_index_diff = mask.nonzero(as_tuple=False).t().contiguous()
         edge_weight_diff = heat_tensor[mask]
-
+        
         return edge_index_diff, edge_weight_diff
 
     def __repr__(self) -> str:

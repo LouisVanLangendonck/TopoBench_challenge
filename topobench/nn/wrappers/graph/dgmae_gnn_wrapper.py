@@ -7,9 +7,9 @@ Paper: "Discrepancy-Aware Graph Mask Auto-Encoder" (KDD 2025)
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch_geometric.nn.dense.linear import Linear
-from torch_geometric.utils import add_self_loops
 from torch_scatter import scatter_add
+from torch_geometric.utils import add_self_loops
+from torch_geometric.nn.dense.linear import Linear
 
 from topobench.nn.wrappers.base import AbstractWrapper
 
@@ -36,14 +36,14 @@ class DGMAEGNNWrapper(AbstractWrapper):
     GAT encoder's MASKED pass (not clean!) and uses them for adaptive edge selection.
     This matches the original DGMAE implementation where encode_attn comes from
     encoder(use_g, use_x) with masked features.
-
+    
     - weights_hp = 1 - sigmoid(attention)
     - Low attention (dissimilar nodes) → high weight → likely KEPT
     - High attention (similar nodes) → low weight → likely DROPPED
-
+    
     This keeps heterophilic edges and drops homophilic ones for the high-pass
     filter, matching the original DGMAE paper and code.
-
+    
     For non-GAT encoders (GCN, GIN, etc.), the full graph Laplacian is used
     for high-pass filtering (standard behavior).
 
@@ -83,7 +83,7 @@ class DGMAEGNNWrapper(AbstractWrapper):
         encoder_type: str = "gcn",
         attn_edge_p: float = 0.3,
         attn_edge_threshold: float = 0.7,
-        **kwargs,
+        **kwargs
     ):
         super().__init__(backbone, **kwargs)
 
@@ -94,7 +94,7 @@ class DGMAEGNNWrapper(AbstractWrapper):
         self.encoder_type = encoder_type.lower()
         self.attn_edge_p = attn_edge_p
         self.attn_edge_threshold = attn_edge_threshold
-
+        
         # Whether to use attention-weighted edge selection
         self.use_attention = self.encoder_type in ("gat", "dotgat")
 
@@ -102,17 +102,13 @@ class DGMAEGNNWrapper(AbstractWrapper):
         self.mask_token_rate = 1 - self.replace_rate
 
         # Get feature dimension from kwargs
-        self.feature_dim = kwargs.get("out_channels")
+        self.feature_dim = kwargs.get('out_channels', None)
 
         if self.feature_dim is None:
-            raise ValueError(
-                "Cannot determine feature dimension. Please provide 'out_channels' in kwargs."
-            )
+            raise ValueError("Cannot determine feature dimension. Please provide 'out_channels' in kwargs.")
 
         # Input dimension for MLP output (original feature space)
-        self.in_channels = (
-            in_channels if in_channels is not None else self.feature_dim
-        )
+        self.in_channels = in_channels if in_channels is not None else self.feature_dim
 
         # Create learnable mask token (initialized to zeros, learned during training)
         self.enc_mask_token = nn.Parameter(torch.zeros(1, self.feature_dim))
@@ -121,20 +117,10 @@ class DGMAEGNNWrapper(AbstractWrapper):
         # Maps: hidden_dim -> in_dim (to match original feature space)
         # Using PyG's Linear with glorot initialization (matches original)
         self.hetero_mlp = nn.Sequential(
-            Linear(
-                self.feature_dim,
-                self.feature_dim,
-                bias=False,
-                weight_initializer="glorot",
-            ),
+            Linear(self.feature_dim, self.feature_dim, bias=False, weight_initializer='glorot'),
             nn.PReLU(),
             nn.Dropout(0.2),
-            Linear(
-                self.feature_dim,
-                self.in_channels,
-                bias=False,
-                weight_initializer="glorot",
-            ),
+            Linear(self.feature_dim, self.in_channels, bias=False, weight_initializer='glorot'),
         )
 
     def encoding_mask_noise(self, x, num_nodes, device):
@@ -169,14 +155,10 @@ class DGMAEGNNWrapper(AbstractWrapper):
             num_noise_nodes = int(self.replace_rate * num_mask_nodes)
             perm_mask = torch.randperm(num_mask_nodes, device=device)
 
-            token_nodes = mask_nodes[
-                perm_mask[: int(self.mask_token_rate * num_mask_nodes)]
-            ]
+            token_nodes = mask_nodes[perm_mask[:int(self.mask_token_rate * num_mask_nodes)]]
             noise_nodes = mask_nodes[perm_mask[-num_noise_nodes:]]
 
-            noise_to_be_chosen = torch.randperm(num_nodes, device=device)[
-                :num_noise_nodes
-            ]
+            noise_to_be_chosen = torch.randperm(num_nodes, device=device)[:num_noise_nodes]
 
             out_x[token_nodes] = 0.0
             out_x[noise_nodes] = x[noise_to_be_chosen]
@@ -191,12 +173,12 @@ class DGMAEGNNWrapper(AbstractWrapper):
 
     def drop_edges(self, edge_index, num_nodes, device, return_edges=False):
         """Drop edges randomly and add self-loops.
-
+        
         Matches original DGMAE implementation:
         1. Bernoulli sampling to decide which edges to keep
         2. Add self-loops to the resulting graph
         3. Optionally return dropped edges
-
+        
         Parameters
         ----------
         edge_index : torch.Tensor
@@ -207,7 +189,7 @@ class DGMAEGNNWrapper(AbstractWrapper):
             Device to use.
         return_edges : bool, optional
             If True, also return the dropped edges (default: False).
-
+            
         Returns
         -------
         torch.Tensor or tuple
@@ -219,37 +201,35 @@ class DGMAEGNNWrapper(AbstractWrapper):
             return edge_index
 
         num_edges = edge_index.size(1)
-
+        
         # Bernoulli mask: 1 = keep, 0 = drop
         # P(keep) = 1 - drop_rate
         mask_rates = torch.ones(num_edges, device=device) * self.drop_edge_rate
         keep_mask = torch.bernoulli(1 - mask_rates).bool()
-
+        
         # Keep edges
         new_edge_index = edge_index[:, keep_mask]
-
+        
         # Add self-loops (as in original DGMAE)
         new_edge_index, _ = add_self_loops(new_edge_index, num_nodes=num_nodes)
-
+        
         if return_edges:
             # Return dropped edges as well
             drop_mask = ~keep_mask
             dropped_edges = edge_index[:, drop_mask]
             return new_edge_index, dropped_edges
-
+        
         return new_edge_index
 
-    def drop_edge_weighted(
-        self, edge_index, edge_weights, p, threshold, device
-    ):
+    def drop_edge_weighted(self, edge_index, edge_weights, p, threshold, device):
         """Attention-weighted edge selection for heterophily.
-
+        
         Matches original DGMAE `drop_edge_weighted` from utils.py:
         - Normalizes weights by mean and scales by p
         - Clips to threshold
         - Bernoulli samples based on weights
         - High weight = more likely to be SELECTED (kept for high-pass filter)
-
+        
         Parameters
         ----------
         edge_index : torch.Tensor
@@ -262,7 +242,7 @@ class DGMAEGNNWrapper(AbstractWrapper):
             Maximum selection probability.
         device : torch.device
             Device to use.
-
+            
         Returns
         -------
         tuple
@@ -270,36 +250,34 @@ class DGMAEGNNWrapper(AbstractWrapper):
         """
         # Normalize weights and scale by p
         edge_weights = edge_weights / (edge_weights.mean() + 1e-8) * p
-
+        
         # Clip to threshold
         edge_weights = torch.where(
             edge_weights < threshold,
             edge_weights,
-            torch.ones_like(edge_weights) * threshold,
+            torch.ones_like(edge_weights) * threshold
         )
-
+        
         # Bernoulli sample: higher weight = more likely selected
         sel_mask = torch.bernoulli(edge_weights).to(torch.bool)
-
+        
         selected_edges = edge_index[:, sel_mask]
         dropped_edges = edge_index[:, ~sel_mask]
         selected_weights = edge_weights[sel_mask]
-
+        
         return selected_edges, dropped_edges, selected_weights
 
-    def compute_high_pass_features(
-        self, edge_index, x, hop, num_nodes, device
-    ):
+    def compute_high_pass_features(self, edge_index, x, hop, num_nodes, device):
         """Compute high-pass filtered features using Laplacian.
-
+        
         Implements heterophily_highfilter_sp from original DGMAE:
         L = I - A_norm (Laplacian)
         hx = L^hop * x (high-frequency component)
-
+        
         Note: The original DGMAE uses attention-weighted edge dropping before
         this step when using GAT encoder. For non-GAT encoders, it uses the
         full graph (which is what this implementation does).
-
+        
         Parameters
         ----------
         edge_index : torch.Tensor
@@ -312,40 +290,33 @@ class DGMAEGNNWrapper(AbstractWrapper):
             Number of nodes.
         device : torch.device
             Device to use.
-
+            
         Returns
         -------
         torch.Tensor
             High-pass filtered features.
         """
         row, col = edge_index
-
+        
         # Compute degree
-        deg = scatter_add(
-            torch.ones(row.size(0), device=device),
-            row,
-            dim=0,
-            dim_size=num_nodes,
-        )
+        deg = scatter_add(torch.ones(row.size(0), device=device), row, dim=0, dim_size=num_nodes)
         deg_inv_sqrt = deg.pow(-0.5)
-        deg_inv_sqrt[deg_inv_sqrt == float("inf")] = 0
-
+        deg_inv_sqrt[deg_inv_sqrt == float('inf')] = 0
+        
         # Normalized edge weights: D^-0.5 * A * D^-0.5
         norm_weights = deg_inv_sqrt[row] * deg_inv_sqrt[col]
-
+        
         # Apply Laplacian filter iteratively: L = I - A_norm
         hx = x.clone()
         for _ in range(hop):
             # A_norm * x via scatter
             ax = scatter_add(
                 norm_weights.unsqueeze(-1) * hx[row],
-                col,
-                dim=0,
-                dim_size=num_nodes,
+                col, dim=0, dim_size=num_nodes
             )
             # L * x = x - A_norm * x
             hx = hx - ax
-
+        
         return hx
 
     def forward(self, batch):
@@ -360,7 +331,7 @@ class DGMAEGNNWrapper(AbstractWrapper):
         - This matches original: encode_attn comes from encoder(use_g, use_x)
           where use_x has masked features
         - Attention-weighted edge selection is used for high-pass filter
-
+        
         For non-GAT encoders:
         - Full graph Laplacian is used for high-pass filter
 
@@ -385,7 +356,7 @@ class DGMAEGNNWrapper(AbstractWrapper):
         device = x_0.device
 
         # Store ORIGINAL RAW features for reconstruction and high-pass filter
-        if hasattr(batch, "x_raw"):
+        if hasattr(batch, 'x_raw'):
             x_raw_original = batch.x_raw.clone()
         else:
             # Fallback
@@ -403,7 +374,7 @@ class DGMAEGNNWrapper(AbstractWrapper):
             use_edge_index = edge_index
 
         # === DGMAE: Two encoder passes (following original implementation) ===
-
+        
         # Pass 1: CLEAN encoding (for MLP prediction only, no attention needed)
         enc_rep_clean = self.backbone(
             x_0,
@@ -411,12 +382,12 @@ class DGMAEGNNWrapper(AbstractWrapper):
             batch=batch_indices,
             edge_weight=edge_weight,
         )
-
+        
         # Pass 2: MASKED encoding (for reconstruction)
         # For GAT: extract attention weights from THIS pass (matches original DGMAE!)
         # Original code: encode_attn comes from encoder(use_g, use_x) where use_x is masked
         encode_attn = None
-
+        
         if self.use_attention:
             # Try to get attention weights from GAT backbone on MASKED features
             try:
@@ -457,7 +428,7 @@ class DGMAEGNNWrapper(AbstractWrapper):
         # DGMAE-specific: Compute high-pass filtered features
         # For GAT: use attention-weighted edge selection
         # For non-GAT: use full graph Laplacian
-
+        
         if encode_attn is not None and self.training:
             # GAT with attention: adaptive edge selection
             # Original: weights_hp = 1 - sigmoid(mean(attention))
@@ -466,20 +437,17 @@ class DGMAEGNNWrapper(AbstractWrapper):
                 attn_mean = encode_attn.mean(dim=-1)
             else:
                 attn_mean = encode_attn
-
+            
             # Convert to heterophily weights: low attention = high weight
             weights_lp = torch.sigmoid(attn_mean)
             weights_hp = 1 - weights_lp
-
+            
             # Select edges based on heterophily weights
             selected_edges, _, _ = self.drop_edge_weighted(
-                edge_index,
-                weights_hp,
-                self.attn_edge_p,
-                self.attn_edge_threshold,
-                device,
+                edge_index, weights_hp, 
+                self.attn_edge_p, self.attn_edge_threshold, device
             )
-
+            
             # Compute high-pass filter on SELECTED edges
             high_pass_features = self.compute_high_pass_features(
                 selected_edges, x_raw_original, self.hop, num_nodes, device
@@ -496,7 +464,7 @@ class DGMAEGNNWrapper(AbstractWrapper):
             "x_raw_original": x_raw_original,  # ORIGINAL RAW features
             "mask_nodes": mask_nodes,  # Which nodes were masked
             "keep_nodes": keep_nodes,  # Which nodes were kept
-            "labels": batch.y if hasattr(batch, "y") else None,
+            "labels": batch.y if hasattr(batch, 'y') else None,
             "batch_0": batch_indices,
             "edge_index": edge_index,  # Full edge_index for decoder
             "edge_weight": edge_weight,

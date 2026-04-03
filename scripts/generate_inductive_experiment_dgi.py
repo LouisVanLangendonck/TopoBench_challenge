@@ -106,9 +106,9 @@ def multirun_product_from_command_block(block: str) -> int:
 # No space after '=' before \\[...\\] — a space splits the shell word and breaks Hydra's lexer.
 COMMAND_TEMPLATE = r"""python -m topobench \
     dataset=graph/GraphUniverse_dgi \
-    model=graph/gps_dgi \
-    loss=dgi \
-    evaluator=dgi \
+    model=graph/gps_graphmaev2 \
+    loss=graphmaev2 \
+    evaluator=graphmaev2 \
     dataset.loader.parameters.generation_parameters.universe_parameters.K=30 \
     dataset.loader.parameters.generation_parameters.universe_parameters.center_variance={center_variance} \
     dataset.loader.parameters.generation_parameters.universe_parameters.cluster_variance={cluster_variance} \

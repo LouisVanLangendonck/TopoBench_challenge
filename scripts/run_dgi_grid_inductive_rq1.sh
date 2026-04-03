@@ -9,9 +9,9 @@
 # Feature signal: Low (center_variance=0.01, cluster_variance=1.0) | Structural signal: Low (edge_propensity_variance=0.0, degree_separation_range=[0.0,0.0]) | trainer.devices=[0]
 python -m topobench \
     dataset=graph/GraphUniverse_dgi \
-    model=graph/gps_dgi \
-    loss=dgi \
-    evaluator=dgi \
+    model=graph/gps_graphmaev2 \
+    loss=graphmaev2 \
+    evaluator=graphmaev2 \
     dataset.loader.parameters.generation_parameters.universe_parameters.K=30 \
     dataset.loader.parameters.generation_parameters.universe_parameters.center_variance=0.01 \
     dataset.loader.parameters.generation_parameters.universe_parameters.cluster_variance=1.0 \
@@ -49,9 +49,9 @@ python -m topobench \
 # Feature signal: Low (center_variance=0.01, cluster_variance=1.0) | Structural signal: Medium (edge_propensity_variance=0.5, degree_separation_range=[0.4,0.6]) | trainer.devices=[1]
 python -m topobench \
     dataset=graph/GraphUniverse_dgi \
-    model=graph/gps_dgi \
-    loss=dgi \
-    evaluator=dgi \
+    model=graph/gps_graphmaev2 \
+    loss=graphmaev2 \
+    evaluator=graphmaev2 \
     dataset.loader.parameters.generation_parameters.universe_parameters.K=30 \
     dataset.loader.parameters.generation_parameters.universe_parameters.center_variance=0.01 \
     dataset.loader.parameters.generation_parameters.universe_parameters.cluster_variance=1.0 \
@@ -89,9 +89,9 @@ python -m topobench \
 # Feature signal: Low (center_variance=0.01, cluster_variance=1.0) | Structural signal: High (edge_propensity_variance=1.0, degree_separation_range=[0.9,0.9]) | trainer.devices=[2]
 python -m topobench \
     dataset=graph/GraphUniverse_dgi \
-    model=graph/gps_dgi \
-    loss=dgi \
-    evaluator=dgi \
+    model=graph/gps_graphmaev2 \
+    loss=graphmaev2 \
+    evaluator=graphmaev2 \
     dataset.loader.parameters.generation_parameters.universe_parameters.K=30 \
     dataset.loader.parameters.generation_parameters.universe_parameters.center_variance=0.01 \
     dataset.loader.parameters.generation_parameters.universe_parameters.cluster_variance=1.0 \
@@ -129,9 +129,9 @@ python -m topobench \
 # Feature signal: Medium (center_variance=0.2, cluster_variance=0.4) | Structural signal: Low (edge_propensity_variance=0.0, degree_separation_range=[0.0,0.0]) | trainer.devices=[3]
 python -m topobench \
     dataset=graph/GraphUniverse_dgi \
-    model=graph/gps_dgi \
-    loss=dgi \
-    evaluator=dgi \
+    model=graph/gps_graphmaev2 \
+    loss=graphmaev2 \
+    evaluator=graphmaev2 \
     dataset.loader.parameters.generation_parameters.universe_parameters.K=30 \
     dataset.loader.parameters.generation_parameters.universe_parameters.center_variance=0.2 \
     dataset.loader.parameters.generation_parameters.universe_parameters.cluster_variance=0.4 \
@@ -169,9 +169,9 @@ python -m topobench \
 # Feature signal: Medium (center_variance=0.2, cluster_variance=0.4) | Structural signal: Medium (edge_propensity_variance=0.5, degree_separation_range=[0.4,0.6]) | trainer.devices=[0]
 python -m topobench \
     dataset=graph/GraphUniverse_dgi \
-    model=graph/gps_dgi \
-    loss=dgi \
-    evaluator=dgi \
+    model=graph/gps_graphmaev2 \
+    loss=graphmaev2 \
+    evaluator=graphmaev2 \
     dataset.loader.parameters.generation_parameters.universe_parameters.K=30 \
     dataset.loader.parameters.generation_parameters.universe_parameters.center_variance=0.2 \
     dataset.loader.parameters.generation_parameters.universe_parameters.cluster_variance=0.4 \
@@ -209,9 +209,9 @@ python -m topobench \
 # Feature signal: Medium (center_variance=0.2, cluster_variance=0.4) | Structural signal: High (edge_propensity_variance=1.0, degree_separation_range=[0.9,0.9]) | trainer.devices=[1]
 python -m topobench \
     dataset=graph/GraphUniverse_dgi \
-    model=graph/gps_dgi \
-    loss=dgi \
-    evaluator=dgi \
+    model=graph/gps_graphmaev2 \
+    loss=graphmaev2 \
+    evaluator=graphmaev2 \
     dataset.loader.parameters.generation_parameters.universe_parameters.K=30 \
     dataset.loader.parameters.generation_parameters.universe_parameters.center_variance=0.2 \
     dataset.loader.parameters.generation_parameters.universe_parameters.cluster_variance=0.4 \
@@ -249,9 +249,9 @@ python -m topobench \
 # Feature signal: High (center_variance=0.4, cluster_variance=0.2) | Structural signal: Low (edge_propensity_variance=0.0, degree_separation_range=[0.0,0.0]) | trainer.devices=[2]
 python -m topobench \
     dataset=graph/GraphUniverse_dgi \
-    model=graph/gps_dgi \
-    loss=dgi \
-    evaluator=dgi \
+    model=graph/gps_graphmaev2 \
+    loss=graphmaev2 \
+    evaluator=graphmaev2 \
     dataset.loader.parameters.generation_parameters.universe_parameters.K=30 \
     dataset.loader.parameters.generation_parameters.universe_parameters.center_variance=0.4 \
     dataset.loader.parameters.generation_parameters.universe_parameters.cluster_variance=0.2 \
@@ -289,9 +289,9 @@ python -m topobench \
 # Feature signal: High (center_variance=0.4, cluster_variance=0.2) | Structural signal: Medium (edge_propensity_variance=0.5, degree_separation_range=[0.4,0.6]) | trainer.devices=[3]
 python -m topobench \
     dataset=graph/GraphUniverse_dgi \
-    model=graph/gps_dgi \
-    loss=dgi \
-    evaluator=dgi \
+    model=graph/gps_graphmaev2 \
+    loss=graphmaev2 \
+    evaluator=graphmaev2 \
     dataset.loader.parameters.generation_parameters.universe_parameters.K=30 \
     dataset.loader.parameters.generation_parameters.universe_parameters.center_variance=0.4 \
     dataset.loader.parameters.generation_parameters.universe_parameters.cluster_variance=0.2 \
@@ -329,9 +329,9 @@ python -m topobench \
 # Feature signal: High (center_variance=0.4, cluster_variance=0.2) | Structural signal: High (edge_propensity_variance=1.0, degree_separation_range=[0.9,0.9]) | trainer.devices=[0]
 python -m topobench \
     dataset=graph/GraphUniverse_dgi \
-    model=graph/gps_dgi \
-    loss=dgi \
-    evaluator=dgi \
+    model=graph/gps_graphmaev2 \
+    loss=graphmaev2 \
+    evaluator=graphmaev2 \
     dataset.loader.parameters.generation_parameters.universe_parameters.K=30 \
     dataset.loader.parameters.generation_parameters.universe_parameters.center_variance=0.4 \
     dataset.loader.parameters.generation_parameters.universe_parameters.cluster_variance=0.2 \

@@ -3,8 +3,8 @@
 #
 # Grid layout: 3 feature-signal levels x 3 structural levels = 9 parallel jobs.
 # GPU assignment: commands round-robin trainer.devices over [0..3] (wraps after each 4-th job).
-# Hydra --multirun combinations per job (same hyperparameter sweeps): 96
-# Total training runs (jobs x per-job grid): 864
+# Hydra --multirun combinations per job (same hyperparameter sweeps): 24
+# Total training runs (jobs x per-job grid): 216
 #
 # Feature signal: Low (center_variance=0.01, cluster_variance=1.0) | Structural signal: Low (edge_propensity_variance=0.0, degree_separation_range=[0.0,0.0]) | trainer.devices=[0]
 python -m topobench \
@@ -36,11 +36,9 @@ python -m topobench \
     optimizer.parameters.lr=0.001 \
     optimizer.parameters.weight_decay=0,0.0001 \
     dataset.dataloader_params.batch_size=1 \
-    model.backbone_wrapper.drop_edge_rate_1=0.0,0.2 \
-    model.backbone_wrapper.drop_edge_rate_2=0.2 \
-    model.backbone_wrapper.drop_feature_rate_1=0.0,0.2 \
-    model.backbone_wrapper.drop_feature_rate_2=0.2 \
-    model.backbone_wrapper.momentum=0.990,0.999 \
+    model.backbone_wrapper.edge_sample_ratio=0.2,0.8 \
+    model.backbone_wrapper.residual_connections=false \
+    model.readout.pooling_type=mean \
     trainer.devices=\[0\] \
     trainer.check_val_every_n_epoch=2 \
     callbacks.early_stopping.patience=5 \
@@ -78,11 +76,9 @@ python -m topobench \
     optimizer.parameters.lr=0.001 \
     optimizer.parameters.weight_decay=0,0.0001 \
     dataset.dataloader_params.batch_size=1 \
-    model.backbone_wrapper.drop_edge_rate_1=0.0,0.2 \
-    model.backbone_wrapper.drop_edge_rate_2=0.2 \
-    model.backbone_wrapper.drop_feature_rate_1=0.0,0.2 \
-    model.backbone_wrapper.drop_feature_rate_2=0.2 \
-    model.backbone_wrapper.momentum=0.990,0.999 \
+    model.backbone_wrapper.edge_sample_ratio=0.2,0.8 \
+    model.backbone_wrapper.residual_connections=false \
+    model.readout.pooling_type=mean \
     trainer.devices=\[1\] \
     trainer.check_val_every_n_epoch=2 \
     callbacks.early_stopping.patience=5 \
@@ -120,11 +116,9 @@ python -m topobench \
     optimizer.parameters.lr=0.001 \
     optimizer.parameters.weight_decay=0,0.0001 \
     dataset.dataloader_params.batch_size=1 \
-    model.backbone_wrapper.drop_edge_rate_1=0.0,0.2 \
-    model.backbone_wrapper.drop_edge_rate_2=0.2 \
-    model.backbone_wrapper.drop_feature_rate_1=0.0,0.2 \
-    model.backbone_wrapper.drop_feature_rate_2=0.2 \
-    model.backbone_wrapper.momentum=0.990,0.999 \
+    model.backbone_wrapper.edge_sample_ratio=0.2,0.8 \
+    model.backbone_wrapper.residual_connections=false \
+    model.readout.pooling_type=mean \
     trainer.devices=\[2\] \
     trainer.check_val_every_n_epoch=2 \
     callbacks.early_stopping.patience=5 \
@@ -162,11 +156,9 @@ python -m topobench \
     optimizer.parameters.lr=0.001 \
     optimizer.parameters.weight_decay=0,0.0001 \
     dataset.dataloader_params.batch_size=1 \
-    model.backbone_wrapper.drop_edge_rate_1=0.0,0.2 \
-    model.backbone_wrapper.drop_edge_rate_2=0.2 \
-    model.backbone_wrapper.drop_feature_rate_1=0.0,0.2 \
-    model.backbone_wrapper.drop_feature_rate_2=0.2 \
-    model.backbone_wrapper.momentum=0.990,0.999 \
+    model.backbone_wrapper.edge_sample_ratio=0.2,0.8 \
+    model.backbone_wrapper.residual_connections=false \
+    model.readout.pooling_type=mean \
     trainer.devices=\[3\] \
     trainer.check_val_every_n_epoch=2 \
     callbacks.early_stopping.patience=5 \
@@ -204,11 +196,9 @@ python -m topobench \
     optimizer.parameters.lr=0.001 \
     optimizer.parameters.weight_decay=0,0.0001 \
     dataset.dataloader_params.batch_size=1 \
-    model.backbone_wrapper.drop_edge_rate_1=0.0,0.2 \
-    model.backbone_wrapper.drop_edge_rate_2=0.2 \
-    model.backbone_wrapper.drop_feature_rate_1=0.0,0.2 \
-    model.backbone_wrapper.drop_feature_rate_2=0.2 \
-    model.backbone_wrapper.momentum=0.990,0.999 \
+    model.backbone_wrapper.edge_sample_ratio=0.2,0.8 \
+    model.backbone_wrapper.residual_connections=false \
+    model.readout.pooling_type=mean \
     trainer.devices=\[0\] \
     trainer.check_val_every_n_epoch=2 \
     callbacks.early_stopping.patience=5 \
@@ -246,11 +236,9 @@ python -m topobench \
     optimizer.parameters.lr=0.001 \
     optimizer.parameters.weight_decay=0,0.0001 \
     dataset.dataloader_params.batch_size=1 \
-    model.backbone_wrapper.drop_edge_rate_1=0.0,0.2 \
-    model.backbone_wrapper.drop_edge_rate_2=0.2 \
-    model.backbone_wrapper.drop_feature_rate_1=0.0,0.2 \
-    model.backbone_wrapper.drop_feature_rate_2=0.2 \
-    model.backbone_wrapper.momentum=0.990,0.999 \
+    model.backbone_wrapper.edge_sample_ratio=0.2,0.8 \
+    model.backbone_wrapper.residual_connections=false \
+    model.readout.pooling_type=mean \
     trainer.devices=\[1\] \
     trainer.check_val_every_n_epoch=2 \
     callbacks.early_stopping.patience=5 \
@@ -288,11 +276,9 @@ python -m topobench \
     optimizer.parameters.lr=0.001 \
     optimizer.parameters.weight_decay=0,0.0001 \
     dataset.dataloader_params.batch_size=1 \
-    model.backbone_wrapper.drop_edge_rate_1=0.0,0.2 \
-    model.backbone_wrapper.drop_edge_rate_2=0.2 \
-    model.backbone_wrapper.drop_feature_rate_1=0.0,0.2 \
-    model.backbone_wrapper.drop_feature_rate_2=0.2 \
-    model.backbone_wrapper.momentum=0.990,0.999 \
+    model.backbone_wrapper.edge_sample_ratio=0.2,0.8 \
+    model.backbone_wrapper.residual_connections=false \
+    model.readout.pooling_type=mean \
     trainer.devices=\[2\] \
     trainer.check_val_every_n_epoch=2 \
     callbacks.early_stopping.patience=5 \
@@ -330,11 +316,9 @@ python -m topobench \
     optimizer.parameters.lr=0.001 \
     optimizer.parameters.weight_decay=0,0.0001 \
     dataset.dataloader_params.batch_size=1 \
-    model.backbone_wrapper.drop_edge_rate_1=0.0,0.2 \
-    model.backbone_wrapper.drop_edge_rate_2=0.2 \
-    model.backbone_wrapper.drop_feature_rate_1=0.0,0.2 \
-    model.backbone_wrapper.drop_feature_rate_2=0.2 \
-    model.backbone_wrapper.momentum=0.990,0.999 \
+    model.backbone_wrapper.edge_sample_ratio=0.2,0.8 \
+    model.backbone_wrapper.residual_connections=false \
+    model.readout.pooling_type=mean \
     trainer.devices=\[3\] \
     trainer.check_val_every_n_epoch=2 \
     callbacks.early_stopping.patience=5 \
@@ -372,11 +356,9 @@ python -m topobench \
     optimizer.parameters.lr=0.001 \
     optimizer.parameters.weight_decay=0,0.0001 \
     dataset.dataloader_params.batch_size=1 \
-    model.backbone_wrapper.drop_edge_rate_1=0.0,0.2 \
-    model.backbone_wrapper.drop_edge_rate_2=0.2 \
-    model.backbone_wrapper.drop_feature_rate_1=0.0,0.2 \
-    model.backbone_wrapper.drop_feature_rate_2=0.2 \
-    model.backbone_wrapper.momentum=0.990,0.999 \
+    model.backbone_wrapper.edge_sample_ratio=0.2,0.8 \
+    model.backbone_wrapper.residual_connections=false \
+    model.readout.pooling_type=mean \
     trainer.devices=\[0\] \
     trainer.check_val_every_n_epoch=2 \
     callbacks.early_stopping.patience=5 \

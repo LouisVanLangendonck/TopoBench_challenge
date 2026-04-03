@@ -3,8 +3,8 @@
 #
 # Grid layout: 3 feature-signal levels x 3 structural levels = 9 parallel jobs.
 # GPU assignment: commands round-robin trainer.devices over [0..3] (wraps after each 4-th job).
-# Hydra --multirun combinations per job (same hyperparameter sweeps): 96
-# Total training runs (jobs x per-job grid): 864
+# Hydra --multirun combinations per job (same hyperparameter sweeps): 384
+# Total training runs (jobs x per-job grid): 3456
 #
 # Feature signal: Low (center_variance=0.01, cluster_variance=1.0) | Structural signal: Low (edge_propensity_variance=0.0, degree_separation_range=[0.0,0.0]) | trainer.devices=[0]
 python -m topobench \
@@ -41,12 +41,12 @@ python -m topobench \
     model.backbone_wrapper.lam=0.2,0.8 \
     model.backbone_wrapper.mask_rate=0.2,0.8 \
     model.backbone_wrapper.drop_edge_rate=0.0,0.2 \
-    model.backbone_wrapper.replace_rate=0.5 \
+    model.backbone_wrapper.replace_rate=0.0,0.5 \
     model.readout.pooling_type=mean \
     model.readout.decoder_type=gat \
     model.readout.decoder_hidden_dim=128 \
     model.readout.num_remasking=4 \
-    model.readout.remask_rate=0.5 \
+    model.readout.remask_rate=0.0,0.5 \
     model.readout.remask_method=random \
     trainer.devices=\[0\] \
     trainer.check_val_every_n_epoch=2 \
@@ -90,12 +90,12 @@ python -m topobench \
     model.backbone_wrapper.lam=0.2,0.8 \
     model.backbone_wrapper.mask_rate=0.2,0.8 \
     model.backbone_wrapper.drop_edge_rate=0.0,0.2 \
-    model.backbone_wrapper.replace_rate=0.5 \
+    model.backbone_wrapper.replace_rate=0.0,0.5 \
     model.readout.pooling_type=mean \
     model.readout.decoder_type=gat \
     model.readout.decoder_hidden_dim=128 \
     model.readout.num_remasking=4 \
-    model.readout.remask_rate=0.5 \
+    model.readout.remask_rate=0.0,0.5 \
     model.readout.remask_method=random \
     trainer.devices=\[1\] \
     trainer.check_val_every_n_epoch=2 \
@@ -139,12 +139,12 @@ python -m topobench \
     model.backbone_wrapper.lam=0.2,0.8 \
     model.backbone_wrapper.mask_rate=0.2,0.8 \
     model.backbone_wrapper.drop_edge_rate=0.0,0.2 \
-    model.backbone_wrapper.replace_rate=0.5 \
+    model.backbone_wrapper.replace_rate=0.0,0.5 \
     model.readout.pooling_type=mean \
     model.readout.decoder_type=gat \
     model.readout.decoder_hidden_dim=128 \
     model.readout.num_remasking=4 \
-    model.readout.remask_rate=0.5 \
+    model.readout.remask_rate=0.0,0.5 \
     model.readout.remask_method=random \
     trainer.devices=\[2\] \
     trainer.check_val_every_n_epoch=2 \
@@ -188,12 +188,12 @@ python -m topobench \
     model.backbone_wrapper.lam=0.2,0.8 \
     model.backbone_wrapper.mask_rate=0.2,0.8 \
     model.backbone_wrapper.drop_edge_rate=0.0,0.2 \
-    model.backbone_wrapper.replace_rate=0.5 \
+    model.backbone_wrapper.replace_rate=0.0,0.5 \
     model.readout.pooling_type=mean \
     model.readout.decoder_type=gat \
     model.readout.decoder_hidden_dim=128 \
     model.readout.num_remasking=4 \
-    model.readout.remask_rate=0.5 \
+    model.readout.remask_rate=0.0,0.5 \
     model.readout.remask_method=random \
     trainer.devices=\[3\] \
     trainer.check_val_every_n_epoch=2 \
@@ -237,12 +237,12 @@ python -m topobench \
     model.backbone_wrapper.lam=0.2,0.8 \
     model.backbone_wrapper.mask_rate=0.2,0.8 \
     model.backbone_wrapper.drop_edge_rate=0.0,0.2 \
-    model.backbone_wrapper.replace_rate=0.5 \
+    model.backbone_wrapper.replace_rate=0.0,0.5 \
     model.readout.pooling_type=mean \
     model.readout.decoder_type=gat \
     model.readout.decoder_hidden_dim=128 \
     model.readout.num_remasking=4 \
-    model.readout.remask_rate=0.5 \
+    model.readout.remask_rate=0.0,0.5 \
     model.readout.remask_method=random \
     trainer.devices=\[0\] \
     trainer.check_val_every_n_epoch=2 \
@@ -286,12 +286,12 @@ python -m topobench \
     model.backbone_wrapper.lam=0.2,0.8 \
     model.backbone_wrapper.mask_rate=0.2,0.8 \
     model.backbone_wrapper.drop_edge_rate=0.0,0.2 \
-    model.backbone_wrapper.replace_rate=0.5 \
+    model.backbone_wrapper.replace_rate=0.0,0.5 \
     model.readout.pooling_type=mean \
     model.readout.decoder_type=gat \
     model.readout.decoder_hidden_dim=128 \
     model.readout.num_remasking=4 \
-    model.readout.remask_rate=0.5 \
+    model.readout.remask_rate=0.0,0.5 \
     model.readout.remask_method=random \
     trainer.devices=\[1\] \
     trainer.check_val_every_n_epoch=2 \
@@ -335,12 +335,12 @@ python -m topobench \
     model.backbone_wrapper.lam=0.2,0.8 \
     model.backbone_wrapper.mask_rate=0.2,0.8 \
     model.backbone_wrapper.drop_edge_rate=0.0,0.2 \
-    model.backbone_wrapper.replace_rate=0.5 \
+    model.backbone_wrapper.replace_rate=0.0,0.5 \
     model.readout.pooling_type=mean \
     model.readout.decoder_type=gat \
     model.readout.decoder_hidden_dim=128 \
     model.readout.num_remasking=4 \
-    model.readout.remask_rate=0.5 \
+    model.readout.remask_rate=0.0,0.5 \
     model.readout.remask_method=random \
     trainer.devices=\[2\] \
     trainer.check_val_every_n_epoch=2 \
@@ -384,12 +384,12 @@ python -m topobench \
     model.backbone_wrapper.lam=0.2,0.8 \
     model.backbone_wrapper.mask_rate=0.2,0.8 \
     model.backbone_wrapper.drop_edge_rate=0.0,0.2 \
-    model.backbone_wrapper.replace_rate=0.5 \
+    model.backbone_wrapper.replace_rate=0.0,0.5 \
     model.readout.pooling_type=mean \
     model.readout.decoder_type=gat \
     model.readout.decoder_hidden_dim=128 \
     model.readout.num_remasking=4 \
-    model.readout.remask_rate=0.5 \
+    model.readout.remask_rate=0.0,0.5 \
     model.readout.remask_method=random \
     trainer.devices=\[3\] \
     trainer.check_val_every_n_epoch=2 \
@@ -433,12 +433,12 @@ python -m topobench \
     model.backbone_wrapper.lam=0.2,0.8 \
     model.backbone_wrapper.mask_rate=0.2,0.8 \
     model.backbone_wrapper.drop_edge_rate=0.0,0.2 \
-    model.backbone_wrapper.replace_rate=0.5 \
+    model.backbone_wrapper.replace_rate=0.0,0.5 \
     model.readout.pooling_type=mean \
     model.readout.decoder_type=gat \
     model.readout.decoder_hidden_dim=128 \
     model.readout.num_remasking=4 \
-    model.readout.remask_rate=0.5 \
+    model.readout.remask_rate=0.0,0.5 \
     model.readout.remask_method=random \
     trainer.devices=\[0\] \
     trainer.check_val_every_n_epoch=2 \

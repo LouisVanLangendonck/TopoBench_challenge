@@ -6,7 +6,6 @@ https://arxiv.org/abs/2006.05582
 """
 
 import math
-
 import torch
 import torch.nn.functional as F
 import torch_geometric
@@ -51,77 +50,61 @@ class MVGRLLoss(AbstractLoss):
 
     def local_global_loss(self, l_enc, g_enc, batch_indices, num_graphs):
         """Compute local-global contrastive loss using JSD estimator.
-
-        For cross_graph (inductive): negatives are nodes paired with graphs
+        
+        For cross_graph (inductive): negatives are nodes paired with graphs 
         they don't belong to.
         """
         num_nodes = l_enc.shape[0]
         device = l_enc.device
-
+        
         # Create masks for positive/negative pairs
         pos_mask = torch.zeros((num_nodes, num_graphs), device=device)
         neg_mask = torch.ones((num_nodes, num_graphs), device=device)
-
+        
         for nodeidx, graphidx in enumerate(batch_indices):
             pos_mask[nodeidx][graphidx] = 1.0
             neg_mask[nodeidx][graphidx] = 0.0
-
+        
         # Dot product discriminator (from paper Section 3.2)
         res = torch.mm(l_enc, g_enc.t())
-
+        
         # JSD estimator
-        E_pos = self.get_positive_expectation(
-            res * pos_mask, average=False
-        ).sum()
+        E_pos = self.get_positive_expectation(res * pos_mask, average=False).sum()
         E_pos = E_pos / num_nodes
-
-        E_neg = self.get_negative_expectation(
-            res * neg_mask, average=False
-        ).sum()
-        E_neg = (
-            E_neg / (num_nodes * (num_graphs - 1))
-            if num_graphs > 1
-            else E_neg / num_nodes
-        )
-
+        
+        E_neg = self.get_negative_expectation(res * neg_mask, average=False).sum()
+        E_neg = E_neg / (num_nodes * (num_graphs - 1)) if num_graphs > 1 else E_neg / num_nodes
+        
         return E_neg - E_pos
 
-    def local_global_loss_with_shuffle(
-        self, l_enc_real, l_enc_shuffled, g_enc, batch_indices, num_graphs
-    ):
+    def local_global_loss_with_shuffle(self, l_enc_real, l_enc_shuffled, g_enc, batch_indices, num_graphs):
         """Compute loss for transductive setting with shuffled negatives.
-
+        
         Positives: real node representations with graph summary
         Negatives: shuffled node representations with graph summary
         """
         num_nodes = l_enc_real.shape[0]
         device = l_enc_real.device
-
+        
         # Create mask for which nodes belong to which graphs
         pos_mask = torch.zeros((num_nodes, num_graphs), device=device)
         for nodeidx, graphidx in enumerate(batch_indices):
             pos_mask[nodeidx][graphidx] = 1.0
-
+        
         # Dot product scores
         res_positive = torch.mm(l_enc_real, g_enc.t())
         res_negative = torch.mm(l_enc_shuffled, g_enc.t())
-
+        
         # Only consider scores where node belongs to graph
-        E_pos = self.get_positive_expectation(
-            res_positive * pos_mask, average=False
-        ).sum()
+        E_pos = self.get_positive_expectation(res_positive * pos_mask, average=False).sum()
         E_pos = E_pos / num_nodes
-
-        E_neg = self.get_negative_expectation(
-            res_negative * pos_mask, average=False
-        ).sum()
+        
+        E_neg = self.get_negative_expectation(res_negative * pos_mask, average=False).sum()
         E_neg = E_neg / num_nodes
-
+        
         return E_neg - E_pos
 
-    def forward(
-        self, model_out: dict, batch: torch_geometric.data.Data
-    ) -> torch.Tensor:
+    def forward(self, model_out: dict, batch: torch_geometric.data.Data) -> torch.Tensor:
         r"""Compute the MVGRL contrastive loss.
 
         Parameters
@@ -155,26 +138,18 @@ class MVGRLLoss(AbstractLoss):
         if negative_sampling == "cross_graph":
             # Inductive: negatives from other graphs in batch
             # Term 1: I(h^(1), s^(2)) - nodes from view 1 with graph from view 2
-            loss1 = self.local_global_loss(
-                lv1_proj, gv2_proj, batch_indices, num_graphs
-            )
+            loss1 = self.local_global_loss(lv1_proj, gv2_proj, batch_indices, num_graphs)
             # Term 2: I(h^(2), s^(1)) - nodes from view 2 with graph from view 1
-            loss2 = self.local_global_loss(
-                lv2_proj, gv1_proj, batch_indices, num_graphs
-            )
+            loss2 = self.local_global_loss(lv2_proj, gv1_proj, batch_indices, num_graphs)
         else:
             # Transductive: negatives from shuffled features
             lv1_shuf_proj = model_out["lv1_shuf_proj"]
             lv2_shuf_proj = model_out["lv2_shuf_proj"]
-
+            
             # Term 1: real view1 nodes vs shuffled view2 nodes, with graph from view 2
-            loss1 = self.local_global_loss_with_shuffle(
-                lv1_proj, lv2_shuf_proj, gv2_proj, batch_indices, num_graphs
-            )
+            loss1 = self.local_global_loss_with_shuffle(lv1_proj, lv2_shuf_proj, gv2_proj, batch_indices, num_graphs)
             # Term 2: real view2 nodes vs shuffled view1 nodes, with graph from view 1
-            loss2 = self.local_global_loss_with_shuffle(
-                lv2_proj, lv1_shuf_proj, gv1_proj, batch_indices, num_graphs
-            )
+            loss2 = self.local_global_loss_with_shuffle(lv2_proj, lv1_shuf_proj, gv1_proj, batch_indices, num_graphs)
 
         # Store individual losses for tracking
         model_out["loss_term1"] = loss1
