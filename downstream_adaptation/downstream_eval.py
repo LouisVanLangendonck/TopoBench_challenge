@@ -95,23 +95,11 @@ def train_downstream(
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = Adam(trainable_params, lr=lr, weight_decay=weight_decay)
 
-    if task_type == "regression":
-        if loss_type == "mse":
-            criterion = nn.MSELoss()
-        else:
-            criterion = nn.L1Loss()
-        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
-        metric_name = loss_type
-    elif task_type == "multilabel_bce":
-        criterion = nn.BCEWithLogitsLoss()
-        scheduler = ReduceLROnPlateau(optimizer, mode='min', factor=0.5, patience=10)
-        metric_name = "mae"
-    else:
-        criterion = nn.CrossEntropyLoss()
-        scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=10)
-        metric_name = "accuracy"
+    criterion = nn.CrossEntropyLoss()
+    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=10)
+    metric_name = "accuracy"
 
-    best_val_metric = float('inf') if task_type in ("regression", "multilabel_bce") else 0.0
+    best_val_metric = 0.0
     best_model_state = None
     patience_counter = 0
     history = {"train_loss": [], f"train_{metric_name}": [], "val_loss": [], f"val_{metric_name}": []}
@@ -467,138 +455,50 @@ def run_downstream_evaluation(
         if checkpoint_path is None:
             raise ValueError("No checkpoint path found in wandb-summary.json")
 
+    # Get seeds from generation parameters
     gen_params = config["dataset"]["loader"]["parameters"].get("generation_parameters", {})
     family_params = gen_params.get("family_parameters", {})
     universe_params = gen_params.get("universe_parameters", {})
-    # CRITICAL: Get seeds - FAIL if not found (no defaults!)
+
     try:
         pretraining_universe_seed = universe_params["seed"]
         pretraining_family_seed = family_params["seed"]
         print(f"✓ Found seeds - universe: {pretraining_universe_seed}, family: {pretraining_family_seed}")
     except KeyError as e:
-        print(f"❌ CRITICAL ERROR: Missing seed in config: {e}")
-        print(f"❌ Universe params: {universe_params}")
-        print(f"❌ Family params: {family_params}")
+        print(f"Missing seed in config: {e}")
+        print(f"Universe params: {universe_params}")
+        print(f"Family params: {family_params}")
         raise ValueError(
-            f"CRITICAL CONFIG ERROR: Missing required seed parameter: {e}. "
+            f"Missing required seed parameter: {e}. "
             "Seeds are required for reproducible dataset generation."
         ) from e
     
-    # CRITICAL: Get num_classes - FAIL if not found (no defaults!)
+    # Get num_classes from universe parameters
     num_classes_from_config = universe_params.get("K")
     if num_classes_from_config is None:
-        print(f"❌ ERROR: K not found in universe_params: {universe_params}")
+        print(f"❌ K not found in universe_params: {universe_params}")
         print(f"❌ Checking generation_parameters: {gen_params}")
-        
-        # Try flattened config structure (wandb format)
-        flattened_k_key = "pretrain/dataset/loader/parameters/generation_parameters/universe_parameters/K"
-        if flattened_k_key in config:
-            num_classes_from_config = config[flattened_k_key]
-            print(f"✓ Found K in flattened config: {num_classes_from_config}")
-        else:
-            # Try other possible locations
-            alt_k = gen_params.get("K") or config.get("dataset", {}).get("loader", {}).get("parameters", {}).get("K")
-            if alt_k is not None:
-                num_classes_from_config = alt_k
-                print(f"✓ Found K in alternative location: {num_classes_from_config}")
-            else:
-                # FAIL FAST - no defaults!
-                print(f"❌ CRITICAL ERROR: Cannot find num_classes (K) in any config location!")
-                print(f"❌ Available config keys: {list(config.keys())[:20]}...")
-                print(f"❌ Universe params: {universe_params}")
-                print(f"❌ Generation params: {gen_params}")
-                raise ValueError(
-                    "CRITICAL CONFIG ERROR: Cannot find num_classes (K) parameter in config. "
-                    "This is required and no defaults are allowed. "
-                    "Check that the wandb config contains the correct dataset parameters."
-                )
+        raise ValueError(f"K not found in universe_params: {universe_params}")
     else:
         print(f"✓ Found num_classes (K) in universe_params: {num_classes_from_config}")
     
     # Validate num_classes value
     if not isinstance(num_classes_from_config, int) or num_classes_from_config <= 0:
         raise ValueError(
-            f"CRITICAL CONFIG ERROR: Invalid num_classes value: {num_classes_from_config}. "
+            f"Invalid num_classes value: {num_classes_from_config}. "
             f"Must be a positive integer, got {type(num_classes_from_config).__name__}."
         )
     
     # Use config value initially, but we'll verify against actual data later
     num_classes = num_classes_from_config
-
     family_evaluation_seed = pretraining_family_seed + 1
     family_training_seed = pretraining_family_seed + 2 + repeat_idx
-
-    # INDUCTIVE DATASET LOADING: Use TopoBench logic for consistent transforms
-    # Unlike transductive, we DO want to generate new datasets (different family seeds, n_graphs)
-    # but we want the transforms to be applied consistently using TopoBench's logic
-    
-    print("\n" + "=" * 80)
-    print("LOADING INDUCTIVE DATASETS USING TOPOBENCH LOGIC")
-    print("=" * 80)
-    
-    # Register ALL the same OmegaConf resolvers as TopoBench run.py
-    try:
-        from topobench.utils.config_resolvers import (
-            get_default_metrics, get_default_trainer, get_default_transform,
-            get_flattened_channels, get_monitor_metric, get_monitor_mode,
-            get_non_relational_out_channels, get_required_lifting,
-            infer_in_channels, infer_num_cell_dimensions,
-            infer_topotune_num_cell_dimensions,
-        )
-        from omegaconf import OmegaConf
-        
-        # Register all resolvers exactly like TopoBench run.py
-        OmegaConf.register_new_resolver("get_default_metrics", get_default_metrics, replace=True)
-        OmegaConf.register_new_resolver("get_default_trainer", get_default_trainer, replace=True)
-        OmegaConf.register_new_resolver("get_default_transform", get_default_transform, replace=True)
-        OmegaConf.register_new_resolver("get_flattened_channels", get_flattened_channels, replace=True)
-        OmegaConf.register_new_resolver("get_required_lifting", get_required_lifting, replace=True)
-        OmegaConf.register_new_resolver("get_monitor_metric", get_monitor_metric, replace=True)
-        OmegaConf.register_new_resolver("get_monitor_mode", get_monitor_mode, replace=True)
-        OmegaConf.register_new_resolver("get_non_relational_out_channels", get_non_relational_out_channels, replace=True)
-        OmegaConf.register_new_resolver("infer_in_channels", infer_in_channels, replace=True)
-        OmegaConf.register_new_resolver("infer_num_cell_dimensions", infer_num_cell_dimensions, replace=True)
-        OmegaConf.register_new_resolver("infer_topotune_num_cell_dimensions", infer_topotune_num_cell_dimensions, replace=True)
-        OmegaConf.register_new_resolver("parameter_multiplication", lambda x, y: int(int(x) * int(y)), replace=True)
-        print("✓ Registered ALL OmegaConf resolvers from TopoBench")
-    except ImportError as e:
-        print(f"⚠️  Could not import config resolvers: {e} - may cause config differences")
     
     # Get the original config components from wandb
     dataset_name = config["dataset"]["loader"]["parameters"]["data_name"]
-    model_name = config["model"].get("model_name", "gps_graphmaev2")
-    
-    print(f"Using dataset: {dataset_name}, model: {model_name}")
-    
-    # Recreate config using hydra composition (like TopoBench run.py does)
-    import hydra
-    from hydra import compose, initialize
-    
-    # Initialize hydra with the configs directory
-    try:
-        hydra.core.global_hydra.GlobalHydra.instance().clear()
-    except:
-        pass
-    
-    with initialize(version_base="1.3", config_path="../configs", job_name="downstream_eval_inductive"):
-        # Compose config exactly like TopoBench
-        cfg_recreated = compose(
-            config_name="run.yaml",
-            overrides=[
-                f"dataset=graph/{dataset_name.replace('_GraphMAEv2_Transductive', '_transductive_graphmaev2')}",
-                f"model=graph/{model_name}",
-                # Keep the same seed from pretraining for consistency
-                f"seed={config.get('seed', 42)}",
-            ]
-        )
-        
-        print(f"✓ Recreated config using hydra composition")
-        print(f"Dataset config: {cfg_recreated.dataset.loader._target_}")
-        print(f"Model config: {cfg_recreated.model._target_}")
-        
-        # Get the recreated transform config
-        transform_config = cfg_recreated.get("transforms", None)
-        print(f"Recreated transform config: {transform_config}")
+    model_name = config["model"]["model_name"]
+
+    print(config)
     
     # Now create datasets using the standard method but with consistent transform config
     eval_dataset, eval_data_dir, _ = create_dataset_from_config(
@@ -612,10 +512,15 @@ def run_downstream_evaluation(
     )
 
     transforms_config = config.get("transforms")
-    eval_preprocessor = apply_transforms(eval_dataset, eval_data_dir, transforms_config)
+    # Print the transforms config
+    print(f"Transforms config: {transforms_config}")
+
+    # Apply the transforms to the evaluation dataset with model_name for correct ordering
+    eval_preprocessor = apply_transforms(eval_dataset, eval_data_dir, transforms_config, model_name=model_name)
     eval_data_list = eval_preprocessor.data_list
     print(f"✓ Eval dataset: {len(eval_data_list)} graphs with {eval_data_list[0].x.shape[1]} features")
 
+    # Create the training dataset
     train_dataset, train_data_dir, _ = create_dataset_from_config(
         config,
         n_graphs=n_train,
@@ -625,26 +530,9 @@ def run_downstream_evaluation(
         graphuniverse_override=graphuniverse_override,
         downstream_task=downstream_task,
     )
-    train_preprocessor = apply_transforms(train_dataset, train_data_dir, transforms_config)
+    train_preprocessor = apply_transforms(train_dataset, train_data_dir, transforms_config, model_name=model_name)
     train_data = train_preprocessor.data_list
     print(f"✓ Train dataset: {len(train_data)} graphs with {train_data[0].x.shape[1]} features")
-    
-    # CRITICAL: Verify num_classes against actual data (like transductive does)
-    actual_num_classes = int(train_data[0].y.max().item()) + 1
-    print(f"✓ Config num_classes: {num_classes}")
-    print(f"✓ Actual num_classes (from data): {actual_num_classes}")
-    
-    if num_classes != actual_num_classes:
-        # This is now an ERROR, not a warning - config should match data!
-        print(f"❌ CRITICAL ERROR: Config num_classes ({num_classes}) != actual ({actual_num_classes})")
-        print(f"❌ This indicates a serious configuration or data loading problem!")
-        raise ValueError(
-            f"CONFIG-DATA MISMATCH: Config specifies {num_classes} classes but data has {actual_num_classes} classes. "
-            f"This indicates either incorrect config loading or dataset generation problems. "
-            f"Config and data must be consistent - no automatic fallbacks allowed."
-        )
-    else:
-        print(f"✓ Config and actual num_classes match: {num_classes}")
     
     print("=" * 80)
 
@@ -656,19 +544,6 @@ def run_downstream_evaluation(
     test_indices = eval_indices[n_val:]
     val_data = [eval_data_list[i] for i in val_indices]
     test_data = [eval_data_list[i] for i in test_indices]
-
-    if downstream_task == "community_presence":
-        from graph_properties import add_properties_to_dataset
-
-        train_data = add_properties_to_dataset(
-            train_data, K=num_classes, include_complex=True, verbose=False
-        )
-        val_data = add_properties_to_dataset(
-            val_data, K=num_classes, include_complex=True, verbose=False
-        )
-        test_data = add_properties_to_dataset(
-            test_data, K=num_classes, include_complex=True, verbose=False
-        )
 
     train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True)
     val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=False)
@@ -709,9 +584,7 @@ def run_downstream_evaluation(
 
         # Pretraining task_level can be "graph" (e.g. GraphCL) while community_detection
         # labels stay node-level; encoder/readout must match downstream labels, not pretrain.
-        if downstream_task == "community_presence":
-            graph_level = True
-        elif downstream_task == "community_detection":
+        if downstream_task == "community_detection":
             graph_level = False
         else:
             graph_level = task_level == "graph"

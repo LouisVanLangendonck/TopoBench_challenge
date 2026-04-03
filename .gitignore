@@ -190,6 +190,7 @@ notebooks/tmp
 /plotting/*.pdf
 /plotting/*.csv
 /downstream_adaptation_real_world_dataset/analysis_output/
+downstream_adaptation_real_world_dataset/data/
 
 # wandb
 wandb/

@@ -5,12 +5,10 @@
 # CLI flags override values here when provided.
 
 # Exactly one of:
-run_dirs: null
-# run_dirs:
-#   - data/outputs/wandb/run-YYYYMMDD_HHMMSS-xxxxx
+run_dirs: #null
+  - data\outputs\wandb\run-20260403_103052-830vr7qc
 
-wandb_pretrain_project: dgi_grid_inductive
-# wandb_pretrain_project: "entity/MyProject"
+wandb_pretrain_project: null #dgi_grid_inductive
 
 # Wandb API fetch (when using wandb_pretrain_project)
 fetch_filters:
@@ -41,12 +39,12 @@ input_dropout: null
 device: cuda:0
 # Run this many experiments at once. Each job uses a distinct GPU (see eval_devices).
 # 1 = sequential on `device` only.
-parallel_workers: 4
+parallel_workers: null
 # Optional explicit device per worker slot; length must equal parallel_workers when set.
 # If null and parallel_workers > 1, uses cuda:0, cuda:1, ... cuda:(parallel_workers-1).
 eval_devices: null
 seed: 42
-wandb_project: dgi_downstream_results_inductive
+wandb_project: test_again_downstream_inductive
 save_results: true
 confirm_before_run: true
 # Number of times to repeat each experiment with different family seeds for computing std (default: 1)

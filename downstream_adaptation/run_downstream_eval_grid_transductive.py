@@ -36,6 +36,7 @@ from downstream_eval_utils import (
 from grid_config_loader import (
     build_worker_devices,
     coalesce,
+    coerce_optional_float_list,
     coerce_optional_int_list,
     coerce_optional_str_list,
     coerce_str_list,
@@ -186,7 +187,7 @@ def get_experiment_name(config: Dict[str, Any], run_dir: str) -> str:
         ).hexdigest()[:6]
         components.append(f"ov_{override_hash}")
 
-    if config.get("repeat_on_different_family_seed", 1) > 1:
+    if config.get("repeat_on_different_split_seed", 1) > 1:
         components.append(f"rep{config['repeat_idx']}")
 
     return "_".join(components)
@@ -227,9 +228,9 @@ def print_grid_summary(
         print(f"Training mode: Standard (use all available training data)")
 
     # Check if we have repeat info
-    repeat_count = configs[0].get("repeat_on_different_family_seed", 1) if configs else 1
+    repeat_count = configs[0].get("repeat_on_different_split_seed", 1) if configs else 1
     if repeat_count > 1:
-        print(f"Repeats per setting (different family seeds): {repeat_count}")
+        print(f"Repeats per setting (different train/val splits): {repeat_count}")
 
     print(f"\nGraphUniverse Overrides ({len(overrides)}):")
     for i, override_str in enumerate(overrides, 1):
@@ -264,14 +265,16 @@ def run_single_experiment(
     seed: int,
     wandb_project: str,
     epochs: int,
-    lr: float,
     patience: int,
-    classifier_dropout: float,
     input_dropout: float | None,
 ) -> Dict[str, Any]:
     """Run a single downstream evaluation experiment."""
     
     run_dir = config["run_dir"]
+    
+    # Get lr and classifier_dropout from config (grid parameters)
+    lr = config.get("lr", 0.001)
+    classifier_dropout = config.get("classifier_dropout", 0.0)
 
     if downstream_mode_requires_checkpoint(config["mode"]):
         checkpoint_path = get_checkpoint_path_from_summary(run_dir)
@@ -289,6 +292,8 @@ def run_single_experiment(
     print(f"  Checkpoint: {checkpoint_path or '(none — random-init mode)'}")
     print(f"  Mode: {config['mode']}")
     print(f"  Task: Transductive node classification")
+    print(f"  Learning rate: {lr}")
+    print(f"  Classifier dropout: {classifier_dropout}")
     
     if config.get("n_train") is not None:
         print(f"  N_train: {config['n_train']} (few-shot)")
@@ -297,8 +302,8 @@ def run_single_experiment(
     else:
         print(f"  N_train: Use all available (standard)")
 
-    if config.get("repeat_on_different_family_seed", 1) > 1:
-        print(f"  Repeat idx: {config['repeat_idx']} / {config['repeat_on_different_family_seed']}")
+    if config.get("repeat_on_different_split_seed", 1) > 1:
+        print(f"  Repeat idx: {config['repeat_idx']} / {config['repeat_on_different_split_seed']}")
 
     if config.get("graphuniverse_override") is not None:
         print(f"  GraphUniverse override: {json.dumps(config['graphuniverse_override'], indent=4)}")
@@ -324,7 +329,7 @@ def run_single_experiment(
             pretraining_config=config.get("pretrain_config"),
             graphuniverse_override=config.get("graphuniverse_override"),
             repeat_idx=config.get("repeat_idx", 0),
-            repeat_on_different_family_seed=config.get("repeat_on_different_family_seed", 1),
+            repeat_on_different_split_seed=config.get("repeat_on_different_split_seed", 1),
         )
         
         results["success"] = True
@@ -370,9 +375,7 @@ def _grid_worker(payload: Dict[str, Any]) -> Dict[str, Any]:
         seed=payload["seed"],
         wandb_project=payload["wandb_project"],
         epochs=payload["epochs"],
-        lr=payload["lr"],
         patience=payload["patience"],
-        classifier_dropout=payload["classifier_dropout"],
         input_dropout=payload["input_dropout"],
     )
 
@@ -414,9 +417,7 @@ def _run_grid_parallel(
     seed: int,
     wandb_project: str,
     epochs: int,
-    lr: float,
     patience: int,
-    classifier_dropout: float,
     input_dropout: float | None,
     save_results: bool = True,
 ) -> List[Dict[str, Any]]:
@@ -439,9 +440,7 @@ def _run_grid_parallel(
             "seed": seed,
             "wandb_project": wandb_project,
             "epochs": epochs,
-            "lr": lr,
             "patience": patience,
-            "classifier_dropout": classifier_dropout,
             "input_dropout": input_dropout,
         }
         tasks.append((i, payload))
@@ -503,9 +502,7 @@ def run_grid(
     seed: int,
     wandb_project: str,
     epochs: int,
-    lr: float,
     patience: int,
-    classifier_dropout: float,
     input_dropout: float | None,
     save_results: bool = True,
     *,
@@ -521,9 +518,7 @@ def run_grid(
             seed=seed,
             wandb_project=wandb_project,
             epochs=epochs,
-            lr=lr,
             patience=patience,
-            classifier_dropout=classifier_dropout,
             input_dropout=input_dropout,
             save_results=save_results,
         )
@@ -547,9 +542,7 @@ def run_grid(
                 seed=seed,
                 wandb_project=wandb_project,
                 epochs=epochs,
-                lr=lr,
                 patience=patience,
-                classifier_dropout=classifier_dropout,
                 input_dropout=input_dropout,
             )
             all_results.append(results)
@@ -676,9 +669,9 @@ def main():
     n_evaluation = eff("n_evaluation", args.n_evaluation)
     data_seed = eff("data_seed", args.data_seed)
     epochs = eff("epochs", args.epochs)
-    lr = eff("lr", args.lr)
+    lr_values = coerce_optional_float_list("lr", eff("lr", args.lr))
     patience = eff("patience", args.patience)
-    classifier_dropout = eff("classifier_dropout", args.classifier_dropout)
+    classifier_dropout_values = coerce_optional_float_list("classifier_dropout", eff("classifier_dropout", args.classifier_dropout))
     input_dropout = eff("input_dropout", args.input_dropout)
     device = eff("device", args.device)
     pw_arg = eff("parallel_workers", args.parallel_workers)
@@ -794,9 +787,7 @@ def main():
         seed=seed,
         wandb_project=wandb_project,
         epochs=epochs,
-        lr=lr,
         patience=patience,
-        classifier_dropout=classifier_dropout,
         input_dropout=input_dropout,
         save_results=save_results,
         parallel_workers=parallel_workers,

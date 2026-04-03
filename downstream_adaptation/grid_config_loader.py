@@ -84,6 +84,26 @@ def coerce_optional_int_list(field: str, val: Any) -> list[int] | None:
     raise TypeError(f"{field} must be null, int, or list[int]; got {type(val).__name__}")
 
 
+def coerce_optional_float_list(field: str, val: Any) -> list[float] | None:
+    """Accept YAML ``null``, a single float/int, or a list of floats/ints (e.g. ``lr``, ``classifier_dropout``)."""
+    if val is None:
+        return None
+    if isinstance(val, bool):
+        raise TypeError(f"{field}: bool is not allowed; use floats or null")
+    if isinstance(val, (int, float)) and not isinstance(val, bool):
+        return [float(val)]
+    if isinstance(val, list):
+        out: list[float] = []
+        for i, x in enumerate(val):
+            if isinstance(x, bool):
+                raise TypeError(f"{field}[{i}] must be float/int, got bool")
+            if not isinstance(x, (int, float)):
+                raise TypeError(f"{field}[{i}] must be float/int, got {x!r}")
+            out.append(float(x))
+        return out
+    raise TypeError(f"{field} must be null, float/int, or list[float/int]; got {type(val).__name__}")
+
+
 def coerce_optional_str_list(field: str, val: Any) -> list[str] | None:
     """Like ``coerce_str_list`` but allow YAML ``null`` (returns None)."""
     if val is None:

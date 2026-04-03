@@ -276,7 +276,7 @@ def create_dataset_from_config(
     config: dict,
     n_graphs: int | None = None,
     universe_seed: int = 42,
-    family_seed: int = 43,
+    family_seed: int = 42,
     dataset_purpose: str = "eval",
     graphuniverse_override: dict | None = None,
     downstream_task: str | None = None,
@@ -288,11 +288,7 @@ def create_dataset_from_config(
     gen_params = deepcopy(params["generation_parameters"])
     
     if downstream_task is not None:
-        # Presence is derived from node community labels; GraphUniverse generates CD graphs.
-        if downstream_task == "community_presence":
-            gen_params["task"] = "community_detection"
-        else:
-            gen_params["task"] = downstream_task
+        gen_params["task"] = "community_detection"
     
     # Override number of graphs and seeds
     if n_graphs is not None:
@@ -329,15 +325,109 @@ def _deep_update(base_dict: dict, update_dict: dict) -> dict:
     return base_dict
 
 
+def reconstruct_transforms_from_model_name(model_name: str) -> dict | None:
+    """Reconstruct transform config from model name by loading model_defaults YAML.
+    
+    This ensures transforms are applied in the correct order (as specified in the
+    model defaults file), which is critical for models like GraphMAEv2 that need
+    x_raw_original to be saved BEFORE positional encodings are added.
+    
+    Args:
+        model_name: Model name (e.g., "gps_graphmaev2")
+    
+    Returns:
+        Reconstructed transform config dict with correct ordering, or None if not found
+    """
+    script_dir = Path(__file__).resolve().parent
+    repo_root = script_dir.parent
+    transform_config_path = repo_root / "configs" / "transforms" / "model_defaults" / f"{model_name}.yaml"
+    
+    if not transform_config_path.exists():
+        print(f"  [WARN] Transform config not found at: {transform_config_path}")
+        return None
+    
+    print(f"  [INFO] Reconstructing transforms from: configs/transforms/model_defaults/{model_name}.yaml")
+    
+    # Load the model defaults YAML
+    with open(transform_config_path, 'r') as f:
+        transform_yaml = yaml.safe_load(f)
+    
+    # Expand the Hydra defaults manually
+    if 'defaults' not in transform_yaml:
+        print(f"  [WARN] No defaults found in {model_name} transform config")
+        return None
+    
+    transforms_config = {}
+    for default_item in transform_yaml['defaults']:
+        if isinstance(default_item, dict):
+            # Format: "data_manipulations@save_raw_features: save_raw_features"
+            for key, value in default_item.items():
+                if '@' in key:
+                    _, config_name = key.split('@')
+                    config_type = key.split('@')[0]
+                    
+                    # Load the referenced config
+                    ref_path = repo_root / "configs" / "transforms" / config_type / f"{value}.yaml"
+                    
+                    if ref_path.exists():
+                        with open(ref_path, 'r') as f:
+                            ref_yaml = yaml.safe_load(f)
+                        transforms_config[config_name] = ref_yaml
+    
+    print(f"  [INFO] Reconstructed transform order: {list(transforms_config.keys())}")
+    return transforms_config
+
+
 def apply_transforms(
     dataset,
     data_dir: str,
     transforms_config: dict | None,
+    model_name: str | None = None,
 ) -> PreProcessor:
-    """Apply transforms from config."""
+    """Apply transforms from config with automatic ordering fix.
+    
+    This function automatically detects when transforms are in the wrong order
+    (which can happen when wandb saves configs as unordered dicts) and reconstructs
+    them from the model defaults to ensure correct ordering.
+    
+    Args:
+        dataset: Dataset to transform
+        data_dir: Data directory
+        transforms_config: Transform configuration (from wandb config)
+        model_name: Model name for reconstructing transforms from model defaults
+    
+    Returns:
+        PreProcessor with transformed data
+    """
+    # If model_name is provided, check if we need to reconstruct transforms
+    if model_name and transforms_config:
+        # Check if transforms_config has lost ordering (dict keys in wrong order)
+        # This happens when wandb saves the config and dict iteration order doesn't match insertion order
+        if isinstance(transforms_config, dict):
+            keys = list(transforms_config.keys())
+            # If we have both save_raw_features and CombinedPSEs, check the order
+            if 'save_raw_features' in keys and 'CombinedPSEs' in keys:
+                save_idx = keys.index('save_raw_features')
+                combined_idx = keys.index('CombinedPSEs')
+                if save_idx > combined_idx:
+                    print(f"  [AUTO-FIX] Transform order incorrect in wandb config: {keys}")
+                    print(f"  [AUTO-FIX] Reconstructing transforms from model defaults to fix ordering...")
+                    reconstructed = reconstruct_transforms_from_model_name(model_name)
+                    if reconstructed is not None:
+                        transforms_config = reconstructed
+                        print(f"  [AUTO-FIX] ✓ Using reconstructed transforms with correct ordering")
+    elif model_name and not transforms_config:
+        # No transforms in config, try to reconstruct from model name
+        print(f"  [INFO] No transforms in config, attempting to reconstruct from model name...")
+        reconstructed = reconstruct_transforms_from_model_name(model_name)
+        if reconstructed is not None:
+            transforms_config = reconstructed
+            print(f"  [INFO] ✓ Using reconstructed transforms from model defaults")
+    
     if transforms_config:
         transforms_omega = OmegaConf.create(transforms_config)
     else:
+        print("No transforms config found. Check if that makes sense for this pretrained model type!")
         transforms_omega = None
     
     preprocessor = PreProcessor(dataset, data_dir, transforms_omega)

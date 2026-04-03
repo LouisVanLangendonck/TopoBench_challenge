@@ -34,6 +34,7 @@ from downstream_eval_utils import (
 from grid_config_loader import (
     build_worker_devices,
     coalesce,
+    coerce_optional_float_list,
     coerce_optional_int_list,
     coerce_optional_str_list,
     coerce_str_list,
@@ -126,11 +127,17 @@ def generate_grid_configs(
     readout_types: List[str] = None,
     run_infos: List[Dict[str, Any]] = None,
     repeat_on_different_family_seed: int = 1,
+    lr_values: List[float] = None,
+    classifier_dropout_values: List[float] = None,
 ) -> List[Dict[str, Any]]:
     """Generate all combinations of grid parameters."""
     
     if readout_types is None:
         readout_types = ["mean"]
+    if lr_values is None:
+        lr_values = [0.001]
+    if classifier_dropout_values is None:
+        classifier_dropout_values = [0.0]
     
     run_dir_to_config = {}
     if run_infos is not None:
@@ -147,19 +154,23 @@ def generate_grid_configs(
                 for mode in modes:
                     for readout_type in readout_types:
                         for override in graphuniverse_overrides:
-                            for repeat_idx in range(repeat_on_different_family_seed):
-                                configs.append({
-                                    "run_dir": run_dir,
-                                    "n_train": n_train,
-                                    "task": task,
-                                    "mode": mode,
-                                    "graphuniverse_override": override,
-                                    "n_evaluation_graphs": n_evaluation_graphs,
-                                    "readout_type": readout_type,
-                                    "pretrain_config": pretrain_config,
-                                    "repeat_idx": repeat_idx,
-                                    "repeat_on_different_family_seed": repeat_on_different_family_seed,
-                                })
+                            for lr in lr_values:
+                                for classifier_dropout in classifier_dropout_values:
+                                    for repeat_idx in range(repeat_on_different_family_seed):
+                                        configs.append({
+                                            "run_dir": run_dir,
+                                            "n_train": n_train,
+                                            "task": task,
+                                            "mode": mode,
+                                            "graphuniverse_override": override,
+                                            "n_evaluation_graphs": n_evaluation_graphs,
+                                            "readout_type": readout_type,
+                                            "pretrain_config": pretrain_config,
+                                            "repeat_idx": repeat_idx,
+                                            "repeat_on_different_family_seed": repeat_on_different_family_seed,
+                                            "lr": lr,
+                                            "classifier_dropout": classifier_dropout,
+                                        })
     
     return configs
 
@@ -181,6 +192,10 @@ def get_experiment_name(config: Dict[str, Any], run_dir: str) -> str:
     ]
     
     components.append(f"ro_{config['readout_type']}")
+    
+    # Add lr and classifier_dropout to experiment name
+    components.append(f"lr{config.get('lr', 0.001)}")
+    components.append(f"drop{config.get('classifier_dropout', 0.0)}")
     
     if config["graphuniverse_override"] is not None:
         import hashlib
@@ -213,6 +228,8 @@ def print_grid_summary(
     modes = sorted(set(c["mode"] for c in configs))
     overrides = list(set(json.dumps(c["graphuniverse_override"], sort_keys=True) for c in configs))
     readout_types = sorted(set(c["readout_type"] for c in configs))
+    lr_values = sorted(set(c.get("lr", 0.001) for c in configs))
+    classifier_dropout_values = sorted(set(c.get("classifier_dropout", 0.0) for c in configs))
     
     print(f"\nRun Directories ({len(run_dirs)}):")
     for i, run_dir in enumerate(run_dirs, 1):
@@ -222,6 +239,8 @@ def print_grid_summary(
     print(f"Tasks: {tasks}")
     print(f"Modes: {modes}")
     print(f"Readout types: {readout_types}")
+    print(f"Learning rates: {lr_values}")
+    print(f"Classifier dropout values: {classifier_dropout_values}")
     
     # Check if we have repeat info
     repeat_count = configs[0].get("repeat_on_different_family_seed", 1) if configs else 1
@@ -260,15 +279,17 @@ def run_single_experiment(
     seed: int,
     wandb_project: str,
     epochs: int,
-    lr: float,
     batch_size: int,
     patience: int,
-    classifier_dropout: float,
     input_dropout: float | None,
 ) -> Dict[str, Any]:
     """Run a single downstream evaluation experiment."""
     
     run_dir = config["run_dir"]
+    
+    # Get lr and classifier_dropout from config (grid parameters)
+    lr = config.get("lr", 0.001)
+    classifier_dropout = config.get("classifier_dropout", 0.0)
 
     if downstream_mode_requires_checkpoint(config["mode"]):
         checkpoint_path = get_checkpoint_path_from_summary(run_dir)
@@ -289,6 +310,8 @@ def run_single_experiment(
     print(f"  N_train: {config['n_train']}")
     print(f"  N_evaluation: {config['n_evaluation_graphs']}")
     print(f"  Readout type: {config['readout_type']}")
+    print(f"  Learning rate: {lr}")
+    print(f"  Classifier dropout: {classifier_dropout}")
     if config.get("repeat_on_different_family_seed", 1) > 1:
         print(f"  Repeat idx: {config['repeat_idx']} / {config['repeat_on_different_family_seed']}")
     if config["graphuniverse_override"] is not None:
@@ -368,10 +391,8 @@ def _grid_worker(payload: Dict[str, Any]) -> Dict[str, Any]:
         seed=payload["seed"],
         wandb_project=payload["wandb_project"],
         epochs=payload["epochs"],
-        lr=payload["lr"],
         batch_size=payload["batch_size"],
         patience=payload["patience"],
-        classifier_dropout=payload["classifier_dropout"],
         input_dropout=payload["input_dropout"],
     )
 
@@ -413,10 +434,8 @@ def _run_grid_parallel(
     seed: int,
     wandb_project: str,
     epochs: int,
-    lr: float,
     batch_size: int,
     patience: int,
-    classifier_dropout: float,
     input_dropout: float | None,
     save_results: bool = True,
 ) -> List[Dict[str, Any]]:
@@ -439,10 +458,8 @@ def _run_grid_parallel(
             "seed": seed,
             "wandb_project": wandb_project,
             "epochs": epochs,
-            "lr": lr,
             "batch_size": batch_size,
             "patience": patience,
-            "classifier_dropout": classifier_dropout,
             "input_dropout": input_dropout,
         }
         tasks.append((i, payload))
@@ -504,10 +521,8 @@ def run_grid(
     seed: int,
     wandb_project: str,
     epochs: int,
-    lr: float,
     batch_size: int,
     patience: int,
-    classifier_dropout: float,
     input_dropout: float | None,
     save_results: bool = True,
     *,
@@ -523,10 +538,8 @@ def run_grid(
             seed=seed,
             wandb_project=wandb_project,
             epochs=epochs,
-            lr=lr,
             batch_size=batch_size,
             patience=patience,
-            classifier_dropout=classifier_dropout,
             input_dropout=input_dropout,
             save_results=save_results,
         )
@@ -550,10 +563,8 @@ def run_grid(
                 seed=seed,
                 wandb_project=wandb_project,
                 epochs=epochs,
-                lr=lr,
                 batch_size=batch_size,
                 patience=patience,
-                classifier_dropout=classifier_dropout,
                 input_dropout=input_dropout,
             )
             all_results.append(results)
@@ -735,10 +746,10 @@ def main():
     readout_types = coerce_str_list("readout_types", eff("readout_types", args.readout_types))
     n_evaluation_graphs = eff("n_evaluation_graphs", args.n_evaluation_graphs)
     epochs = eff("epochs", args.epochs)
-    lr = eff("lr", args.lr)
+    lr_values = coerce_optional_float_list("lr", eff("lr", args.lr))
     batch_size = eff("batch_size", args.batch_size)
     patience = eff("patience", args.patience)
-    classifier_dropout = eff("classifier_dropout", args.classifier_dropout)
+    classifier_dropout_values = coerce_optional_float_list("classifier_dropout", eff("classifier_dropout", args.classifier_dropout))
     input_dropout = eff("input_dropout", args.input_dropout)
     device = eff("device", args.device)
     pw_arg = eff("parallel_workers", args.parallel_workers)
@@ -829,6 +840,8 @@ def main():
         readout_types=readout_types,
         run_infos=run_infos,
         repeat_on_different_family_seed=repeat_on_different_family_seed,
+        lr_values=lr_values,
+        classifier_dropout_values=classifier_dropout_values,
     )
 
     print_grid_summary(
@@ -850,10 +863,8 @@ def main():
         seed=seed,
         wandb_project=wandb_project,
         epochs=epochs,
-        lr=lr,
         batch_size=batch_size,
         patience=patience,
-        classifier_dropout=classifier_dropout,
         input_dropout=input_dropout,
         save_results=save_results,
         parallel_workers=parallel_workers,
