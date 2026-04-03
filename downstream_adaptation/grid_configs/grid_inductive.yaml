@@ -9,17 +9,13 @@ run_dirs: null
 # run_dirs:
 #   - data/outputs/wandb/run-YYYYMMDD_HHMMSS-xxxxx
 
-wandb_pretrain_project: run_graphmaev2_grid_inductive_rq1
+wandb_pretrain_project: dgi_grid_inductive
 # wandb_pretrain_project: "entity/MyProject"
 
 # Wandb API fetch (when using wandb_pretrain_project)
 fetch_filters:
   state: finished
 min_runs: 1
-# Local wandb run-* dirs. Non-null = scan ONLY these (matches paths.output_dir + /wandb).
-# If null, set TOPOBENCH_OUTPUT_DIR to paths.output_dir and we scan only $TOPOBENCH_OUTPUT_DIR/wandb.
-wandb_local_roots:
-  - /data/louisvl/TB/outputs/wandb
 
 # Grid axes
 n_train: [10]
@@ -27,8 +23,6 @@ tasks: [community_detection]
 modes:
   - linear-probe
   - random-init-linear-probe
-  - full-finetune
-  - random-init-full-finetune
 readout_types: [mean]
 n_evaluation_graphs: 200
 
@@ -42,7 +36,7 @@ epochs: 300
 lr: 0.001
 batch_size: 128
 patience: 10
-classifier_dropout: [0.0,0.2]
+classifier_dropout: 0.0
 input_dropout: null
 device: cuda:0
 # Run this many experiments at once. Each job uses a distinct GPU (see eval_devices).
@@ -50,9 +44,9 @@ device: cuda:0
 parallel_workers: 4
 # Optional explicit device per worker slot; length must equal parallel_workers when set.
 # If null and parallel_workers > 1, uses cuda:0, cuda:1, ... cuda:(parallel_workers-1).
-eval_devices: [cuda:0, cuda:1, cuda:2, cuda:3]
+eval_devices: null
 seed: 42
-wandb_project: downstream_graphmaev2_grid_inductive_rq1
+wandb_project: dgi_downstream_results_inductive
 save_results: true
 confirm_before_run: true
 # Number of times to repeat each experiment with different family seeds for computing std (default: 1)

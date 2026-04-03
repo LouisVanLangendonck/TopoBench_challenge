@@ -1,13 +1,12 @@
 """Shared utilities for downstream evaluation (inductive and transductive)."""
 
 import json
-import os
 import random
 import sys
 import time
-from copy import deepcopy
 from pathlib import Path
 from typing import Any
+from copy import deepcopy
 
 _THIS_DIR = Path(__file__).resolve().parent
 _REPO_ROOT = _THIS_DIR.parent
@@ -18,38 +17,29 @@ import torch
 import torch.nn as nn
 import yaml
 from omegaconf import OmegaConf
-from torch_geometric.nn import (
-    global_add_pool,
-    global_max_pool,
-    global_mean_pool,
-)
+from torch_geometric.nn import global_add_pool, global_max_pool, global_mean_pool
 
-_GLOBAL_POOL = {
-    "mean": global_mean_pool,
-    "max": global_max_pool,
-    "sum": global_add_pool,
-}
-
-from graph_universe import GraphUniverseDataset
+_GLOBAL_POOL = {"mean": global_mean_pool, "max": global_max_pool, "sum": global_add_pool}
 
 from topobench.data.preprocessor import PreProcessor
+from graph_universe import GraphUniverseDataset
+
 
 # =============================================================================
 # Configuration Loading
 # =============================================================================
 
-
 def load_wandb_config(run_dir: str | Path) -> dict:
     """Load config from wandb run directory."""
     run_dir = Path(run_dir)
     config_path = run_dir / "files" / "config.yaml"
-
+    
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found at {config_path}")
-
-    with open(config_path) as f:
+    
+    with open(config_path, "r") as f:
         raw_config = yaml.safe_load(f)
-
+    
     config = {}
     for key, val in raw_config.items():
         if key.startswith("_"):
@@ -58,7 +48,7 @@ def load_wandb_config(run_dir: str | Path) -> dict:
             config[key] = val["value"]
         else:
             config[key] = val
-
+    
     return config
 
 
@@ -66,13 +56,13 @@ def get_checkpoint_path_from_summary(run_dir: str | Path) -> str | None:
     """Extract checkpoint path from wandb-summary.json."""
     run_dir = Path(run_dir)
     summary_path = run_dir / "files" / "wandb-summary.json"
-
+    
     if not summary_path.exists():
         return None
-
-    with open(summary_path) as f:
+    
+    with open(summary_path, "r") as f:
         summary = json.load(f)
-
+    
     return summary.get("best_epoch/checkpoint")
 
 
@@ -104,53 +94,6 @@ def build_wandb_local_run_dir_index(
                 if tail:
                     by_run_id[tail] = resolved
     return by_run_id, all_named
-
-
-def _dedupe_path_list(paths: list[Path]) -> list[Path]:
-    seen: set[str] = set()
-    out: list[Path] = []
-    for p in paths:
-        try:
-            key = str(p.resolve())
-        except (OSError, RuntimeError):
-            key = str(p)
-        if key not in seen:
-            seen.add(key)
-            out.append(p)
-    return out
-
-
-def resolve_wandb_scan_roots(
-    wandb_local_roots: list[Path | str] | None = None,
-) -> list[Path]:
-    """
-    Directories that contain Lightning W&B ``run-*`` folders.
-
-    ``WandbLogger`` uses ``save_dir=${paths.output_dir}``, so runs are under
-    ``<output_dir>/wandb/run-...``.
-
-    **Only one tier is used** (no merging many roots into one giant scan):
-
-    1. ``wandb_local_roots`` from YAML/CLI — scan **only** these (deduped).
-    2. Else ``$TOPOBENCH_OUTPUT_DIR`` or ``$TB_OUTPUT_DIR`` — scan **only**
-       ``<that>/wandb`` (set this to match ``paths.output_dir`` in training).
-    3. Else legacy dev layout: ``cwd/data/outputs/wandb``, ``cwd/wandb``, and
-       optionally ``$PROJECT_ROOT/data/outputs/wandb``.
-    """
-    if wandb_local_roots:
-        return _dedupe_path_list([Path(r) for r in wandb_local_roots])
-
-    for _env_key in ("TOPOBENCH_OUTPUT_DIR", "TB_OUTPUT_DIR"):
-        v = os.environ.get(_env_key)
-        if v:
-            return [Path(v) / "wandb"]
-
-    cwd = Path.cwd()
-    legacy = [cwd / "data" / "outputs" / "wandb", cwd / "wandb"]
-    project_root = os.environ.get("PROJECT_ROOT")
-    if project_root:
-        legacy.append(Path(project_root) / "data" / "outputs" / "wandb")
-    return _dedupe_path_list(legacy)
 
 
 def resolve_local_wandb_run_dir(
@@ -216,16 +159,12 @@ def fetch_runs_from_wandb_project(
     min_runs: int = 1,
     *,
     max_api_retries: int = 6,
-    wandb_local_roots: list[Path | str] | None = None,
 ) -> list[dict[str, Any]]:
     """
     List runs from a W&B project via the API and join to local ``wandb/run-*`` dirs.
 
     Uses a single local directory scan, ``per_page=500``, local checkpoint/config
     reads, and retries on transient API errors (502/503/timeout).
-
-    Local scan uses ``resolve_wandb_scan_roots`` (explicit roots, or a single
-    ``$TOPOBENCH_OUTPUT_DIR/wandb``, or legacy repo-relative paths).
     """
     import wandb
 
@@ -246,14 +185,11 @@ def fetch_runs_from_wandb_project(
         # trigger UnboundLocalError on ``if filters is None`` above.
         run_filters = filters if filters is not None else {"state": "finished"}
 
-        potential_wandb_dirs = resolve_wandb_scan_roots(wandb_local_roots)
-        print(
-            "  Local wandb scan roots: "
-            + ", ".join(str(p) for p in potential_wandb_dirs)
-        )
-        by_run_id, all_named = build_wandb_local_run_dir_index(
-            potential_wandb_dirs
-        )
+        potential_wandb_dirs = [
+            Path("data/outputs/wandb"),
+            Path("wandb"),
+        ]
+        by_run_id, all_named = build_wandb_local_run_dir_index(potential_wandb_dirs)
 
         print(
             "  Indexed local wandb run directories; contacting api.wandb.ai for run list "
@@ -318,9 +254,7 @@ def fetch_runs_from_wandb_project(
                 )
 
         print(f"\n{'=' * 80}")
-        print(
-            f"FOUND {len(run_infos)} RUNS (checkpoint optional for random-init-*)"
-        )
+        print(f"FOUND {len(run_infos)} RUNS (checkpoint optional for random-init-*)")
         print(f"{'=' * 80}\n")
 
         if len(run_infos) < min_runs:
@@ -338,7 +272,6 @@ def fetch_runs_from_wandb_project(
 # Dataset Generation
 # =============================================================================
 
-
 def create_dataset_from_config(
     config: dict,
     n_graphs: int | None = None,
@@ -353,24 +286,24 @@ def create_dataset_from_config(
     dataset_config = deepcopy(config["dataset"])
     params = dataset_config["loader"]["parameters"]
     gen_params = deepcopy(params["generation_parameters"])
-
+    
     if downstream_task is not None:
         # Presence is derived from node community labels; GraphUniverse generates CD graphs.
         if downstream_task == "community_presence":
             gen_params["task"] = "community_detection"
         else:
             gen_params["task"] = downstream_task
-
+    
     # Override number of graphs and seeds
     if n_graphs is not None:
         gen_params["family_parameters"]["n_graphs"] = n_graphs
     gen_params["family_parameters"]["seed"] = family_seed
     gen_params["universe_parameters"]["seed"] = universe_seed
-
+    
     # Apply GraphUniverse overrides
     if graphuniverse_override is not None and len(graphuniverse_override) > 0:
         _deep_update(gen_params, graphuniverse_override)
-
+    
     # Set data directory
     root_dir = data_dir if data_dir else params["data_dir"]
     if n_graphs is not None:
@@ -379,28 +312,17 @@ def create_dataset_from_config(
         root_dir = f"{root_dir}_task_{downstream_task}"
     if graphuniverse_override is not None and len(graphuniverse_override) > 0:
         import hashlib
-
-        override_hash = hashlib.md5(
-            json.dumps(graphuniverse_override, sort_keys=True).encode()
-        ).hexdigest()[:8]
+        override_hash = hashlib.md5(json.dumps(graphuniverse_override, sort_keys=True).encode()).hexdigest()[:8]
         root_dir = f"{root_dir}_override_{override_hash}"
-
+    
     dataset = GraphUniverseDataset(root=root_dir, parameters=gen_params)
-    return (
-        dataset,
-        dataset.raw_dir,
-        {"type": "GraphUniverse", "subsample_info": None},
-    )
+    return dataset, dataset.raw_dir, {"type": "GraphUniverse", "subsample_info": None}
 
 
 def _deep_update(base_dict: dict, update_dict: dict) -> dict:
     """Recursively update base_dict with values from update_dict."""
     for key, value in update_dict.items():
-        if (
-            isinstance(value, dict)
-            and key in base_dict
-            and isinstance(base_dict[key], dict)
-        ):
+        if isinstance(value, dict) and key in base_dict and isinstance(base_dict[key], dict):
             _deep_update(base_dict[key], value)
         else:
             base_dict[key] = value
@@ -417,7 +339,7 @@ def apply_transforms(
         transforms_omega = OmegaConf.create(transforms_config)
     else:
         transforms_omega = None
-
+    
     preprocessor = PreProcessor(dataset, data_dir, transforms_omega)
     return preprocessor
 
@@ -426,7 +348,7 @@ def detect_pretraining_method(config: dict) -> str:
     """Detect pre-training method from config."""
     model_config = config.get("model", {})
     wrapper_config = model_config.get("backbone_wrapper", {})
-
+    
     if wrapper_config:
         wrapper_target = wrapper_config.get("_target_", "")
         if "DGI" in wrapper_target:
@@ -443,11 +365,11 @@ def detect_pretraining_method(config: dict) -> str:
             return "graphcl"
         elif "VAEGNNWrapper" in wrapper_target:
             return "vgae"
-
+    
     loss_config = config.get("loss", {})
     dataset_loss = loss_config.get("dataset_loss", {})
     loss_target = dataset_loss.get("_target_", "")
-
+    
     if "DGI" in loss_target:
         return "dgi"
     elif "GraphMAEv2" in loss_target:
@@ -460,11 +382,9 @@ def detect_pretraining_method(config: dict) -> str:
         return "graphmae"
     elif "VAELoss" in loss_target:
         return "vgae"
-
+    
     # Fallback: detect directly from dataset task when wrapper/loss metadata is missing.
-    dataset_task = str(
-        config.get("dataset", {}).get("parameters", {}).get("task", "")
-    ).lower()
+    dataset_task = str(config.get("dataset", {}).get("parameters", {}).get("task", "")).lower()
     if dataset_task == "bgrl":
         return "bgrl"
     if dataset_task == "vgae":
@@ -473,20 +393,16 @@ def detect_pretraining_method(config: dict) -> str:
     # Check if it's supervised community detection
     dataset_config = config.get("dataset", {})
     dataset_params = dataset_config.get("parameters", {})
-    dataset_params.get("task", "")
+    task = dataset_params.get("task", "")
     loss_type = dataset_params.get("loss_type", "")
-
+    
     # If it's supervised with classification task, check if it's CD
     if loss_type in ["cross_entropy", "classification"]:
-        gen_params = (
-            dataset_config.get("loader", {})
-            .get("parameters", {})
-            .get("generation_parameters", {})
-        )
+        gen_params = dataset_config.get("loader", {}).get("parameters", {}).get("generation_parameters", {})
         task_name = gen_params.get("task", "")
         if task_name == "community_detection":
             return "supervised_cd"
-
+    
     return "supervised"
 
 
@@ -518,10 +434,7 @@ DOWNSTREAM_MODES = (
 
 def downstream_mode_requires_checkpoint(mode: str) -> bool:
     """Random-init modes do not load a pretrained checkpoint."""
-    return mode not in (
-        "random-init-full-finetune",
-        "random-init-linear-probe",
-    )
+    return mode not in ("random-init-full-finetune", "random-init-linear-probe")
 
 
 def downstream_mode_freezes_encoder(mode: str) -> bool:
@@ -541,7 +454,9 @@ def use_supervised_cd_full_tbmodel(
     tl = task_level if task_level is not None else detect_task_level(config)
     if tl != "node":
         return False
-    return downstream_task != "community_presence"
+    if downstream_task == "community_presence":
+        return False
+    return True
 
 
 def _detach_tensors_in_model_out(model_out):
@@ -566,7 +481,6 @@ def freeze_batchnorm_eval_no_track(root: nn.Module) -> None:
 def instantiate_tbmodel_from_wandb_config(config: dict, device: str = "cpu"):
     """Build TBModel the same way as training (encoder + backbone + readout + loss + evaluator)."""
     import hydra
-
     from topobench.model import TBModel
 
     model_cfg = OmegaConf.create(config["model"])
@@ -585,16 +499,12 @@ def instantiate_tbmodel_from_wandb_config(config: dict, device: str = "cpu"):
     return model.to(device)
 
 
-def load_tbmodel_weights_from_checkpoint(
-    tb_model, checkpoint_path: str | Path
-) -> tuple:
+def load_tbmodel_weights_from_checkpoint(tb_model, checkpoint_path: str | Path) -> tuple:
     """Load Lightning checkpoint weights into an existing TBModel."""
     checkpoint_path = Path(checkpoint_path)
     if not checkpoint_path.exists():
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
-    checkpoint = torch.load(
-        checkpoint_path, map_location="cpu", weights_only=False
-    )
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     state_dict = checkpoint.get("state_dict", checkpoint)
     return tb_model.load_state_dict(state_dict, strict=False)
 
@@ -612,16 +522,12 @@ def hidden_dim_from_downstream_config(config: dict) -> int:
         backbone_cfg.get("hidden_dim")
         or backbone_cfg.get("hidden_channels")
         or backbone_cfg.get("out_channels")
-        or config.get("model", {})
-        .get("feature_encoder", {})
-        .get("out_channels")
+        or config.get("model", {}).get("feature_encoder", {}).get("out_channels")
         or 128
     )
 
 
-def replace_ssl_backbone_with_gnn_wrapper(
-    tb_model, *, verbose: bool = True
-) -> bool:
+def replace_ssl_backbone_with_gnn_wrapper(tb_model, *, verbose: bool = True) -> bool:
     """Use ``GNNWrapper`` for downstream: one clean GNN pass, no SSL augmentations.
 
     **Preserved (same ``nn.Module`` instances and tensors as after checkpoint load)**
@@ -655,16 +561,14 @@ def replace_ssl_backbone_with_gnn_wrapper(
     """
     from topobench.nn.wrappers.graph.gnn_wrapper import GNNWrapper
 
-    _SSL_WRAPPER_NAMES = frozenset(
-        {
-            "GraphCLGNNWrapper",
-            "GraphMAEv2GNNWrapper",
-            "DGIGNNWrapper",
-            "BGRLGNNWrapper",
-            "GRACEGNNWrapper",
-            "VAEGNNWrapper",
-        }
-    )
+    _SSL_WRAPPER_NAMES = frozenset({
+        "GraphCLGNNWrapper",
+        "GraphMAEv2GNNWrapper",
+        "DGIGNNWrapper",
+        "BGRLGNNWrapper",
+        "GRACEGNNWrapper",
+        "VAEGNNWrapper",
+    })
 
     bb = getattr(tb_model, "backbone", None)
     if bb is None:
@@ -674,9 +578,7 @@ def replace_ssl_backbone_with_gnn_wrapper(
     cls_name = bb.__class__.__name__
     if cls_name == "GNNWrapper":
         if verbose:
-            print(
-                "Downstream SSL swap: backbone already GNNWrapper — no replacement."
-            )
+            print("Downstream SSL swap: backbone already GNNWrapper — no replacement.")
         return False
     if cls_name not in _SSL_WRAPPER_NAMES:
         if verbose:
@@ -687,18 +589,17 @@ def replace_ssl_backbone_with_gnn_wrapper(
             )
         return False
 
-    inner = bb.online_encoder if cls_name == "BGRLGNNWrapper" else bb.backbone
+    if cls_name == "BGRLGNNWrapper":
+        inner = bb.online_encoder
+    else:
+        inner = bb.backbone
 
     if inner is None:
         if verbose:
-            print(
-                f"Downstream SSL swap: {cls_name} has no inner encoder; skipping."
-            )
+            print(f"Downstream SSL swap: {cls_name} has no inner encoder; skipping.")
         return False
 
-    out_ch = getattr(inner, "out_channels", None) or getattr(
-        inner, "hidden_dim", None
-    )
+    out_ch = getattr(inner, "out_channels", None) or getattr(inner, "hidden_dim", None)
     if out_ch is None and hasattr(bb, "ln_0"):
         out_ch = bb.ln_0.normalized_shape[0]
     if out_ch is None:
@@ -747,9 +648,7 @@ def build_tb_model_for_downstream(
     inc = None
     if load_checkpoint:
         if checkpoint_path is None:
-            raise ValueError(
-                "checkpoint_path is required when load_checkpoint=True"
-            )
+            raise ValueError("checkpoint_path is required when load_checkpoint=True")
         inc = load_tbmodel_weights_from_checkpoint(tb_model, checkpoint_path)
         if verbose and (inc.missing_keys or inc.unexpected_keys):
             print(
@@ -896,41 +795,39 @@ class SupervisedCDDownstreamModel(nn.Module):
 
 def prepare_batch_for_topobench(batch):
     """Ensure batch has required TopoBench attributes."""
-    if not hasattr(batch, "x_0") and hasattr(batch, "x"):
+    if not hasattr(batch, 'x_0') and hasattr(batch, 'x'):
         batch.x_0 = batch.x
     sync_batch_0_from_batch(batch)
     return batch
 
 
-def verify_encoder_outputs(
-    encoder: nn.Module, data_loader, device: str = "cpu"
-):
+def verify_encoder_outputs(encoder: nn.Module, data_loader, device: str = "cpu"):
     """Verify encoder produces meaningful outputs."""
     encoder.eval()
     encoder = encoder.to(device)
-
+    
     batch = next(iter(data_loader))
     batch = batch.to(device)
     batch = prepare_batch_for_topobench(batch)
-
-    input_features = batch.x_0 if hasattr(batch, "x_0") else batch.x
+    
+    input_features = batch.x_0 if hasattr(batch, 'x_0') else batch.x
     input_mean = input_features.mean().item()
     input_std = input_features.std().item()
     input_dim = input_features.shape[1]
-
+    
     with torch.no_grad():
         try:
             features = encoder(batch)
         except Exception as e:
             return {"status": "ERROR", "error": str(e)}
-
+    
     mean = features.mean().item()
     std = features.std().item()
     min_val = features.min().item()
     max_val = features.max().item()
     num_zeros = (features == 0).sum().item()
     total_elements = features.numel()
-
+    
     issues = []
     if std < 1e-6:
         issues.append("Very low variance")
@@ -938,9 +835,9 @@ def verify_encoder_outputs(
         issues.append("All outputs are zero")
     if abs(mean) > 1000:
         issues.append(f"Unusually large mean: {mean}")
-
+    
     status = "OK" if not issues else "WARNING"
-
+    
     return {
         "status": status,
         "mean": mean,
@@ -956,9 +853,7 @@ def verify_encoder_outputs(
     }
 
 
-def verify_downstream_logits(
-    model: nn.Module, data_loader, device: str = "cpu"
-) -> dict:
+def verify_downstream_logits(model: nn.Module, data_loader, device: str = "cpu") -> dict:
     """Sanity-check that a full downstream model produces reasonable logits."""
     model.eval()
     model = model.to(device)
@@ -987,14 +882,14 @@ def verify_downstream_logits(
 
 class LinearClassifier(nn.Module):
     """Linear classifier for probing."""
-
+    
     def __init__(self, input_dim: int, num_classes: int, dropout: float = 0.0):
         super().__init__()
         self.dropout = nn.Dropout(dropout) if dropout > 0 else nn.Identity()
         self.linear = nn.Linear(input_dim, num_classes)
         nn.init.xavier_uniform_(self.linear.weight, gain=0.01)
         nn.init.zeros_(self.linear.bias)
-
+    
     def forward(self, x):
         x = self.dropout(x)
         return self.linear(x)
@@ -1023,16 +918,16 @@ class DownstreamModel(nn.Module):
         self.classifier = classifier
         self.freeze_encoder = freeze_encoder
         self.task_level = task_level
-
+        
         if freeze_encoder:
             self._freeze_encoder()
-
+    
     def _freeze_encoder(self):
         for param in self.encoder.parameters():
             param.requires_grad = False
         self.encoder.eval()
         freeze_batchnorm_eval_no_track(self.encoder)
-
+    
     def forward(self, batch):
         """Forward pass."""
         if self.freeze_encoder:
@@ -1041,12 +936,13 @@ class DownstreamModel(nn.Module):
                 features = self.encoder(batch)
         else:
             features = self.encoder(batch)
-
+        
         return self.classifier(features)
-
+    
     def train(self, mode=True):
         """Override train to keep frozen encoder in eval mode."""
         super().train(mode)
         if self.freeze_encoder:
             self.encoder.eval()
         return self
+

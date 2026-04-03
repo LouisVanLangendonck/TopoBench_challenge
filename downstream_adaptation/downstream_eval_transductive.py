@@ -10,6 +10,7 @@ Downstream modes (``--mode``):
 """
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -27,16 +28,12 @@ from tqdm import tqdm
 
 try:
     import wandb
-
     WANDB_AVAILABLE = True
 except ImportError:
     WANDB_AVAILABLE = False
 
 from downstream_eval_utils import (
-    DOWNSTREAM_MODES,
-    LinearClassifier,
-    SupervisedCDDownstreamModel,
-    TBModelNodeEncoder,
+    apply_transforms,
     build_tb_model_for_downstream,
     detect_learning_setting,
     detect_task_level,
@@ -45,11 +42,15 @@ from downstream_eval_utils import (
     freeze_batchnorm_eval_no_track,
     get_checkpoint_path_from_summary,
     hidden_dim_from_downstream_config,
+    LinearClassifier,
     load_wandb_config,
     prepare_batch_for_topobench,
+    SupervisedCDDownstreamModel,
+    TBModelNodeEncoder,
     use_supervised_cd_full_tbmodel,
     verify_downstream_logits,
     verify_encoder_outputs,
+    DOWNSTREAM_MODES,
 )
 
 from topobench.data.preprocessor import PreProcessor
@@ -57,7 +58,7 @@ from topobench.data.preprocessor import PreProcessor
 
 class TransductiveNodeClassifier(nn.Module):
     """Node classifier for transductive learning."""
-
+    
     def __init__(
         self,
         encoder: nn.Module,
@@ -68,16 +69,16 @@ class TransductiveNodeClassifier(nn.Module):
         self.encoder = encoder
         self.classifier = classifier
         self.freeze_encoder = freeze_encoder
-
+        
         if freeze_encoder:
             self._freeze_encoder()
-
+    
     def _freeze_encoder(self):
         for param in self.encoder.parameters():
             param.requires_grad = False
         self.encoder.eval()
         freeze_batchnorm_eval_no_track(self.encoder)
-
+    
     def forward(self, batch):
         """Forward pass - returns logits for ALL nodes."""
         if self.freeze_encoder:
@@ -86,9 +87,9 @@ class TransductiveNodeClassifier(nn.Module):
                 node_features = self.encoder(batch)
         else:
             node_features = self.encoder(batch)
-
+        
         return self.classifier(node_features)
-
+    
     def train(self, mode=True):
         """Override train to keep frozen encoder in eval mode."""
         super().train(mode)
@@ -112,118 +113,101 @@ def train_transductive(
     model = model.to(device)
     data = data.to(device)
     data = prepare_batch_for_topobench(data)
-
+    
     # For transductive setting, add batch indices (all nodes in same graph)
-    if not hasattr(data, "batch"):
-        data.batch = torch.zeros(
-            data.num_nodes, dtype=torch.long, device=device
-        )
-    if not hasattr(data, "batch_0"):
+    if not hasattr(data, 'batch'):
+        data.batch = torch.zeros(data.num_nodes, dtype=torch.long, device=device)
+    if not hasattr(data, 'batch_0'):
         data.batch_0 = data.batch
-
+    
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = Adam(trainable_params, lr=lr, weight_decay=weight_decay)
-
+    
     criterion = nn.CrossEntropyLoss()
-    scheduler = ReduceLROnPlateau(
-        optimizer, mode="max", factor=0.5, patience=10
-    )
-
+    scheduler = ReduceLROnPlateau(optimizer, mode='max', factor=0.5, patience=10)
+    
     best_val_acc = 0.0
     best_model_state = None
     patience_counter = 0
-    history = {
-        "train_loss": [],
-        "train_accuracy": [],
-        "val_loss": [],
-        "val_accuracy": [],
-    }
-
+    history = {"train_loss": [], "train_accuracy": [], "val_loss": [], "val_accuracy": []}
+    
     pbar = tqdm(range(epochs), desc="Training")
     for epoch in pbar:
         model.train()
         optimizer.zero_grad()
-
+        
         # Forward pass on entire graph
         out = model(data)
-
+        
         # Compute loss only on training nodes
         # train_mask contains indices, not boolean mask
         train_mask = data.train_mask.long()
         y_train = data.y[train_mask].long()
         out_train = out[train_mask]
-
+        
         loss = criterion(out_train, y_train)
-
+        
         # Compute training accuracy
         pred_train = out_train.argmax(dim=1)
         train_acc = (pred_train == y_train).float().mean().item()
-
+        
         loss.backward()
         optimizer.step()
-
+        
         # Validation
         model.eval()
         with torch.no_grad():
             out = model(data)
-
+            
             # Validation metrics
             # val_mask contains indices, not boolean mask
             val_mask = data.val_mask.long()
             y_val = data.y[val_mask].long()
             out_val = out[val_mask]
-
+            
             val_loss = criterion(out_val, y_val).item()
             pred_val = out_val.argmax(dim=1)
             val_acc = (pred_val == y_val).float().mean().item()
-
+        
         history["train_loss"].append(loss.item())
         history["train_accuracy"].append(train_acc)
         history["val_loss"].append(val_loss)
         history["val_accuracy"].append(val_acc)
-
+        
         if use_wandb and WANDB_AVAILABLE:
-            wandb.log(
-                {
-                    "epoch": epoch,
-                    "train/loss": loss.item(),
-                    "train/accuracy": train_acc,
-                    "val/loss": val_loss,
-                    "val/accuracy": val_acc,
-                    "best_val_accuracy": best_val_acc,
-                    "lr": optimizer.param_groups[0]["lr"],
-                }
-            )
-
+            wandb.log({
+                "epoch": epoch,
+                "train/loss": loss.item(),
+                "train/accuracy": train_acc,
+                "val/loss": val_loss,
+                "val/accuracy": val_acc,
+                "best_val_accuracy": best_val_acc,
+                "lr": optimizer.param_groups[0]['lr'],
+            })
+        
         scheduler.step(val_acc)
-
+        
         if val_acc > best_val_acc:
             best_val_acc = val_acc
-            best_model_state = {
-                k: v.cpu().clone() for k, v in model.state_dict().items()
-            }
+            best_model_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
             patience_counter = 0
         else:
             patience_counter += 1
-
-        pbar.set_postfix(
-            {
-                "train_loss": f"{loss.item():.4f}",
-                "train_acc": f"{train_acc:.4f}",
-                "val_acc": f"{val_acc:.4f}",
-                "best": f"{best_val_acc:.4f}",
-            }
-        )
-
+        
+        pbar.set_postfix({
+            "train_loss": f"{loss.item():.4f}",
+            "train_acc": f"{train_acc:.4f}",
+            "val_acc": f"{val_acc:.4f}",
+            "best": f"{best_val_acc:.4f}",
+        })
+        
         if patience_counter >= patience:
             break
-
+    
     if best_model_state is not None:
-        best_model_state_device = {
-            k: v.to(device) for k, v in best_model_state.items()
-        }
+        best_model_state_device = {k: v.to(device) for k, v in best_model_state.items()}
         model.load_state_dict(best_model_state_device)
-
+    
     return history
 
 
@@ -239,40 +223,38 @@ def evaluate_transductive(
     model.eval()
     data = data.to(device)
     data = prepare_batch_for_topobench(data)
-
+    
     # For transductive setting, add batch indices (all nodes in same graph)
-    if not hasattr(data, "batch"):
-        data.batch = torch.zeros(
-            data.num_nodes, dtype=torch.long, device=device
-        )
-    if not hasattr(data, "batch_0"):
+    if not hasattr(data, 'batch'):
+        data.batch = torch.zeros(data.num_nodes, dtype=torch.long, device=device)
+    if not hasattr(data, 'batch_0'):
         data.batch_0 = data.batch
-
+    
     with torch.no_grad():
         out = model(data)
-
+        
         # Test metrics
         # Masks contain indices, not boolean masks
         test_mask = data.test_mask.long()
         y_test = data.y[test_mask].long()
         out_test = out[test_mask]
-
+        
         pred_test = out_test.argmax(dim=1)
         test_acc = (pred_test == y_test).float().mean().item()
-
+        
         # Also compute train and val for reference
         train_mask = data.train_mask.long()
         y_train = data.y[train_mask].long()
         out_train = out[train_mask]
         pred_train = out_train.argmax(dim=1)
         train_acc = (pred_train == y_train).float().mean().item()
-
+        
         val_mask = data.val_mask.long()
         y_val = data.y[val_mask].long()
         out_val = out[val_mask]
         pred_val = out_val.argmax(dim=1)
         val_acc = (pred_val == y_val).float().mean().item()
-
+    
     result = {
         "test_accuracy": test_acc,
         "train_accuracy": train_acc,
@@ -284,19 +266,17 @@ def evaluate_transductive(
         "predictions": pred_test.cpu().tolist(),
         "labels": y_test.cpu().tolist(),
     }
-
+    
     if use_wandb and WANDB_AVAILABLE:
-        wandb.log(
-            {
-                "test/accuracy": test_acc,
-                "test/train_accuracy": train_acc,
-                "test/val_accuracy": val_acc,
-                "test/num_train_nodes": result["num_train_nodes"],
-                "test/num_val_nodes": result["num_val_nodes"],
-                "test/num_test_nodes": result["num_test_nodes"],
-            }
-        )
-
+        wandb.log({
+            "test/accuracy": test_acc,
+            "test/train_accuracy": train_acc,
+            "test/val_accuracy": val_acc,
+            "test/num_train_nodes": result["num_train_nodes"],
+            "test/num_val_nodes": result["num_val_nodes"],
+            "test/num_test_nodes": result["num_test_nodes"],
+        })
+    
     return result
 
 
@@ -335,9 +315,7 @@ def run_downstream_evaluation_transductive(
     run_dir = Path(run_dir)
 
     if mode not in DOWNSTREAM_MODES:
-        raise ValueError(
-            f"Unknown mode {mode!r}; expected one of {DOWNSTREAM_MODES}"
-        )
+        raise ValueError(f"Unknown mode {mode!r}; expected one of {DOWNSTREAM_MODES}")
 
     config = load_wandb_config(run_dir)
     task_level = detect_task_level(config)
@@ -348,181 +326,44 @@ def run_downstream_evaluation_transductive(
             f"Config indicates '{learning_setting}' setting, but this script is for transductive evaluation. "
             f"Please use downstream_eval.py for inductive evaluation."
         )
-
+    
     checkpoint_path = None
     if downstream_mode_requires_checkpoint(mode):
         checkpoint_path = get_checkpoint_path_from_summary(run_dir)
         if checkpoint_path is None:
             raise ValueError("No checkpoint path found in wandb-summary.json")
-
-    gen_params = config["dataset"]["loader"]["parameters"].get(
-        "generation_parameters", {}
-    )
+    
+    gen_params = config["dataset"]["loader"]["parameters"].get("generation_parameters", {})
     family_params = gen_params.get("family_parameters", {})
     universe_params = gen_params.get("universe_parameters", {})
     pretraining_universe_seed = universe_params["seed"]
     pretraining_family_seed = family_params["seed"]
+    
+    # For transductive setting with repeats, we still use different family seeds
+    # to generate different graph instances from the same universe
+    family_seed_for_downstream = pretraining_family_seed + 1 + repeat_idx
+    
+    # Same universe/family seeds as pretraining; do not override downstream_task (keeps graph identical).
+    dataset, data_dir, _ = create_dataset_from_config(
+        config,
+        n_graphs=1,
+        universe_seed=pretraining_universe_seed,
+        family_seed=family_seed_for_downstream,
+        dataset_purpose="downstream_transductive",
+        downstream_task=None,
+        graphuniverse_override=graphuniverse_override,
+    )
 
-    # For transductive setting with repeats, we use the SAME graph (same family seed)
-    # but different train/val splits. The repeat_idx will be used for split randomization.
-    family_seed_for_downstream = pretraining_family_seed
-
-    # CRITICAL FIX: Use the EXACT same logic as TopoBench run.py
-    # This should automatically find and load the existing dataset from pretraining
-    # instead of creating a new one, since we're using the identical config.
-    
-    import hydra
-    from omegaconf import OmegaConf
-    
-    # Register ALL the same OmegaConf resolvers as TopoBench run.py
-    # This ensures config resolution works identically to pretraining
-    try:
-        from topobench.utils.config_resolvers import (
-            get_default_metrics,
-            get_default_trainer,
-            get_default_transform,
-            get_flattened_channels,
-            get_monitor_metric,
-            get_monitor_mode,
-            get_non_relational_out_channels,
-            get_required_lifting,
-            infer_in_channels,
-            infer_num_cell_dimensions,
-            infer_topotune_num_cell_dimensions,
-        )
-        
-        # Register all resolvers exactly like TopoBench run.py
-        OmegaConf.register_new_resolver(
-            "get_default_metrics", get_default_metrics, replace=True
-        )
-        OmegaConf.register_new_resolver(
-            "get_default_trainer", get_default_trainer, replace=True
-        )
-        OmegaConf.register_new_resolver(
-            "get_default_transform", get_default_transform, replace=True
-        )
-        OmegaConf.register_new_resolver(
-            "get_flattened_channels",
-            get_flattened_channels,
-            replace=True,
-        )
-        OmegaConf.register_new_resolver(
-            "get_required_lifting", get_required_lifting, replace=True
-        )
-        OmegaConf.register_new_resolver(
-            "get_monitor_metric", get_monitor_metric, replace=True
-        )
-        OmegaConf.register_new_resolver(
-            "get_monitor_mode", get_monitor_mode, replace=True
-        )
-        OmegaConf.register_new_resolver(
-            "get_non_relational_out_channels",
-            get_non_relational_out_channels,
-            replace=True,
-        )
-        OmegaConf.register_new_resolver(
-            "infer_in_channels", infer_in_channels, replace=True
-        )
-        OmegaConf.register_new_resolver(
-            "infer_num_cell_dimensions", infer_num_cell_dimensions, replace=True
-        )
-        OmegaConf.register_new_resolver(
-            "infer_topotune_num_cell_dimensions",
-            infer_topotune_num_cell_dimensions,
-            replace=True,
-        )
-        OmegaConf.register_new_resolver(
-            "parameter_multiplication", lambda x, y: int(int(x) * int(y)), replace=True
-        )
-        print("✓ Registered ALL OmegaConf resolvers from TopoBench")
-    except ImportError as e:
-        print(f"⚠️  Could not import config resolvers: {e} - may cause config differences")
-    
-    print("=" * 80)
-    print("LOADING DATASET USING TOPOBENCH LOGIC")
-    print("=" * 80)
-    
-    # CRITICAL FIX: Reconstruct the config exactly like TopoBench does during pretraining
-    # The issue is that wandb config has different parameter order/types than original construction
-    
-    # Step 1: Recreate the original hydra config composition process
-    # Instead of using wandb's serialized config, recreate it from original config files
-    
-    # Get the original config components from wandb
-    dataset_name = config["dataset"]["loader"]["parameters"]["data_name"]  # GraphUniverse_GraphMAEv2_Transductive
-    model_name = config["model"].get("model_name", "gps_graphmaev2")
-    
-    print(f"Reconstructing config for dataset: {dataset_name}, model: {model_name}")
-    
-    # Recreate config using hydra composition (like TopoBench run.py does)
-    import hydra
-    from hydra import compose, initialize
-    from omegaconf import OmegaConf
-    
-    # Initialize hydra with the configs directory
-    try:
-        hydra.core.global_hydra.GlobalHydra.instance().clear()
-    except:
-        pass
-    
-    with initialize(version_base="1.3", config_path="../configs", job_name="downstream_eval"):
-        # Compose config exactly like TopoBench, using the same dataset and model
-        # This should create identical parameter order and types as pretraining
-        cfg = compose(
-            config_name="run.yaml",
-            overrides=[
-                f"dataset=graph/{dataset_name.replace('_GraphMAEv2_Transductive', '_transductive_graphmaev2')}",
-                f"model=graph/{model_name}",
-                # Keep the same seeds and parameters from pretraining
-                f"seed={config.get('seed', 42)}",
-            ]
-        )
-        
-        print(f"✓ Recreated config using hydra composition")
-        print(f"Dataset config: {cfg.dataset.loader._target_}")
-        print(f"Model config: {cfg.model._target_}")
-        
-        # Now use the recreated config for dataset loading
-        dataset_loader = hydra.utils.instantiate(cfg.dataset.loader)
-        dataset, dataset_dir = dataset_loader.load()
-        
-        # Use the recreated transform config
-        transform_config = cfg.get("transforms", None)
-    
-        print(f"✓ Dataset loaded from: {dataset_dir}")
-        print(f"✓ Dataset size: {len(dataset)}")
-        
-        # Step 2: Apply transforms using the recreated config
-        print(f"Recreated transform config: {transform_config}")
-        preprocessor = PreProcessor(dataset, dataset_dir, transform_config)
-    
-    # For transductive, we need the raw data list before splitting
+    transforms_config = config.get("transforms")
+    preprocessor = apply_transforms(dataset, data_dir, transforms_config)
     data_list = preprocessor.data_list
     
-    # Step 3: Verify we got the right features (should be 35: 15 base + 10 LapPE + 10 RWSE)
-    if len(data_list) > 0:
-        sample_data = data_list[0]
-        if hasattr(sample_data, 'x') and sample_data.x is not None:
-            n_features = sample_data.x.shape[1]
-            print(f"✓ Loaded dataset with {n_features} features")
-            if n_features == 35:
-                print("✓ SUCCESS: 35 features (15 base + 10 LapPE + 10 RWSE)")
-            elif n_features == 15:
-                print("⚠️  WARNING: Only 15 features - missing positional encodings!")
-            else:
-                print(f"⚠️  WARNING: Unexpected {n_features} features")
-        else:
-            print("⚠️  WARNING: No node features found in dataset")
-    
-    print("=" * 80)
-
-    assert len(data_list) == 1, (
-        f"Expected 1 graph for transductive setting, got {len(data_list)}"
-    )
+    assert len(data_list) == 1, f"Expected 1 graph for transductive setting, got {len(data_list)}"
 
     from topobench.data.utils.split_utils import load_transductive_splits
     from topobench.dataloader import DataloadDataset
-
+    from omegaconf import OmegaConf
+    
     data = data_list[0]
 
     if n_train is not None or n_evaluation is not None:
@@ -535,80 +376,63 @@ def run_downstream_evaluation_transductive(
         else:
             n_evaluation = int(0.3 * num_nodes)
 
-        # Use data_seed for consistent test set across all repeats
         np.random.seed(data_seed)
         all_indices = np.arange(num_nodes)
         np.random.shuffle(all_indices)
+        
+        eval_indices = all_indices[:n_evaluation]
+        remaining_indices = all_indices[n_evaluation:]
 
-        # Test set is FIXED across all repeats (based on data_seed only)
-        n_test = n_evaluation // 2
-        n_val = n_evaluation - n_test
-        test_indices = all_indices[:n_test]
-
-        # Remaining nodes for train/val splitting
-        remaining_indices = all_indices[n_test:]
-
-        # Use repeat_idx to get different train/val splits while keeping test constant
-        split_seed = (
-            data_seed + 1000 + repeat_idx
-        )  # Large offset to avoid overlap
-        np.random.seed(split_seed)
-        np.random.shuffle(remaining_indices)
-
-        # Split remaining nodes into val and train pool
-        val_indices = remaining_indices[:n_val]
-        train_pool = remaining_indices[n_val:]
-
+        n_val = n_evaluation // 2
+        n_test = n_evaluation - n_val
+        val_indices = eval_indices[:n_val]
+        test_indices = eval_indices[n_val:]
+        
         if n_train is not None:
-            assert n_train <= len(train_pool), (
-                f"n_train ({n_train}) must be at most {len(train_pool)} "
-                f"(total nodes {num_nodes} - test nodes {n_test} - val nodes {n_val})"
+            assert n_train <= len(remaining_indices), (
+                f"n_train ({n_train}) must be at most {len(remaining_indices)} "
+                f"(total nodes {num_nodes} - evaluation nodes {n_evaluation})"
             )
-            train_indices = train_pool[:n_train]
+            np.random.seed(data_seed + 1)
+            np.random.shuffle(remaining_indices)
+            train_indices = remaining_indices[:n_train]
         else:
-            train_indices = train_pool
+            train_indices = remaining_indices
 
         data.train_mask = torch.from_numpy(train_indices).long()
         data.val_mask = torch.from_numpy(val_indices).long()
         data.test_mask = torch.from_numpy(test_indices).long()
 
         print(
-            f"Transductive split (data_seed={data_seed}, repeat_idx={repeat_idx}): nodes={num_nodes}, "
-            f"train={len(train_indices)}, val={n_val}, test={n_test} (test fixed, train/val vary)"
+            f"Few-shot split (data_seed={data_seed}): nodes={num_nodes}, "
+            f"train={len(train_indices)}, val={n_val}, test={n_test}"
         )
     else:
         wrapped_dataset = DataloadDataset(data_list)
         split_params = config["dataset"]["split_params"]
         split_params_omega = OmegaConf.create(split_params)
-
-        train_dataset, _, _ = load_transductive_splits(
-            wrapped_dataset, split_params_omega
-        )
+        
+        train_dataset, _, _ = load_transductive_splits(wrapped_dataset, split_params_omega)
         data = train_dataset.data_lst[0]
 
-        if (
-            not hasattr(data, "train_mask")
-            or not hasattr(data, "val_mask")
-            or not hasattr(data, "test_mask")
-        ):
+        if not hasattr(data, 'train_mask') or not hasattr(data, 'val_mask') or not hasattr(data, 'test_mask'):
             raise ValueError(
                 "Data does not have train_mask, val_mask, test_mask. "
                 "Make sure the dataset config has split_params.learning_setting='transductive'"
             )
-
+    
     num_classes = int(data.y.max().item()) + 1
     print(f"num_classes (from labels): {num_classes}")
 
     data.batch = torch.zeros(data.num_nodes, dtype=torch.long)
     data.batch_0 = data.batch
-
+    
     print(
         f"Graph: nodes={data.num_nodes}, edges={data.num_edges}, x={tuple(data.x.shape)}, "
         f"train/val/test={len(data.train_mask)}/{len(data.val_mask)}/{len(data.test_mask)}"
     )
 
     from torch_geometric.loader import DataLoader
-
     dummy_loader = DataLoader([data], batch_size=1, shuffle=False)
 
     freeze_encoder = downstream_mode_freezes_encoder(mode)
@@ -629,9 +453,7 @@ def run_downstream_evaluation_transductive(
         downstream_model = SupervisedCDDownstreamModel(
             tb_model, freeze_encoder=freeze_encoder
         )
-        verify_result = verify_downstream_logits(
-            downstream_model, dummy_loader, device=device
-        )
+        verify_result = verify_downstream_logits(downstream_model, dummy_loader, device=device)
         print(f"Downstream model verification: {verify_result['status']}")
         if verify_result["status"] != "OK":
             print(f"  Issues: {verify_result.get('issues', [])}")
@@ -644,13 +466,11 @@ def run_downstream_evaluation_transductive(
             verbose=True,
         )
         encoder = TBModelNodeEncoder(tb_model)
-        verify_result = verify_encoder_outputs(
-            encoder, dummy_loader, device=device
-        )
+        verify_result = verify_encoder_outputs(encoder, dummy_loader, device=device)
         print(f"Encoder verification: {verify_result['status']}")
         if verify_result["status"] != "OK":
             print(f"  Issues: {verify_result.get('issues', [])}")
-
+    
     if use_wandb and WANDB_AVAILABLE:
         wandb_config = {
             "mode": mode,
@@ -681,8 +501,8 @@ def run_downstream_evaluation_transductive(
             "split_seed": data_seed + 1000 + repeat_idx,
             "transductive_split_strategy": "fixed_test_varying_trainval",
         }
-
-        def flatten_dict(d, parent_key="", sep="/"):
+        
+        def flatten_dict(d, parent_key='', sep='/'):
             items = []
             for k, v in d.items():
                 new_key = f"{parent_key}{sep}{k}" if parent_key else k
@@ -691,7 +511,7 @@ def run_downstream_evaluation_transductive(
                 else:
                     items.append((new_key, v))
             return dict(items)
-
+        
         for key in ["dataset", "model", "optimizer", "trainer"]:
             if key in config:
                 cfg = config[key]
@@ -700,19 +520,17 @@ def run_downstream_evaluation_transductive(
                 flattened = flatten_dict(cfg)
                 for k, v in flattened.items():
                     wandb_config[f"pretrain/{key}/{k}"] = v
-
+        
         wandb.init(project=wandb_project, config=wandb_config)
-
+    
     if not use_full_supervised:
         classifier = LinearClassifier(
             input_dim=hidden_dim,
             num_classes=num_classes,
             dropout=classifier_dropout if classifier_dropout else 0.0,
         )
-        downstream_model = TransductiveNodeClassifier(
-            encoder, classifier, freeze_encoder
-        )
-
+        downstream_model = TransductiveNodeClassifier(encoder, classifier, freeze_encoder)
+    
     history = train_transductive(
         model=downstream_model,
         data=data,
@@ -723,7 +541,7 @@ def run_downstream_evaluation_transductive(
         patience=patience,
         use_wandb=use_wandb,
     )
-
+    
     results = evaluate_transductive(
         model=downstream_model,
         data=data,
@@ -731,10 +549,10 @@ def run_downstream_evaluation_transductive(
         device=device,
         use_wandb=use_wandb,
     )
-
+    
     if use_wandb and WANDB_AVAILABLE:
         wandb.finish()
-
+    
     results["mode"] = mode
     results["task_type"] = "classification"
     results["task_level"] = "node"
@@ -742,17 +560,13 @@ def run_downstream_evaluation_transductive(
     results["num_classes"] = num_classes
     results["history"] = history
     results["encoder_frozen"] = freeze_encoder
-
+    
     return results
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Transductive downstream evaluation pipeline."
-    )
-    parser.add_argument(
-        "--run_dir", type=str, required=True, help="Wandb run directory"
-    )
+    parser = argparse.ArgumentParser(description="Transductive downstream evaluation pipeline.")
+    parser.add_argument("--run_dir", type=str, required=True, help="Wandb run directory")
     parser.add_argument(
         "--mode",
         type=str,
@@ -770,7 +584,7 @@ def main():
     )
     parser.add_argument("--classifier_dropout", type=float, default=0.0)
     parser.add_argument("--input_dropout", type=float, default=None)
-
+    
     # Few-shot learning parameters
     parser.add_argument(
         "--n_train",
@@ -792,7 +606,7 @@ def main():
     )
 
     args = parser.parse_args()
-
+    
     results = run_downstream_evaluation_transductive(
         run_dir=args.run_dir,
         mode=args.mode,
@@ -809,7 +623,7 @@ def main():
         n_evaluation=args.n_evaluation,
         data_seed=args.data_seed,
     )
-
+    
     print("\n" + "=" * 60)
     print("TRANSDUCTIVE NODE CLASSIFICATION RESULTS")
     print("=" * 60)
@@ -817,14 +631,13 @@ def main():
     print(f"Test Accuracy: {results['test_accuracy']:.4f}")
     print(f"Train Accuracy: {results['train_accuracy']:.4f}")
     print(f"Val Accuracy: {results['val_accuracy']:.4f}")
-    print(
-        f"Train nodes: {results['num_train_nodes']}, Val nodes: {results['num_val_nodes']}, Test nodes: {results['num_test_nodes']}"
-    )
+    print(f"Train nodes: {results['num_train_nodes']}, Val nodes: {results['num_val_nodes']}, Test nodes: {results['num_test_nodes']}")
     print(f"Total nodes: {results['num_total_nodes']}")
     print("=" * 60)
-
+    
     return results
 
 
 if __name__ == "__main__":
     main()
+
