@@ -62,9 +62,8 @@ def run(cfg: DictConfig) -> DictConfig:
     # Preprocess dataset and load the splits
     transform_config = cfg.get("transforms", None)
     preprocessor = PreProcessor(dataset, dataset_dir, transform_config)
-    task_level = cfg.dataset.parameters.get("task_level", None)
     dataset_train, dataset_val, dataset_test = (
-        preprocessor.load_dataset_splits(cfg.dataset.split_params, task_level=task_level)
+        preprocessor.load_dataset_splits(cfg.dataset.split_params)
     )
     # Prepare datamodule
     if cfg.dataset.parameters.task_level in ["node", "graph"]:

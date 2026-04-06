@@ -23,8 +23,6 @@ class TBModel(LightningModule):
         The backbone wrapper class (default: None).
     feature_encoder : torch.nn.Module, optional
         The feature encoder (default: None).
-    learning_setting: str | None = None,
-        The learning setting (default: None).
     evaluator : Any, optional
         The evaluator class (default: None).
     optimizer : Any, optional
@@ -40,7 +38,6 @@ class TBModel(LightningModule):
         loss: torch.nn.Module,
         backbone_wrapper: torch.nn.Module | None = None,
         feature_encoder: torch.nn.Module | None = None,
-        learning_setting: str | None = None,
         evaluator: Any = None,
         optimizer: Any = None,
         **kwargs,
@@ -74,9 +71,6 @@ class TBModel(LightningModule):
         # Loss function
         self.loss = loss
         self.task_level = self.readout.task_level
-
-        # Learning setting
-        self.learning_setting = learning_setting
 
         # Tracking best so far validation accuracy
         self.val_acc_best = MeanMetric()
@@ -161,9 +155,6 @@ class TBModel(LightningModule):
         self.state_str = "Training"
         model_out = self.model_step(batch)
 
-         # Get actual batch size (if graph, num_graphs, if node, num_nodes)
-        actual_batch_size = batch.num_graphs if hasattr(batch, "num_graphs") else 1
-
         # Update and log metrics
         loss_value = model_out["loss"].item()
         self.log(
@@ -172,7 +163,7 @@ class TBModel(LightningModule):
             on_step=False,
             on_epoch=True,
             prog_bar=True,
-            batch_size=actual_batch_size,
+            batch_size=1,
         )
 
         # Return loss for backpropagation step
@@ -191,9 +182,6 @@ class TBModel(LightningModule):
         self.state_str = "Validation"
         model_out = self.model_step(batch)
 
-        # Get actual batch size (if graph, num_graphs, if node, num_nodes)
-        actual_batch_size = batch.num_graphs if hasattr(batch, "num_graphs") else 1
-
         # Log Loss
         loss_value = model_out["loss"].item()
         self.log(
@@ -202,7 +190,7 @@ class TBModel(LightningModule):
             on_step=False,
             on_epoch=True,
             prog_bar=True,
-            batch_size=actual_batch_size,
+            batch_size=1,
         )
 
     def test_step(self, batch: Data, batch_idx: int) -> None:
@@ -218,9 +206,6 @@ class TBModel(LightningModule):
         self.state_str = "Test"
         model_out = self.model_step(batch)
 
-        # Get actual batch size (if graph, num_graphs, if node, num_nodes)
-        actual_batch_size = batch.num_graphs if hasattr(batch, "num_graphs") else 1
-
         # Log loss
         loss_value = model_out["loss"].item()
         self.log(
@@ -229,7 +214,7 @@ class TBModel(LightningModule):
             on_step=False,
             on_epoch=True,
             prog_bar=True,
-            batch_size=actual_batch_size,
+            batch_size=1,
         )
 
     def process_outputs(self, model_out: dict, batch: Data) -> dict:
@@ -248,17 +233,17 @@ class TBModel(LightningModule):
             Dictionary containing the updated model output.
         """
         # Get the correct mask
-        if self.learning_setting == "transductive":
-            if self.state_str == "Training":
-                mask = batch.train_mask
-            elif self.state_str == "Validation":
-                mask = batch.val_mask
-            elif self.state_str == "Test":
-                mask = batch.test_mask
-            else:
-                raise ValueError("Invalid state_str")
+        if self.state_str == "Training":
+            mask = batch.train_mask
+        elif self.state_str == "Validation":
+            mask = batch.val_mask
+        elif self.state_str == "Test":
+            mask = batch.test_mask
+        else:
+            raise ValueError("Invalid state_str")
 
-            # Filter Outputs and labels according to mask
+        if self.task_level == "node":
+            # Keep only train data points
             for key, val in model_out.items():
                 if key in ["logits", "labels"]:
                     model_out[key] = val[mask]
