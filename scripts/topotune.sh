@@ -13,6 +13,7 @@
 
 export SELECTED_GPUS="0,1,2,3,4,5,6,7" 
 wandb_entity="gbg141-hopse"
+RESUME=false  # Set to true to skip already-completed runs (reads SUCCESSFUL_RUNS.log)
 
 # ==============================================================================
 # SECTION 1: LOGGING & ENVIRONMENT SETUP
@@ -28,9 +29,14 @@ echo "=========================================================="
 echo " Preparing log directory: $LOG_DIR"
 echo "=========================================================="
 
-# 1.2 Clean up old logs to ensure a fresh run
-if [ -d "$LOG_DIR" ]; then rm -r "$LOG_DIR"; fi
-mkdir -p "$LOG_DIR"
+# 1.2 Log directory management
+if [[ "$RESUME" == "true" ]]; then
+    echo "⏩ RESUME MODE: Keeping existing logs."
+    mkdir -p "$LOG_DIR"
+else
+    if [ -d "$LOG_DIR" ]; then rm -r "$LOG_DIR"; fi
+    mkdir -p "$LOG_DIR"
+fi
 
 # 1.3 Robust Dependency Loading
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
@@ -337,6 +343,26 @@ for combo in valid:
 }
 
 # ==============================================================================
+# SECTION 5.5: RESUME — LOAD COMPLETED RUNS
+# ==============================================================================
+
+declare -A _completed_runs
+if [[ "$RESUME" == "true" ]]; then
+    # run_and_log nests: $LOG_DIR/$log_group/SUCCESSFUL_RUNS.log
+    _success_log="$LOG_DIR/$log_group/SUCCESSFUL_RUNS.log"
+    if [[ -f "$_success_log" ]]; then
+        while IFS= read -r _line; do
+            # Format: "DATE: [SUCCESS] run_name"
+            _rname="${_line##*\[SUCCESS\] }"
+            _completed_runs["$_rname"]=1
+        done < "$_success_log"
+        echo "✔ Loaded ${#_completed_runs[@]} completed runs to skip."
+    else
+        echo "⚠️  No SUCCESSFUL_RUNS.log found at $_success_log — nothing to skip."
+    fi
+fi
+
+# ==============================================================================
 # SECTION 6: MAIN EXECUTION LOOP
 # ==============================================================================
 
@@ -346,6 +372,7 @@ echo "----------------------------------------------------------"
 
 total_runs=0
 run_counter=0
+skipped_completed=0
 one_percent_step=1
 
 while IFS=";" read -r col1 col2; do
@@ -367,6 +394,12 @@ while IFS=";" read -r col1 col2; do
     # 6.2 Parse Run Data
     run_name="$col1"
     dynamic_args_str="$col2"
+
+    # 6.2.1 Skip if already completed (RESUME mode)
+    if [[ "$RESUME" == "true" && -n "${_completed_runs[$run_name]+x}" ]]; then
+        ((skipped_completed++))
+        continue
+    fi
 
     # 6.3 Update Progress
     ((run_counter++))
@@ -416,6 +449,7 @@ while IFS=";" read -r col1 col2; do
         "trainer.devices=[${current_gpu}]"
         "+logger.wandb.entity=${wandb_entity}"
         "logger.wandb.project=${dynamic_project_name}"
+        "logger.wandb.name=${run_name}"
     )
 
     # 6.6 Execute
@@ -429,7 +463,7 @@ done < <(generate_combinations)
 # SECTION 7: CLEANUP
 # ==============================================================================
 echo "----------------------------------------------------------"
-echo " All jobs launched ($run_counter total)."
+echo " All jobs launched ($run_counter total, $skipped_completed skipped as already completed)."
 echo " Waiting for remaining background jobs to finish..."
 echo "----------------------------------------------------------"
 wait
