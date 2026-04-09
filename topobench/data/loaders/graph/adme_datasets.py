@@ -167,13 +167,13 @@ class ADMEDatasetLoader(AbstractLoader):
 
                 pyg_graph = Data(
                     x=torch.tensor(
-                        graph_dict["node_feat"], dtype=torch.long
+                        graph_dict["node_feat"], dtype=torch.float
                     ),
                     edge_index=torch.tensor(
                         graph_dict["edge_index"], dtype=torch.long
                     ),
                     edge_attr=torch.tensor(
-                        graph_dict["edge_feat"], dtype=torch.long
+                        graph_dict["edge_feat"], dtype=torch.float
                     ),
                     y=label_tensor,
                     num_nodes=graph_dict["num_nodes"],
