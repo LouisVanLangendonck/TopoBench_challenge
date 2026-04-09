@@ -1,8 +1,8 @@
 #!/bin/bash
 # ==============================================================================
-# SCRIPT: hopse_m_baselines.sh
+# SCRIPT: topotune.sh
 # DESCRIPTION:
-#   Runs a scalable hyperparameter sweep for HOPSE_M models across both
+#   Runs a scalable hyperparameter sweep for TopoTune models across both
 #   simplicial and cellular domains.
 #   - ARCHITECTURE: Uses a "Cartesian Product" generation strategy.
 #   - CONCURRENCY: Uses "Virtual Slots" to run N jobs per GPU.
@@ -13,7 +13,7 @@
 
 export SELECTED_GPUS="0,1,2,3,4,5,6,7" 
 wandb_entity="gbg141-hopse"
-RESUME=true  # Set to true to skip already-completed runs (reads SUCCESSFUL_RUNS.log)
+RESUME=false  # Set to true to skip already-completed runs (reads SUCCESSFUL_RUNS.log)
 
 # ==============================================================================
 # SECTION 1: LOGGING & ENVIRONMENT SETUP
@@ -22,7 +22,7 @@ RESUME=true  # Set to true to skip already-completed runs (reads SUCCESSFUL_RUNS
 # 1.1 Define Project Identifiers
 script_name="$(basename "${BASH_SOURCE[0]}" .sh)"
 project_name="${script_name}"
-log_group="hopse_m_sweep"
+log_group="topotune_sweep"
 LOG_DIR="./logs/${log_group}"
 
 echo "=========================================================="
@@ -143,13 +143,13 @@ for i in "${!gpus[@]}"; do slot_pids[$i]=0; done
 # ==============================================================================
 
 # --- Models (both domains) ---
-# Use "alias::hydra_value" to disambiguate run names (both share basename "hopse_m").
+# Use "alias::hydra_value" to disambiguate run names (both share basename "topotune").
 models=(
-    "sim_hopse_m::simplicial/hopse_m"
-    "cell_hopse_m::cell/hopse_m"
+    "sim_topotune::simplicial/topotune"
+    "cell_topotune::cell/topotune"
 )
 
-# --- Datasets ---
+# --- Datasets (same as hopse_m) ---
 datasets=(
     # "graph/MUTAG"
     # "graph/cocitation_cora"
@@ -164,7 +164,7 @@ datasets=(
     "simplicial/mantra_betti_numbers"
 )
 
-# --- Neighborhoods (8 configs from the original HOPSE study) ---
+# --- Neighborhoods (same as hopse_m) ---
 # Use "alias::hydra_value" format for readable run names.
 neighborhoods=(
     "adj1::[up_adjacency-0]"
@@ -174,14 +174,8 @@ neighborhoods=(
     "inc2::[up_incidence-0,up_incidence-1,2-up_incidence-0,down_incidence-1,down_incidence-2,2-down_incidence-2]"
 )
 
-# --- Encodings (two families to compare) ---
-encodings=(
-    "pse::[LapPE,RWSE,ElectrostaticPE,HKdiagSE]"
-    "fe::[HKFE,KHopFE,PPRFE]"
-)
-
-# --- Hyperparameters (superset across all dataset groups) ---
-num_layers=(1 2 4)
+# --- Hyperparameters (same as hopse_m) ---
+gnn_num_layers=(1 2 4)
 hidden_channels=(128 256)
 proj_dropouts=(0.25 0.5)
 lrs=(0.01 0.001)
@@ -196,7 +190,6 @@ FIXED_ARGS=(
     "trainer.check_val_every_n_epoch=5"
     "callbacks.early_stopping.patience=10"
     "delete_checkpoint_after_test=True"
-    "+combined_feature_encodings.preprocessor_device='cuda'"
 )
 
 
@@ -206,17 +199,21 @@ FIXED_ARGS=(
 #
 # Values support an optional "alias::hydra_value" syntax for readable names.
 # The generator also filters out invalid model+dataset combos.
+#
+# Key differences from hopse_m:
+#   - Neighborhoods: model.backbone.neighborhoods (not model.preprocessing_params.neighborhoods)
+#   - GNN layers:    model.backbone.GNN.num_layers (not model.backbone.n_layers)
+#   - No encodings dimension (TopoTune does not use HOPSE PSE/FE encodings)
 # ==============================================================================
 
 SWEEP_CONFIG=(
     # --- LEVEL 1: SLOWEST CHANGING (Outer Loops) ---
     "|model|${models[*]}"
     "|dataset|${datasets[*]}"
-    "N|model.preprocessing_params.neighborhoods|${neighborhoods[*]}"
-    "enc|model.preprocessing_params.encodings|${encodings[*]}"
+    "N|model.backbone.neighborhoods|${neighborhoods[*]}"
 
     # --- LEVEL 2: HYPERPARAMETERS ---
-    "L|model.backbone.n_layers|${num_layers[*]}"
+    "L|model.backbone.GNN.num_layers|${gnn_num_layers[*]}"
     "h|model.feature_encoder.out_channels|${hidden_channels[*]}"
     "pdro|model.feature_encoder.proj_dropout|${proj_dropouts[*]}"
     "lr|optimizer.parameters.lr|${lrs[*]}"
@@ -452,7 +449,7 @@ while IFS=";" read -r col1 col2; do
         "trainer.devices=[${current_gpu}]"
         "+logger.wandb.entity=${wandb_entity}"
         "logger.wandb.project=${dynamic_project_name}"
-        "+logger.wandb.name=${run_name}"
+        "logger.wandb.name=${run_name}"
     )
 
     # 6.6 Execute

@@ -6,6 +6,7 @@ import time
 
 import torch
 import torch_geometric
+from filelock import FileLock
 from torch_geometric.io import fs
 from tqdm import tqdm
 
@@ -42,17 +43,28 @@ class PreProcessor(torch_geometric.data.InMemoryDataset):
             pre_transform = self.instantiate_pre_transform(
                 data_dir, transforms_config
             )
-            # Record the time taken for preprocessing
-            start_time = time.time()
-            super().__init__(
-                self.processed_data_dir, None, pre_transform, **kwargs
+
+            # 1. Ensure the target directory exists so we can place a lock file in it
+            os.makedirs(self.processed_data_dir, exist_ok=True)
+            lock_path = os.path.join(
+                self.processed_data_dir, "preprocessing.lock"
             )
+
+            start_time = time.time()
+
+            with FileLock(lock_path):
+                # When Process 1 finishes, Process 2 checks, sees data.pt, and skips.
+                super().__init__(
+                    self.processed_data_dir, None, pre_transform, **kwargs
+                )
+                self.save_transform_parameters()
+
             end_time = time.time()
             self.preprocessing_time = end_time - start_time
+
             self.transform = (
                 dataset.transform if hasattr(dataset, "transform") else None
             )
-            self.save_transform_parameters()
             self.load(self.processed_paths[0])
             self.data_list = [data for data in self]
         else:
@@ -110,26 +122,53 @@ class PreProcessor(torch_geometric.data.InMemoryDataset):
         torch_geometric.transforms.Compose
             Pre-transform object.
         """
+        from torch_geometric.transforms import ToDevice
+
         if transforms_config.keys() == {"liftings"}:
             transforms_config = transforms_config.liftings
-        # Check if this is a single transform config (has transform_name key)
-        # or multiple transforms config (each value is a dict with transform_name)
+
         if "transform_name" in transforms_config:
-            # Single transform configuration
-            pre_transforms_dict = {
-                transforms_config.transform_name: DataTransform(
-                    **transforms_config
-                )
-            }
+            config_items = [
+                (transforms_config.transform_name, transforms_config)
+            ]
         else:
-            # Multiple transforms configuration
-            pre_transforms_dict = {
-                key: DataTransform(**value)
-                for key, value in transforms_config.items()
-            }
+            config_items = transforms_config.items()
+
+        pre_transforms_list = []
+        pre_transforms_dict = {}
+
+        # Track where the graph currently lives in the pipeline
+        current_device = "cpu"
+
+        for key, value in config_items:
+            kwargs = dict(value)
+
+            requested_device = kwargs.pop("preprocessor_device", "cpu")
+
+            target_device = (
+                "cuda"
+                if requested_device == "cuda" and torch.cuda.is_available()
+                else "cpu"
+            )
+
+            transform_instance = DataTransform(**kwargs)
+            pre_transforms_dict[key] = transform_instance
+
+            if target_device != current_device:
+                pre_transforms_list.append(ToDevice(target_device))
+                current_device = target_device
+
+            pre_transforms_list.append(transform_instance)
+
+        # If the pipeline ends while the graph is still on the GPU,
+        # we MUST pull it back to the CPU before PyTorch Geometric saves it to disk.
+        if current_device == "cuda":
+            pre_transforms_list.append(ToDevice("cpu"))
+
         pre_transforms = torch_geometric.transforms.Compose(
-            list(pre_transforms_dict.values())
+            pre_transforms_list
         )
+
         self.set_processed_data_dir(
             pre_transforms_dict, data_dir, transforms_config
         )
@@ -198,7 +237,9 @@ class PreProcessor(torch_geometric.data.InMemoryDataset):
             print(f"\nApplying transforms to {len(data_list)} graphs...")
             self.data_list = [
                 self.pre_transform(d)
-                for d in tqdm(data_list, desc="Processing graphs", unit="graph")
+                for d in tqdm(
+                    data_list, desc="Processing graphs", unit="graph"
+                )
             ]
         else:
             self.data_list = data_list

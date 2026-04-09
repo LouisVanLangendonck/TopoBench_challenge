@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# SCRIPT: hopse_m_baselines.sh
+# SCRIPT: gat.sh
 # DESCRIPTION:
 #   Runs a scalable hyperparameter sweep for HOPSE_M models across both
 #   simplicial and cellular domains.
@@ -9,11 +9,6 @@
 #   - ORDERING: Prioritizes running all seeds for a config before moving on.
 #   - FILTERING: Skips invalid model+dataset combos (cell + simplicial data).
 # ==============================================================================
-# DO NOT MISS THIS
-
-export SELECTED_GPUS="0,1,2,3,4,5,6,7" 
-wandb_entity="gbg141-hopse"
-RESUME=true  # Set to true to skip already-completed runs (reads SUCCESSFUL_RUNS.log)
 
 # ==============================================================================
 # SECTION 1: LOGGING & ENVIRONMENT SETUP
@@ -22,21 +17,17 @@ RESUME=true  # Set to true to skip already-completed runs (reads SUCCESSFUL_RUNS
 # 1.1 Define Project Identifiers
 script_name="$(basename "${BASH_SOURCE[0]}" .sh)"
 project_name="${script_name}"
-log_group="hopse_m_sweep"
+log_group="gat_sweep"
 LOG_DIR="./logs/${log_group}"
+wandb_entity="gbg141-hopse"
 
 echo "=========================================================="
 echo " Preparing log directory: $LOG_DIR"
 echo "=========================================================="
 
-# 1.2 Log directory management
-if [[ "$RESUME" == "true" ]]; then
-    echo "⏩ RESUME MODE: Keeping existing logs."
-    mkdir -p "$LOG_DIR"
-else
-    if [ -d "$LOG_DIR" ]; then rm -r "$LOG_DIR"; fi
-    mkdir -p "$LOG_DIR"
-fi
+# 1.2 Clean up old logs to ensure a fresh run
+if [ -d "$LOG_DIR" ]; then rm -r "$LOG_DIR"; fi
+mkdir -p "$LOG_DIR"
 
 # 1.3 Robust Dependency Loading
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
@@ -61,14 +52,7 @@ else
     exit 1
 fi
 
-# ==============================================================================
-# CPU THREAD LIMITS (Crucial for concurrency)
-# ==============================================================================
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
-export VECLIB_MAXIMUM_THREADS=1
-export NUMEXPR_NUM_THREADS=1
+
 # ==============================================================================
 # SECTION 2: HARDWARE & CONCURRENCY (Auto-Detected)
 # ==============================================================================
@@ -76,6 +60,8 @@ export NUMEXPR_NUM_THREADS=1
 # 2.1 Auto-detect GPUs and determine jobs-per-GPU from VRAM.
 # Output format: "JOBS_PER_GPU gpu_id_0 gpu_id_1 ..."
 # Thresholds: >= 80 GB -> 4 jobs, <= 30 GB -> 2 jobs, between -> 3 jobs.
+export SELECTED_GPUS="2,3,4,5,6,7" 
+
 _gpu_info=$(python3 -c "
 import subprocess
 import os
@@ -109,8 +95,6 @@ try:
     min_mem_gb = min(mem_mb) / 1024
     if min_mem_gb >= 80:
         jobs = 4
-    elif min_mem_gb <= 10:
-        jobs = 1
     elif min_mem_gb <= 30:
         jobs = 2
     else:
@@ -142,42 +126,34 @@ for i in "${!gpus[@]}"; do slot_pids[$i]=0; done
 # SECTION 3: EXPERIMENT PARAMETERS
 # ==============================================================================
 
-# --- Models (both domains) ---
-# Use "alias::hydra_value" to disambiguate run names (both share basename "hopse_m").
+# --- Models ---
 models=(
-    "sim_hopse_m::simplicial/hopse_m"
-    "cell_hopse_m::cell/hopse_m"
+    "gat::graph/gat"
 )
 
 # --- Datasets ---
 datasets=(
-    # "graph/MUTAG"
-    # "graph/cocitation_cora"
-    # "graph/PROTEINS"
-    # "graph/NCI1"
-    # "graph/NCI109"
-    # "graph/ZINC"
-    # "graph/cocitation_citeseer"
-    # "graph/cocitation_pubmed"
+    "graph/MUTAG"
+    "graph/cocitation_cora"
+    "graph/PROTEINS"
+    "graph/NCI1"
+    "graph/NCI109"
+    "graph/ZINC"
+    "graph/cocitation_citeseer"
+    "graph/cocitation_pubmed"
     "simplicial/mantra_name"
     "simplicial/mantra_orientation"
     "simplicial/mantra_betti_numbers"
 )
 
-# --- Neighborhoods (8 configs from the original HOPSE study) ---
-# Use "alias::hydra_value" format for readable run names.
-neighborhoods=(
-    "adj1::[up_adjacency-0]"
-    "adj2::[up_adjacency-0,2-up_adjacency-0]"
-    "adj3::[up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2]"
-    "inc1::[up_incidence-0,2-up_incidence-0]"
-    "inc2::[up_incidence-0,up_incidence-1,2-up_incidence-0,down_incidence-1,down_incidence-2,2-down_incidence-2]"
-)
-
-# --- Encodings (two families to compare) ---
-encodings=(
-    "pse::[LapPE,RWSE,ElectrostaticPE,HKdiagSE]"
-    "fe::[HKFE,KHopFE,PPRFE]"
+# --- Transforms (Hydra: configs/transforms/<name>.yaml) ---
+# combined_pe / combined_fe nest data_manipulations under CombinedPSEs / CombinedFEs (encoding lists in those YAMLs).
+# Extra Hydra flags: @@@ between full key=value pieces, e.g.
+#   "pse::combined_pe@@@transforms.CombinedPSEs.encodings=[LapPE,RWSE]"
+transform_presets=(
+    "notf::no_transform"
+    "pse::combined_pe@@@transforms.CombinedPSEs.encodings=[LapPE,RWSE,ElectrostaticPE,HKdiagSE]"
+    "fe::combined_fe@@@transforms.CombinedFEs.encodings=[HKFE,KHopFE,PPRFE]"
 )
 
 # --- Hyperparameters (superset across all dataset groups) ---
@@ -194,9 +170,7 @@ FIXED_ARGS=(
     "trainer.max_epochs=500"
     "trainer.min_epochs=50"
     "trainer.check_val_every_n_epoch=5"
-    "callbacks.early_stopping.patience=10"
-    "delete_checkpoint_after_test=True"
-    "+combined_feature_encodings.preprocessor_device='cuda'"
+    "callbacks.early_stopping.patience=5"
 )
 
 
@@ -205,6 +179,7 @@ FIXED_ARGS=(
 # Format: "ShortTag | HydraKey | ${Array[*]}"
 #
 # Values support an optional "alias::hydra_value" syntax for readable names.
+# Use @@@ in hydra_value to emit several space-separated CLI overrides (see transform_presets).
 # The generator also filters out invalid model+dataset combos.
 # ==============================================================================
 
@@ -212,11 +187,10 @@ SWEEP_CONFIG=(
     # --- LEVEL 1: SLOWEST CHANGING (Outer Loops) ---
     "|model|${models[*]}"
     "|dataset|${datasets[*]}"
-    "N|model.preprocessing_params.neighborhoods|${neighborhoods[*]}"
-    "enc|model.preprocessing_params.encodings|${encodings[*]}"
+    "tf|transforms|${transform_presets[*]}"
 
     # --- LEVEL 2: HYPERPARAMETERS ---
-    "L|model.backbone.n_layers|${num_layers[*]}"
+    "L|model.backbone.num_layers|${num_layers[*]}"
     "h|model.feature_encoder.out_channels|${hidden_channels[*]}"
     "pdro|model.feature_encoder.proj_dropout|${proj_dropouts[*]}"
     "lr|optimizer.parameters.lr|${lrs[*]}"
@@ -338,7 +312,13 @@ for combo in valid:
             name_parts.append(f'{tag}{clean_val}')
         else:
             name_parts.append(clean_val)
-        cmd_args.append(f'{key}={actual_val}')
+        if '@@@' in actual_val:
+            for part in actual_val.split('@@@'):
+                part = part.strip()
+                if part:
+                    cmd_args.append(part)
+        else:
+            cmd_args.append(f'{key}={actual_val}')
 
     run_name = '_'.join(name_parts)
     print(f'{run_name};' + ' '.join(cmd_args))
@@ -346,28 +326,30 @@ for combo in valid:
 }
 
 # ==============================================================================
-# SECTION 5.5: RESUME — LOAD COMPLETED RUNS
-# ==============================================================================
-
-declare -A _completed_runs
-if [[ "$RESUME" == "true" ]]; then
-    # run_and_log nests: $LOG_DIR/$log_group/SUCCESSFUL_RUNS.log
-    _success_log="$LOG_DIR/$log_group/SUCCESSFUL_RUNS.log"
-    if [[ -f "$_success_log" ]]; then
-        while IFS= read -r _line; do
-            # Format: "DATE: [SUCCESS] run_name"
-            _rname="${_line##*\[SUCCESS\] }"
-            _completed_runs["$_rname"]=1
-        done < "$_success_log"
-        echo "✔ Loaded ${#_completed_runs[@]} completed runs to skip."
-    else
-        echo "⚠️  No SUCCESSFUL_RUNS.log found at $_success_log — nothing to skip."
-    fi
-fi
-
-# ==============================================================================
 # SECTION 6: MAIN EXECUTION LOOP
 # ==============================================================================
+
+# If IFS was polluted, read can split transforms=combined_pe; Hydra then errors on bare "combined_pe".
+repair_hydra_transforms_arg() {
+    local -n _r=$1
+    local out=() i
+    for ((i = 0; i < ${#_r[@]}; i++)); do
+        local t="${_r[i]}"
+        if [[ "$t" == transforms=* ]]; then
+            out+=("$t")
+        elif [[ "$t" == "transforms" && $((i + 1)) -lt ${#_r[@]} ]]; then
+            local nxt="${_r[$((i + 1))]}"
+            [[ "$nxt" == *"="* ]] && { out+=("$t"); continue; }
+            out+=("transforms=$nxt")
+            ((i++))
+        elif [[ "$t" =~ ^(combined_pe|combined_fe|no_transform)$ ]]; then
+            out+=("transforms=$t")
+        else
+            out+=("$t")
+        fi
+    done
+    _r=("${out[@]}")
+}
 
 echo "----------------------------------------------------------"
 echo " Generating experiment combinations..."
@@ -375,7 +357,6 @@ echo "----------------------------------------------------------"
 
 total_runs=0
 run_counter=0
-skipped_completed=0
 one_percent_step=1
 
 while IFS=";" read -r col1 col2; do
@@ -397,12 +378,6 @@ while IFS=";" read -r col1 col2; do
     # 6.2 Parse Run Data
     run_name="$col1"
     dynamic_args_str="$col2"
-
-    # 6.2.1 Skip if already completed (RESUME mode)
-    if [[ "$RESUME" == "true" && -n "${_completed_runs[$run_name]+x}" ]]; then
-        ((skipped_completed++))
-        continue
-    fi
 
     # 6.3 Update Progress
     ((run_counter++))
@@ -432,7 +407,9 @@ while IFS=";" read -r col1 col2; do
 
     # 6.5 Prepare Command
     current_gpu=${gpus[$assigned_slot]}
-    read -ra DYNAMIC_ARGS_ARRAY <<< "$dynamic_args_str"
+    # Must not use inherited IFS (e.g. IFS== splits transforms=combined_pe → bare "combined_pe" for Hydra)
+    IFS=$' \t\n' read -ra DYNAMIC_ARGS_ARRAY <<< "$dynamic_args_str"
+    repair_hydra_transforms_arg DYNAMIC_ARGS_ARRAY
 
     # --- Extract dataset name for dynamic W&B project ---
     dataset_val=""
@@ -452,11 +429,12 @@ while IFS=";" read -r col1 col2; do
         "trainer.devices=[${current_gpu}]"
         "+logger.wandb.entity=${wandb_entity}"
         "logger.wandb.project=${dynamic_project_name}"
-        "+logger.wandb.name=${run_name}"
     )
 
-    # 6.6 Execute
-    run_and_log "${cmd[*]}" "$log_group" "$run_name" "$LOG_DIR" &
+    # 6.6 Execute — printf %q so run_and_log's eval keeps key=value overrides as single words
+    # (broken IFS or nullglob in the parent shell can otherwise split transforms=combined_pe, etc.)
+    cmd_eval=$(printf '%q ' "${cmd[@]}")
+    run_and_log "${cmd_eval% }" "$log_group" "$run_name" "$LOG_DIR" &
     slot_pids[$assigned_slot]=$!
 
 done < <(generate_combinations)
@@ -466,7 +444,7 @@ done < <(generate_combinations)
 # SECTION 7: CLEANUP
 # ==============================================================================
 echo "----------------------------------------------------------"
-echo " All jobs launched ($run_counter total, $skipped_completed skipped as already completed)."
+echo " All jobs launched ($run_counter total)."
 echo " Waiting for remaining background jobs to finish..."
 echo "----------------------------------------------------------"
 wait
