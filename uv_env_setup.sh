@@ -66,17 +66,6 @@ if ! uv sync --python 3.11 --all-extras; then
 fi
 
 # ------------------------------------------------------------------------------
-# Install PyTDC (no-deps to avoid bloat)
-# ------------------------------------------------------------------------------
-echo ""
-echo "🧬 Installing PyTDC (no-deps)..."
-if ! uv pip install PyTDC --no-deps; then
-    echo "❌ PyTDC installation failed."
-    return 1 2>/dev/null || exit 1
-fi
-echo "✅ PyTDC installed without dependencies"
-
-# ------------------------------------------------------------------------------
 # Finalize
 # ------------------------------------------------------------------------------
 source .venv/bin/activate
