@@ -1056,7 +1056,9 @@ def set_preserve_edge_attr(model_name, default=True):
     bool
         Default if the model can preserve edge attributes, False otherwise.
     """
-    if model_name in ["sann", "hopse_m", "hopse_g"]:
+    if model_name in ["hopse_m", "hopse_g"]:
+        return True
+    elif model_name in ["sann"]:
         return False
     else:
         return default

@@ -33,6 +33,7 @@ dependencies=[
     "scipy",
     "requests",
     "scikit-learn",
+    "huggingface_hub",
     "matplotlib",
     "networkx",
     "pandas",
