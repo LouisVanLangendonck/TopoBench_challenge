@@ -100,12 +100,12 @@ class GraphTriangleInducedCC(Graph2CombinatorialLifting):
         Create a list of pairs with the starts and lengths of hyperedges in ascending order of hyperedge size.
 
         Parameters
-        ------------
+        ----------
         hyperedges : torch.tensor
             A tensor with two rows: the first one for hyperedge indices, the second one for node indices.
 
         Returns
-        --------
+        -------
         list
             A list of pairs (start, length) sorted according to length (ascending).
         """
