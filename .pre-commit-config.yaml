@@ -12,7 +12,10 @@ repos:
       - id: fix-byte-order-marker
       - id: check-case-conflict
       - id: check-merge-conflict
+      - id: check-ast
+      - id: check-json
       - id: check-yaml
+      - id: check-symlinks
       - id: mixed-line-ending
         args:
           - --fix=no
