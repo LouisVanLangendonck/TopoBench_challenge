@@ -332,7 +332,7 @@ def read_us_county_demos(path, year=2012, y_col="Election"):
 
     # Get new values for FIPS from current index
     # To understand why please print stat.iloc[[516, 517, 518, 519, 520]] for 2012 year
-    # Basically the FIPS values has been shifted
+    # Basically the FIPS values have been shifted
     stat["FIPS"] = stat.reset_index()["index"]
 
     # Create Election variable

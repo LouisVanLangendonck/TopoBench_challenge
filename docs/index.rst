@@ -7,7 +7,7 @@
    :width: 1000px
 
 `TopoBench` (TB) is a modular Python library designed to standardize benchmarking and accelerate research in Topological Deep Learning (TDL).
-In particular, TB allows to train and compare the performances of all sorts of Topological Neural Networks (TNNs) across the different topological domains,
+In particular, TB allows training and comparing the performances of all sorts of Topological Neural Networks (TNNs) across the different topological domains,
 where by *topological domain* we refer to a graph, a simplicial complex, a cellular complex, or a hypergraph.
 
 .. figure:: https://github.com/geometric-intelligence/TopoBench/raw/main/resources/workflow.jpg
@@ -20,7 +20,7 @@ where by *topological domain* we refer to a graph, a simplicial complex, a cellu
 
 ``TopoBench`` (TB) is a modular Python library designed to standardize
 benchmarking and accelerate research in Topological Deep Learning (TDL).
-In particular, TB allows to train and compare the performances of all
+In particular, TB allows training and comparing the performances of all
 sorts of Topological Neural Networks (TNNs) across the different
 topological domains, where by *topological domain* we refer to a graph,
 a simplicial complex, a cellular complex, or a hypergraph. For detailed

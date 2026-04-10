@@ -48,7 +48,7 @@ class TestCollateFunction:
         """Test the collate function.
 
         To test the collate function we use the TBDataloader class to create a dataloader that uses the collate function.
-        We then first check that the batched data has the expected shape. We then convert the batched data back to a list and check that the data in the list is the same as the original data.
+        We first check that the batched data has the expected shape. We then convert the batched data back to a list and check that the data in the list is the same as the original data.
         """
 
         def check_shape(batch, elems, key):

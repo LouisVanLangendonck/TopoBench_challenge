@@ -6,7 +6,7 @@ from unittest.mock import PropertyMock
 class FlowMocker:
     """Flow mocker.
 
-    Mocker for the flow of the test. It allows to create mock objects and assert them.
+    Mocker for the flow of the test. It allows creating mock objects and asserting them.
 
     Parameters
     ----------
@@ -67,7 +67,7 @@ class FlowMocker:
                 if mock_alias is not None:
                     if mock_alias in self.mocks:
                         raise KeyError(
-                            f"`{mock_alias}` is already exist in mock dictionary"
+                            f"`{mock_alias}` already exists in mock dictionary"
                         )
                     self.mocks[mock_alias] = self.mocks[patch_obj]
 
