@@ -854,7 +854,7 @@ def _get_beta_params(mean, var):
 #     shape = (K, Ncols)
 #     Z = csr_matrix((data, (rowidx, colidx)), shape).todense()
 
-#     # delte empty cliques
+#     # delete empty cliques
 #     return Z[np.where(Z.sum(1) > 1)[0]]
 
 

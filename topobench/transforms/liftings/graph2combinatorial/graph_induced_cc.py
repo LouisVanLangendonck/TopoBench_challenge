@@ -141,7 +141,7 @@ def build_paths(overlap_pairs):
     Returns
     -------
     list
-        List of sequences of overlaping triangles.
+        List of sequences of overlapping triangles.
     """
     parent = {}
 
@@ -207,7 +207,7 @@ def find_overlapping_paths(lists):
     Returns
     -------
     list
-        List of sequences of overlaping triangles.
+        List of sequences of overlapping triangles.
     """
     one_element_overlap = []
     two_elements_overlap = []

@@ -13,9 +13,9 @@ loader:
 
 # Data definition
 parameters:
-  # In the case of higher-order datasets we have multiple feature dimentions
+  # In the case of higher-order datasets we have multiple feature dimensions
   num_features: [1,1,1]
-  #num_classes: 2 # Num classes depents on the task_variable
+  #num_classes: 2 # Num classes depends on the task_variable
 
   # Dataset parameters
   # task: classification     # TODO: adapt pipeline to support multilabel classification

@@ -12,7 +12,7 @@ from topobench.transforms.liftings.hypergraph2combinatorial.base import (
 class UniversalStrictLifting(Hypergraph2CombinatorialLifting):
     r"""Lift hypergraphs to combinatorial complexes.
 
-    It works by assinging the smallest rank values such that subcells of any cell have strictly smaller rank.
+    It works by assigning the smallest rank values such that subcells of any cell have strictly smaller rank.
 
     Parameters
     ----------

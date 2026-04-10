@@ -325,7 +325,7 @@ def read_us_county_demos(path, year=2012, y_col="Election"):
         edge_index
     )
 
-    # Conver mask to index
+    # Convert mask to index
     index = np.arange(mask.size(0))[mask]
     stat = stat.iloc[index]
     stat = stat.reset_index(drop=True)
