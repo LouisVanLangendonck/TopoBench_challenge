@@ -30,7 +30,7 @@ Assess how your model compares against state-of-the-art topological neural netwo
   <a href="#gear-neural-networks">Neural Networks</a> •
   <a href="#rocket-liftings-and-transforms">Liftings and Transforms</a> •
   <a href="#books-datasets">Datasets</a> •
-  <a href="#mag-references">References</a> 
+  <a href="#mag-references">References</a>
 </p>
 
 
@@ -94,7 +94,7 @@ uv sync --all-extras
 Once the environment is active, you can launch the TopoBench pipeline:
 ```bash
 # Using the activated virtual environment
-python -m topobench 
+python -m topobench
 
 # Or execute directly via uv without manual activation
 uv run python -m topobench
@@ -201,7 +201,7 @@ bash scripts/reproduce.sh
 
 ## :anchor: Tutorials
 
-Explore our [tutorials](https://github.com/geometric-intelligence/TopoBench/tree/main/tutorials) for further details on how to add new datasets, transforms/liftings, and benchmark tasks. 
+Explore our [tutorials](https://github.com/geometric-intelligence/TopoBench/tree/main/tutorials) for further details on how to add new datasets, transforms/liftings, and benchmark tasks.
 
 ## :gear: Neural Networks
 
@@ -264,13 +264,13 @@ We list the neural networks trained and evaluated by `TopoBench`, organized by t
 
 ## :rocket: Liftings and Transforms
 
-We list the liftings used in `TopoBench` to transform datasets. Here, a _lifting_ refers to a function that transforms a dataset defined on a topological domain (_e.g._, on a graph) into the same dataset but supported on a different topological domain (_e.g._, on a simplicial complex). 
+We list the liftings used in `TopoBench` to transform datasets. Here, a _lifting_ refers to a function that transforms a dataset defined on a topological domain (_e.g._, on a graph) into the same dataset but supported on a different topological domain (_e.g._, on a simplicial complex).
 
 ### <a name="structural_liftings"></a> Structural Liftings
 
 The structural lifting is responsible for the transformation of the underlying relationships or elements of the data. For instance, it might determine how nodes and edges in a graph are mapped into triangles and tetrahedra in a simplicial complex. This structural transformation can be further categorized into connectivity-based, where the mapping relies solely on the existing connections within the data, and feature-based, where the data's inherent properties or features guide the new structure.
 
-We enumerate below the structural liftings currently implemented in `TopoBench`; please check out the provided description links for further details. 
+We enumerate below the structural liftings currently implemented in `TopoBench`; please check out the provided description links for further details.
 
 **Remark:**: Most of these liftings are adaptations of winner submissions of the ICML TDL Challenge 2024 ([paper](https://proceedings.mlr.press/v251/bernardez24a.html) | [repo](https://github.com/pyt-team/challenge-icml-2024)); see the [Structural Liftings wiki](https://github.com/geometric-intelligence/TopoBench/wiki/Structural-Liftings) for a complete list of compatible liftings.
 
@@ -338,11 +338,11 @@ Feature liftings address the transfer of data attributes or features during mapp
 | ProjectionSum       | Projects r-cell features of a graph to r+1-cell structures utilizing incidence matrices \(B_{r}\). | All  |
 | ConcatenationLifting | Concatenate r-cell features to obtain r+1-cell features.                   | Simplicial        |
 
-### Data Transformations 
+### Data Transformations
 
 Specially useful in pre-processing steps, these are the general data manipulations currently implemented in `TopoBench`:
 
-| Transform | Description | 
+| Transform | Description |
 | --- | --- |
 | OneHotDegreeFeatures | Adds the node degree as one hot encodings to the node features. |
 | NodeFeaturesToFloat |Converts the node features of the input graph to float. |
@@ -473,12 +473,12 @@ If you find `TopoBench` useful, we would appreciate if you cite us!
 
 <details>
 <summary><b> More information regarding Topological Deep Learning </b></summary>
-  
+
   [Topological Graph Signal Compression](https://arxiv.org/pdf/2308.11068)
-  
+
   [Architectures of Topological Deep Learning: A Survey on Topological Neural Networks](https://par.nsf.gov/servlets/purl/10477141)
-  
-  [TopoX: a suite of Python packages for machine learning on topological domains](https://arxiv.org/pdf/2402.02441)	
+
+  [TopoX: a suite of Python packages for machine learning on topological domains](https://arxiv.org/pdf/2402.02441)
 </details>
 
 ---

@@ -40,12 +40,12 @@ class TestNeighborhoodComplexLifting:
 
     def has_neighbour(self, simplex_points: list[set]) -> tuple[bool, set[int]]:
         """Verify that the maximal simplices of Data representation of a simplicial complex share a neighbour.
-        
+
         Parameters
         ----------
         simplex_points : list[set]
             A list of sets representing the maximal simplices of a simplicial complex.
-        
+
         Returns
         -------
         bool
