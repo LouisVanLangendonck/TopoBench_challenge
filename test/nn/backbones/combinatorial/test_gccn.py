@@ -376,4 +376,3 @@ def test_topotune_src_rank_larger_than_dst_rank():
     for rank in [0, 1, 2]:
         assert rank in output
         assert output[rank].shape == getattr(batch, f"x_{rank}").shape
-

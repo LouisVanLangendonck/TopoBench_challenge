@@ -181,4 +181,3 @@ def test_JumpLinkConv(random_graph_input):
         },
     ])
     auto_test.run()
-

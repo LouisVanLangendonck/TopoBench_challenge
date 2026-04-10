@@ -291,4 +291,3 @@ for cmd in "${commands[@]}"; do
     echo "Running: $cmd"
     run_command "$cmd"
 done
-

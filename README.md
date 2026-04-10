@@ -490,4 +490,3 @@ Feel free to reach out via email if you want to collaborate, do your thesis with
 
 📧 **Contact Email:** [topological.intelligence@gmail.com](mailto:topological.intelligence@gmail.com)  
 ▶️ **YouTube Channel:** [Topological Intelligence](https://www.youtube.com/@TopologicalIntelligence)
-

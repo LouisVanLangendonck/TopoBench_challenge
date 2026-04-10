@@ -108,4 +108,3 @@ class TestLatentCliqueCoverLifting:
         assert input_edge_set.issubset(
             latent_edge_set
         ), "the set of 0-simplices of the inferred latent SC is not contained the set of edges of the input graph"
-

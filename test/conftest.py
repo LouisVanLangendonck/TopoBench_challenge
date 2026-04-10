@@ -270,4 +270,3 @@ def random_graph_input():
     x_2 = torch.randn(num_nodes*2, d_feat_2)
 
     return x, x_1, x_2, edges_1, edges_2
-
