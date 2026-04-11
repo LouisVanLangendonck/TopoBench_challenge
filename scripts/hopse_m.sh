@@ -108,7 +108,7 @@ try:
         
     min_mem_gb = min(mem_mb) / 1024
     if min_mem_gb >= 80:
-        jobs = 4
+        jobs = 5
     elif min_mem_gb <= 10:
         jobs = 1
     elif min_mem_gb <= 30:
@@ -185,7 +185,7 @@ num_layers=(1 2 4)
 hidden_channels=(128 256)
 proj_dropouts=(0.25 0.5)
 lrs=(0.01 0.001)
-weight_decays=(0 0.0001)
+weight_decays=(0.0001)
 batch_sizes=(128 256)
 DATA_SEEDS=(0 3 5 7 9)
 
