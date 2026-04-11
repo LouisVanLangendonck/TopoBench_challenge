@@ -62,7 +62,8 @@ dependencies=[
     "torch-cluster",
     "rdkit-pypi",
     "PyTDC==1.1.15",
-    "setuptools",
+    # PyTDC imports pkg_resources; setuptools>=82 dropped it.
+    "setuptools>=69,<82",
 ]
 
 [project.optional-dependencies]
