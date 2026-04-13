@@ -112,7 +112,7 @@ try:
     elif min_mem_gb <= 10:
         jobs = 1
     elif min_mem_gb <= 30:
-        jobs = 2
+        jobs = 4
     else:
         jobs = 3
         
@@ -192,7 +192,7 @@ encodings=(
 )
 
 # --- Hyperparameters (superset across all dataset groups) ---
-num_layers=(1 2 4)
+num_layers=(1 2)
 hidden_channels=(128)
 proj_dropouts=(0.25)
 lrs=(0.001)
@@ -205,7 +205,7 @@ FIXED_ARGS=(
     "trainer.max_epochs=500"
     "trainer.min_epochs=50"
     "trainer.check_val_every_n_epoch=5"
-    "callbacks.early_stopping.patience=10"
+    "callbacks.early_stopping.patience=20"
     "delete_checkpoint_after_test=True"
     "+combined_feature_encodings.preprocessor_device='cuda'"
 )
