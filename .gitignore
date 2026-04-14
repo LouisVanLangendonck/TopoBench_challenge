@@ -189,6 +189,11 @@ notebooks/tmp
 /tutorials/lightning_logs/
 /tutorials/datasets/
 
+# scripts
+scripts/hopse_plotting/csvs
+scripts/hopse_plotting/plots
+scripts/hopse_plotting/tables
+
 # wandb
 wandb/
 result_BREC/
