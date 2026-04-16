@@ -449,7 +449,7 @@ while IFS=";" read -r col1 col2; do
         "trainer.devices=[${current_gpu}]"
         "+logger.wandb.entity=${wandb_entity}"
         "logger.wandb.project=${dynamic_project_name}"
-        "logger.wandb.name=${run_name}"
+        "+logger.wandb.name=${run_name}"
     )
 
     # 6.6 Execute
