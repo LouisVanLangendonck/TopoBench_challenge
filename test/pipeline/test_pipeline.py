@@ -14,7 +14,7 @@ class TestPipeline:
     def setup_method(self):
         """Setup method."""
         hydra.core.global_hydra.GlobalHydra.instance().clear()
-    
+
     def test_pipeline(self):
         """Test pipeline."""
         with hydra.initialize(config_path="../../configs", job_name="job"):
