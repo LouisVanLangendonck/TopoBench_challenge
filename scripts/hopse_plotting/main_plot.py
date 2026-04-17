@@ -5,8 +5,14 @@ optionally save a publication-style figure comparing models across datasets.
 
 Chooses the hyperparameter row with optimal validation mean for the dataset's
 ``dataset.parameters.monitor_metric`` (higher-is-better vs lower-is-better from
-``MONITOR_METRIC_OPTIMIZATION`` in ``utils``). The output includes paired
+``MONITOR_METRIC_OPTIMIZATION`` in ``utils``), using ``utils.collapse_aggregated_wandb_csv`` /
+``iter_best_val_group_picks`` — the **same** best-val rule as ``table_generator`` and the
+winner-row selection in ``best_rerun_sh_generator``. The output includes paired
 train/val/test **mean** and **std** columns from the aggregated CSV.
+
+Seed aggregation and reruns assume the export includes all swept config columns listed in
+``utils.CONFIG_PARAM_KEYS`` (e.g. HOPSE_G ``transforms.hopse_encoding.pretrain_model``,
+SANN ``transforms.sann_encoding.*``); see ``main_loader`` / ``aggregator`` docs.
 
 The figure uses one column per dataset (max 4 per row), bars = models, error bars
 from the **test** split by default (mean ± std); configs are still **chosen** using
@@ -100,7 +106,7 @@ def _model_domain(m: str) -> str:
 
 
 def model_category(m: str) -> str:
-    """Coarse family for color + strip ordering (MPNN, TopoTune, HOPSE)."""
+    """Coarse family for color + strip ordering (MPNN, TopoTune, SANN, SCCNN, CWN, HOPSE)."""
     s = str(m).lower()
     b = _model_basename(m)
     if "hopse_g" in s or b == "hopse_g":
@@ -109,15 +115,30 @@ def model_category(m: str) -> str:
         return "hopse_m"
     if "topotune" in s or b == "topotune":
         return "topotune"
+    if b.startswith("sann"):
+        return "sann"
+    if b.startswith("sccnn"):
+        return "sccnn"
+    if b == "cwn":
+        return "cwn"
     if b in ("gcn", "gin", "gat"):
         return "mpnn"
     return "other"
 
 
-# Panel / legend order: MPNN, TopoTune (cell then simplicial), HOPSE-M (cell, sim), HOPSE-G (cell, sim).
-_CATEGORY_ORDER = {"mpnn": 0, "topotune": 1, "hopse_m": 2, "hopse_g": 3, "other": 4}
+# Panel / legend order: MPNN, TopoTune, SANN, SCCNN, CWN, HOPSE-M, HOPSE-G, then other.
+_CATEGORY_ORDER = {
+    "mpnn": 0,
+    "topotune": 1,
+    "sann": 2,
+    "sccnn": 3,
+    "cwn": 4,
+    "hopse_m": 5,
+    "hopse_g": 6,
+    "other": 7,
+}
 _MPNN_ORDER = {"gcn": 0, "gin": 1, "gat": 2}
-# cell before simplicial within TopoTune / each HOPSE line
+# cell before simplicial within TopoTune / SANN / each HOPSE line
 _DOMAIN_SORT = {"cell": 0, "simplicial": 1, "graph": 2}
 
 # MPNN: yellow -> orange -> red
@@ -130,6 +151,11 @@ _HOPSE_M_CELL_HEX = "#C8E6F5"
 _HOPSE_M_SIM_HEX = "#7DB6E8"
 _HOPSE_G_CELL_HEX = "#3D78B8"
 _HOPSE_G_SIM_HEX = "#0C335C"
+# SANN: warm amber (cell lighter, simplicial deeper) — distinct from TopoTune greens
+_SANN_CELL_HEX = "#F39C12"
+_SANN_SIM_HEX = "#B9770E"
+_SCCNN_HEX = "#8E44AD"
+_CWN_HEX = "#1ABC9C"
 _OTHER_HEX = "#6E6E6E"
 
 
@@ -144,7 +170,7 @@ def model_display_sort_key(m: str) -> tuple:
     cat_i = _CATEGORY_ORDER[cat]
     if cat == "mpnn":
         return (cat_i, _MPNN_ORDER.get(b, 9), m.lower())
-    if cat in ("topotune", "hopse_m", "hopse_g"):
+    if cat in ("topotune", "hopse_m", "hopse_g", "sann", "sccnn", "cwn"):
         return (cat_i, _domain_sort_key(m), m.lower())
     return (cat_i, b, m.lower())
 
@@ -180,6 +206,17 @@ def color_for_model(m: str) -> tuple:
             h = _HOPSE_G_SIM_HEX
         else:
             h = _HOPSE_G_SIM_HEX
+    elif cat == "sann":
+        if dom == "cell":
+            h = _SANN_CELL_HEX
+        elif dom == "simplicial":
+            h = _SANN_SIM_HEX
+        else:
+            h = _SANN_SIM_HEX
+    elif cat == "sccnn":
+        h = _SCCNN_HEX
+    elif cat == "cwn":
+        h = _CWN_HEX
     else:
         h = _OTHER_HEX
     return matplotlib.colors.to_rgb(h)

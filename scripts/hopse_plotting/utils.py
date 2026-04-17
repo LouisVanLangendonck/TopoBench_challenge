@@ -50,6 +50,19 @@ CONFIG_PARAM_KEYS: list[str] = [
     "transforms",
     "transforms.CombinedPSEs.encodings",
     "transforms.CombinedFEs.encodings",
+    # SANN sweeps (``scripts/sann.sh``): k-hop transform + backbone/complex dims.
+    "transforms.sann_encoding.max_hop",
+    "transforms.sann_encoding.complex_dim",
+    "transforms.sann_encoding.max_rank",
+    # HOPSE_G / GPSE (``scripts/hopse_g.sh``): without ``pretrain_model``, molpcba vs zinc
+    # runs merge in seed aggregation (2 checkpoints × 5 seeds → ``n_seeds==10``).
+    "transforms.hopse_encoding.pretrain_model",
+    "transforms.hopse_encoding.neighborhoods",
+    "transforms.hopse_encoding.max_hop",
+    "transforms.hopse_encoding.max_rank",
+    "transforms.hopse_encoding.complex_dim",
+    "model.feature_encoder.selected_dimensions",
+    "model.backbone.complex_dim",
     "model.preprocessing_params.neighborhoods",
     "model.preprocessing_params.encodings",
     "model.backbone.neighborhoods",
@@ -87,9 +100,30 @@ HYDRA_WHOLE_NUMBER_OVERRIDE_KEYS: frozenset[str] = frozenset(
         "model.backbone.num_layers",
         "model.backbone.n_layers",
         "model.backbone.GNN.num_layers",
+        "model.backbone.complex_dim",
         "model.feature_encoder.out_channels",
+        "transforms.sann_encoding.max_hop",
+        "transforms.sann_encoding.complex_dim",
+        "transforms.sann_encoding.max_rank",
+        "transforms.hopse_encoding.max_hop",
+        "transforms.hopse_encoding.max_rank",
+        "transforms.hopse_encoding.complex_dim",
         "dataset.dataloader_params.batch_size",
         "dataset.split_params.data_seed",
+    }
+)
+
+# W&B CSV cells often store OmegaConf/JSON lists as ``["a","b"]``; sweep scripts pass
+# bracket lists without inner quotes (``[a,b]``). Normalize for CLI reproducibility.
+HYDRA_JSON_LIST_TO_BRACKET_KEYS: frozenset[str] = frozenset(
+    {
+        "transforms.CombinedPSEs.encodings",
+        "transforms.CombinedFEs.encodings",
+        "model.preprocessing_params.neighborhoods",
+        "model.preprocessing_params.encodings",
+        "transforms.hopse_encoding.neighborhoods",
+        "model.backbone.neighborhoods",
+        "model.feature_encoder.selected_dimensions",
     }
 )
 
@@ -209,8 +243,17 @@ def _serialize_cell(x: Any) -> str:
 
 
 def get_from_flat(flat: Mapping[str, Any], dotted: str) -> Any:
+    """Resolve a Hydra-style dotted key from W&B ``run.config`` (after ``flatten_config``).
+
+    Lightning/W&B sometimes flatten nested hparams with ``/`` instead of ``.``; try both so
+    sweep axes like ``transforms.sann_encoding.max_hop`` are not dropped (else seed
+    aggregation can merge 3×5 runs into one bucket with ``n_seeds==15``).
+    """
     if dotted in flat:
         return flat[dotted]
+    slashy = dotted.replace(".", "/")
+    if slashy in flat:
+        return flat[slashy]
     return ""
 
 
@@ -339,17 +382,21 @@ def collect_all_runs(
             proj = expected_project_name(model, ds)
             if verbose:
                 _filt = f"state={run_state}" if run_state else "all states"
-                print(f"  (fetch) {entity}/{proj} ({_filt})")
+                print(f"  (fetch) {entity}/{proj} ({_filt})", flush=True)
             try:
-                runs = list(iter_runs(api, entity, proj, state=run_state))
+                runs_gen = iter_runs(api, entity, proj, state=run_state)
+                count = 0
+                for run in runs_gen:
+                    rows.append(run_to_row(entity=entity, project=proj, run=run))
+                    count += 1
+                    if verbose and count % 250 == 0:
+                        print(f"    … {count} run(s) so far", flush=True)
             except Exception as e:
                 if verbose:
-                    print(f"    (skip) {e}")
+                    print(f"    (skip) {e}", flush=True)
                 continue
             if verbose:
-                print(f"    -> {len(runs)} run(s)")
-            for run in runs:
-                rows.append(run_to_row(entity=entity, project=proj, run=run))
+                print(f"    -> {count} run(s)", flush=True)
     return rows
 
 
@@ -461,7 +508,9 @@ def aggregate_wandb_export_by_seed(
     std_df = g[summary_metric_columns].std(ddof=0)
     std_df.columns = [f"{c}__std" for c in std_df.columns]
 
-    out = pd.concat([n_seeds, mean_df, std_df], axis=1).reset_index()
+    # ``n_seeds`` is a Series; concat with empty metric frames (no summary cols / no rows)
+    # must be 2D+2D or pandas 2.x raises "unaligned mixed dimensional NDFrame objects".
+    out = pd.concat([n_seeds.to_frame(), mean_df, std_df], axis=1).reset_index()
 
     # Stable metric column order: sort by base summary name, mean then std each
     metric_sorted = sorted(summary_metric_columns)
@@ -475,19 +524,78 @@ def aggregate_wandb_export_by_seed(
     return out
 
 
+def build_seed_bucket_report(
+    aggregated_df: pd.DataFrame,
+    *,
+    model_col: str = "model",
+    dataset_col: str = "dataset",
+    n_seeds_col: str = "n_seeds",
+) -> pd.DataFrame:
+    """
+    Count hyperparameter groups (rows of a seed-aggregated frame) by how many
+    raw runs were merged per group, broken down by (model, dataset).
+
+    Columns: ``model``, ``dataset``, ``n_seeds``, ``n_groups``,
+    ``pct_of_groups`` (percent of groups within that model+dataset, 0--100).
+    """
+    if aggregated_df.empty:
+        return pd.DataFrame(
+            columns=[model_col, dataset_col, n_seeds_col, "n_groups", "pct_of_groups"]
+        )
+    missing = [c for c in (model_col, dataset_col, n_seeds_col) if c not in aggregated_df.columns]
+    if missing:
+        raise KeyError(f"seed bucket report: missing column(s): {missing}")
+
+    work = aggregated_df[[model_col, dataset_col, n_seeds_col]].copy()
+    work[n_seeds_col] = pd.to_numeric(work[n_seeds_col], errors="coerce").astype("Int64")
+    counts = (
+        work.groupby([model_col, dataset_col, n_seeds_col], dropna=False)
+        .size()
+        .rename("n_groups")
+        .reset_index()
+    )
+    totals = counts.groupby([model_col, dataset_col], dropna=False)["n_groups"].transform("sum")
+    counts["pct_of_groups"] = (counts["n_groups"] / totals * 100.0).round(2)
+    return counts.sort_values([model_col, dataset_col, n_seeds_col]).reset_index(drop=True)
+
+
+def filter_aggregated_to_required_n_seeds(
+    aggregated_df: pd.DataFrame,
+    required_n_seeds: int,
+    *,
+    n_seeds_col: str = "n_seeds",
+) -> pd.DataFrame:
+    """Keep only hyperparameter groups with exactly ``required_n_seeds`` runs."""
+    if n_seeds_col not in aggregated_df.columns:
+        raise KeyError(f"filter aggregated: missing {n_seeds_col!r}")
+    ns = pd.to_numeric(aggregated_df[n_seeds_col], errors="coerce")
+    return aggregated_df.loc[ns == required_n_seeds].copy()
+
+
 def aggregate_wandb_export_csv(
     input_path: str | Path,
     output_path: str | Path,
     *,
     summary_metric_columns: list[str] | None = None,
-) -> pd.DataFrame:
-    """Load export CSV, aggregate by seed, write ``output_path``, return frame."""
+    required_n_seeds: int | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Load export CSV, aggregate by seed, optionally keep only groups with an
+    exact run count, write ``output_path``.
+
+    Returns ``(written_frame, seed_bucket_report)`` where the report is built
+    from the aggregate **before** filtering on ``required_n_seeds``.
+    """
     df = load_wandb_export_csv(input_path)
     agg = aggregate_wandb_export_by_seed(df, summary_metric_columns=summary_metric_columns)
+    report = build_seed_bucket_report(agg)
+    if required_n_seeds is not None:
+        agg = filter_aggregated_to_required_n_seeds(agg, required_n_seeds)
+    agg = agg.fillna("")
     out_p = Path(output_path)
     out_p.parent.mkdir(parents=True, exist_ok=True)
     agg.to_csv(out_p, index=False)
-    return agg
+    return agg, report
 
 
 def _union_column_order(frames: list[pd.DataFrame]) -> list[str]:
@@ -507,16 +615,20 @@ def aggregate_many_wandb_export_csvs(
     output_path: str | Path,
     *,
     summary_metric_columns: list[str] | None = None,
-) -> pd.DataFrame:
+    required_n_seeds: int | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """
     Load multiple per-run export CSVs (e.g. loader shards), aggregate each by
-    seed, concatenate rows, and write one combined seed-aggregated CSV.
+    seed, concatenate rows, optionally filter to an exact ``n_seeds``, and
+    write one combined seed-aggregated CSV.
 
     Shards should partition runs (e.g. one file per model or per dataset) so
     hyperparameter groups are not duplicated across files.
 
-    Always writes **one** CSV to ``output_path`` (full concatenation of all
-    seed-aggregated rows).
+    The seed bucket report is computed on the **concatenated** unfiltered
+    aggregate (same keys as a single monolithic export).
+
+    Returns ``(written_frame, seed_bucket_report)``.
     """
     paths = [Path(p) for p in input_paths]
     if not paths:
@@ -529,11 +641,15 @@ def aggregate_many_wandb_export_csvs(
 
     cols = _union_column_order(frames)
     out = pd.concat(frames, ignore_index=True, sort=False)
-    out = out.reindex(columns=cols).fillna("")
+    out = out.reindex(columns=cols)
+    report = build_seed_bucket_report(out)
+    if required_n_seeds is not None:
+        out = filter_aggregated_to_required_n_seeds(out, required_n_seeds)
+    out = out.fillna("")
     out_p = Path(output_path)
     out_p.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(out_p, index=False)
-    return out
+    return out, report
 
 
 # -----------------------------------------------------------------------------
@@ -697,6 +813,43 @@ def _serialize_hydra_cli_value(val: Any) -> str | None:
     return s
 
 
+def normalize_json_list_string_for_hydra_cli(s: str) -> str:
+    """
+    If ``s`` is a JSON array, return a Hydra-style bracket list ``[a,b,c]`` (no spaces
+    after commas): string elements as in ``gat.sh`` / ``hopse_m.sh``; integer elements
+    as in ``sann.sh`` (``model.feature_encoder.selected_dimensions``).
+
+    Otherwise return ``s`` unchanged (already ``[a,b]``, not JSON, or invalid).
+    """
+    t = s.replace("\r", "").strip()
+    if len(t) < 2 or t[0] != "[":
+        return s
+    try:
+        parsed = json.loads(t)
+    except json.JSONDecodeError:
+        return s
+    if not isinstance(parsed, list) or not parsed:
+        return s
+    if all(isinstance(x, str) and x for x in parsed):
+        return "[" + ",".join(parsed) + "]"
+    if all(isinstance(x, bool) for x in parsed):
+        return s
+    if all(isinstance(x, int) for x in parsed):
+        return "[" + ",".join(str(x) for x in parsed) + "]"
+    if all(isinstance(x, (int, float)) for x in parsed):
+        try:
+            ints: list[int] = []
+            for x in parsed:
+                xf = float(x)
+                if not xf.is_integer():
+                    return s
+                ints.append(int(xf))
+            return "[" + ",".join(str(x) for x in ints) + "]"
+        except (TypeError, ValueError):
+            return s
+    return s
+
+
 def _coerce_whole_number_override(key: str, s: str) -> str:
     """Emit 1 instead of 1.0 for keys that must be integers in YAML / native code."""
     if key not in HYDRA_WHOLE_NUMBER_OVERRIDE_KEYS or not s:
@@ -734,6 +887,8 @@ def hydra_overrides_from_aggregated_row(
             continue
         if key == "dataset":
             s = hydra_dataset_key_from_loader_identity(s)
+        if key in HYDRA_JSON_LIST_TO_BRACKET_KEYS:
+            s = normalize_json_list_string_for_hydra_cli(s)
         s = _coerce_whole_number_override(key, s)
         out.append(f"{key}={s}")
     return out

@@ -39,16 +39,13 @@ from utils import (
 
 WANDB_ENTITY = "gbg141-hopse"
 
-MODELS = ["gin", "gat", "gcn", "topotune", "hopse_m", "hopse_g"]
+MODELS = ['hopse_g']#["gin", "gat", "gcn", "topotune", "hopse_m", "hopse_g", "sann", "sccnn", "cwn"]
 
 DATASETS = [
     "graph/MUTAG",
-    "graph/cocitation_cora",
     "graph/PROTEINS",
     "graph/NCI1",
     "graph/NCI109",
-    "graph/cocitation_citeseer",
-    "graph/cocitation_pubmed",
     "simplicial/mantra_name",
     "simplicial/mantra_orientation",
     "simplicial/mantra_betti_numbers",

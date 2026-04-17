@@ -2,14 +2,21 @@
 """
 Build a LaTeX table (booktabs / multirow / cell colors) from a **seed-aggregated**
 W&B CSV: for each (model, dataset), pick the hyperparameter row with best **validation**
-mean (same rule as ``collapse_aggregated_wandb_by_best_val``), then read **test**
+mean — same implementation as ``main_plot`` / ``collapse_aggregated_wandb_csv`` via
+``utils.iter_best_val_group_picks`` (default ``group_cols``: ``model``, ``dataset``;
+``monitor_column``: ``dataset.parameters.monitor_metric``), then read **test**
 ``test_best_rerun`` mean ± std from that row.
+
+The seed-aggregated CSV must include every sweep axis you care about (see
+``utils.CONFIG_PARAM_KEYS`` and ``main_loader`` export), or distinct configs can collapse
+during aggregation (e.g. missing ``transforms.hopse_encoding.pretrain_model`` for HOPSE_G).
 
 - **bestgray** + bold: best test value in the column (ties share the style).
 - **stdblue**: not significantly different from the column best at 95% confidence
   (two-sided Z on independent means in code; SE = seed-agg std / sqrt(n_seeds)).
 
-Model blocks: graph GCN/GAT/GIN; simplicial HOPSE-M, HOPSE-G, TopoTune; cell same trio.
+Model blocks: graph GCN/GAT/GIN; simplicial HOPSE-M, HOPSE-G, TopoTune, SCCNN
+(``simplicial/sccnn_custom``); cell HOPSE-M, HOPSE-G, TopoTune, CWN (``cell/cwn``).
 **Dataset columns** come from ``DATASETS`` in ``main_loader.py``, reordered so **all graph
 columns precede all simplicial**. By default **four** ``.tex`` files are written under ``tables/``:
 
@@ -27,6 +34,7 @@ Usage::
         --output-without-transductive scripts/hopse_plotting/tables/main_table_no_transductive.tex
     python scripts/hopse_plotting/table_generator.py --stdout
     python scripts/hopse_plotting/table_generator.py --skip-submodel-tables
+    python scripts/hopse_plotting/table_generator.py --group-by model dataset
 """
 
 from __future__ import annotations
@@ -332,6 +340,7 @@ def simplicial_submodel_table_rows() -> list[tuple[str, str]]:
         (r"simplicial/hopse_m|pe", r"\textbf{HOPSE-M-PE} (Our)"),
         (r"simplicial/hopse_g|default", r"\textbf{HOPSE-G} (Our)"),
         (r"simplicial/topotune|default", "TopoTune"),
+        (r"simplicial/sccnn_custom|default", "SCCNN"),
     ]
 
 
@@ -341,6 +350,7 @@ def cell_submodel_table_rows() -> list[tuple[str, str]]:
         (r"cell/hopse_m|pe", r"\textbf{HOPSE-M-PE} (Our)"),
         (r"cell/hopse_g|default", r"\textbf{HOPSE-G} (Our)"),
         (r"cell/topotune|default", "TopoTune"),
+        (r"cell/cwn|default", "CWN"),
     ]
 
 
@@ -351,14 +361,23 @@ def collect_winner_test_by_model_dataset(
 ) -> dict[tuple[str, str], dict[str, Any]]:
     """
     (model, dataset_canon) -> {test_mean, test_std, n_seeds, tail, mode, monitor_raw}.
+
+    ``group_cols`` must include ``model`` and ``dataset`` (same contract as
+    ``main_plot --group-by`` / ``collapse_aggregated_wandb_by_best_val``).
     """
+    if "model" not in group_cols or "dataset" not in group_cols:
+        raise ValueError("collect_winner_test_by_model_dataset: group_cols must include 'model' and 'dataset'")
     colset = set(df.columns)
     out: dict[tuple[str, str], dict[str, Any]] = {}
     for keys, pick_idx, monitor_val, tail in iter_best_val_group_picks(
         df, group_cols=list(group_cols), monitor_column=MONITOR_METRIC_COLUMN
     ):
-        model = str(keys[0]).strip()
-        dataset_raw = str(keys[1]).strip()
+        gk = keys if isinstance(keys, tuple) else (keys,)
+        if len(gk) != len(group_cols):
+            raise RuntimeError("groupby key length mismatch vs group_cols")
+        zd = dict(zip(group_cols, gk, strict=True))
+        model = str(zd["model"]).strip()
+        dataset_raw = str(zd["dataset"]).strip()
         dataset = hydra_dataset_key_from_loader_identity(dataset_raw)
         w = df.loc[pick_idx]
         mode: Literal["max", "min"] = optimization_mode_for_metric_tail(tail) if tail else "max"
@@ -671,10 +690,21 @@ def main() -> None:
             f"(default: {DEFAULT_LATEX_TABLE_TEX_NO_TRANS_SUBMODELS})"
         ),
     )
+    p.add_argument(
+        "--group-by",
+        metavar="COL",
+        nargs="+",
+        default=["model", "dataset"],
+        help=(
+            "Columns for best-val hyperparameter pick (default: model dataset). "
+            "Must include both model and dataset; same meaning as ``main_plot --group-by``."
+        ),
+    )
     args = p.parse_args()
 
+    group_cols = tuple(args.group_by)
     df = load_wandb_export_csv(args.input)
-    stats = collect_winner_test_by_model_dataset(df)
+    stats = collect_winner_test_by_model_dataset(df, group_cols=group_cols)
     stats_sub = (
         collect_winner_test_by_submodel(df) if not args.skip_submodel_tables else {}
     )
@@ -697,11 +727,13 @@ def main() -> None:
         ("simplicial/hopse_m", "\\textbf{HOPSE-M} (Our)"),
         ("simplicial/hopse_g", "\\textbf{HOPSE-G} (Our)"),
         ("simplicial/topotune", "TopoTune"),
+        ("simplicial/sccnn_custom", "SCCNN"),
     ]
     cell_rows_base: list[tuple[str, str]] = [
         ("cell/hopse_m", "\\textbf{HOPSE-M} (Our)"),
         ("cell/hopse_g", "\\textbf{HOPSE-G} (Our)"),
         ("cell/topotune", "TopoTune"),
+        ("cell/cwn", "CWN"),
     ]
 
     graph_rows_sub = graph_submodel_table_rows(stats_sub)

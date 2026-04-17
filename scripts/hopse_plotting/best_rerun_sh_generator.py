@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 From a **seed-aggregated** W&B CSV, pick the best validation row per (model, dataset)
-(same rule as ``collapse_aggregated_wandb_by_best_val`` / leaderboard plot), then emit
-**two** bash scripts with the same Hydra commands:
+(same rule as ``collapse_aggregated_wandb_by_best_val`` / ``main_plot`` / ``table_generator``:
+``utils.iter_best_val_group_picks``), then emit **two** bash scripts with the same Hydra commands:
 
 1. **Sequential** (default ``scripts/best_val_reruns_sequential.sh``): one ``python -m topobench``
    line after another (no GPU assignment; use ``--append-arg trainer.devices=[0]`` if needed).
@@ -11,8 +11,8 @@ From a **seed-aggregated** W&B CSV, pick the best validation row per (model, dat
    ``topotune/search_gccn_cell.sh``), then ``wait`` for all jobs.
 
 The aggregated export usually drops ``dataset.split_params.data_seed``; this script
-appends ``dataset.split_params.data_seed=...`` via ``--data-seed`` (default ``0``) so
-each rerun is a single concrete job.
+appends ``dataset.split_params.data_seed=...`` for each seed in ``--data-seeds`` (default
+the sweep set ``0,3,5,7,9``) so reruns match the original multi-seed protocol.
 
 Emitted ``.sh`` files use **LF** line endings only (``newline='\\n'``) so bash/WSL and Hydra
 are not broken by Windows CRLF.
@@ -25,15 +25,45 @@ By default only **non-transductive** loader datasets are emitted: ``main_loader.
 minus ``graph/cocitation_{cora,citeseer,pubmed}``. Use ``--all-datasets`` to emit every
 (model, dataset) group in the CSV.
 
-Every command also includes ``trainer.max_epochs`` and ``callbacks.early_stopping.patience``
-(sweep defaults: 500 / 10; override with ``--max-epochs`` / ``--early-stopping-patience``).
+**Training defaults** mirror the sweep scripts (``gat.sh`` / ``gcn.sh`` / ``hopse_m.sh`` /
+``topotune.sh`` / ``sann.sh`` / ``sccnn.sh`` / ``cwn.sh``): ``trainer.min_epochs=50``,
+``trainer.check_val_every_n_epoch=5``, plus model-specific extras (``delete_checkpoint_after_test``,
+HOPSE preprocessor device, and early-stopping patience 5 vs 10) when ``--fixed-args-profile auto``
+(default). TopoTune, SANN, SCCNN, and CWN share the same non-HOPSE block: patience 10 and
+``delete_checkpoint_after_test=True``. Use ``--fixed-args-profile none`` to omit those extras
+(not recommended for matching sweeps).
+
+Every command includes ``trainer.max_epochs`` (default 500) and ``callbacks.early_stopping.patience``
+(either ``--early-stopping-patience INT`` or, if omitted, 5 for ``graph/*{gin,gat,gcn}`` and 10
+for HOPSE / TopoTune / SANN / SCCNN / CWN under ``auto``).
+
+**Data seeds:** seed-aggregated CSVs drop ``dataset.split_params.data_seed``. By default this
+script emits **one command per sweep seed** (``--data-seeds 0,3,5,7,9``) for each best-val
+(model, dataset) row. Use ``--data-seeds 0`` to match the old single-seed behavior. With
+``--keep-row-seed``, a per-run export that still has the seed column emits that seed only.
+
+Every rerun also sets ``deterministic=True`` (see ``configs/run.yaml``) so reviewers can
+reproduce runs; override last with ``--append-arg deterministic=False`` if needed.
+
 W&B logging matches ``hopse_m.sh`` style: ``+logger.wandb.entity``, ``logger.wandb.project`` (same
 project for every line by default: ``best_runs_rerun``), and ``+logger.wandb.name`` derived from
-model/dataset. Disable with ``--no-wandb-logger`` or override via ``--append-arg`` (appended last).
+model/dataset (and seed when multiple). Disable with ``--no-wandb-logger`` or override via
+``--append-arg`` (appended last).
 
 Further extras: ``--append-arg`` (e.g. ``trainer.devices=[0]``; later args override earlier).
 On the **parallel** script, ``--append-arg trainer.devices=...`` overrides the round-robin GPU
 for that slot (still appended last).
+
+**Hydra overrides from the winner row** use ``utils.hydra_overrides_from_aggregated_row`` with
+``utils.CONFIG_PARAM_KEYS`` (same column contract as ``main_loader`` / seed aggregation). That
+includes sweep axes that must be present for correct reruns, for example:
+
+- **HOPSE_G / GPSE** — ``transforms.hopse_encoding.pretrain_model`` (and related
+  ``transforms.hopse_encoding.*`` keys) so molpcba vs zinc checkpoints are not dropped.
+- **SANN** — ``transforms.sann_encoding.*``, ``model.feature_encoder.selected_dimensions``, etc.
+
+Only non-empty cells become ``key=value`` flags; re-export from W&B after extending
+``CONFIG_PARAM_KEYS`` so the seed-aggregated CSV carries those columns.
 
 Usage::
 
@@ -42,6 +72,7 @@ Usage::
         -o scripts/best_val_reruns_sequential.sh \\
         --output-parallel scripts/best_val_reruns_parallel.sh
     python scripts/hopse_plotting/best_rerun_sh_generator.py --parallel-gpus 0,1,2,3
+    python scripts/hopse_plotting/best_rerun_sh_generator.py --data-seeds 0
     python scripts/hopse_plotting/best_rerun_sh_generator.py --no-parallel-script
 """
 
@@ -55,6 +86,7 @@ import pandas as pd
 
 from main_loader import DATASETS as LOADER_DATASETS
 from utils import (
+    CONFIG_PARAM_KEYS,
     DEFAULT_AGGREGATED_EXPORT_CSV,
     SEED_COLUMN,
     aggregated_rows_best_validation_per_group,
@@ -69,9 +101,11 @@ _DEFAULT_SCRIPTS_DIR = Path(__file__).resolve().parent.parent
 DEFAULT_EMIT_SH_SEQUENTIAL = _DEFAULT_SCRIPTS_DIR / "best_val_reruns_sequential.sh"
 DEFAULT_EMIT_SH_PARALLEL = _DEFAULT_SCRIPTS_DIR / "best_val_reruns_parallel.sh"
 
-# Match scripts/hopse_m.sh FIXED_ARGS (training length + early stopping only).
+# Match sweep scripts ``trainer.max_epochs=500``.
 DEFAULT_MAX_EPOCHS = 500
-DEFAULT_EARLY_STOPPING_PATIENCE = 10
+
+# Same order as ``DATA_SEEDS`` in ``gat.sh`` / ``hopse_m.sh`` / ``topotune.sh``.
+DEFAULT_SWEEP_DATA_SEEDS = "0,3,5,7,9"
 
 # Match scripts/hopse_m.sh wandb_entity= / logger.wandb.project (single project for all reruns).
 DEFAULT_WANDB_ENTITY = "gbg141-hopse"
@@ -126,34 +160,130 @@ def _parse_parallel_gpus(s: str) -> list[int]:
     return out if out else [0]
 
 
+def _parse_data_seeds(s: str) -> list[str]:
+    """Comma-separated ints -> string tokens for Hydra (``3`` not ``3.0``)."""
+    out: list[str] = []
+    for part in str(s).replace("\r", "").split(","):
+        p = part.strip()
+        if not p:
+            continue
+        x = float(p)
+        out.append(str(int(x)) if x.is_integer() else p)
+    return out if out else ["0"]
+
+
+def _resolve_fixed_args_profile(model: str, profile: str) -> str:
+    p = str(profile).replace("\r", "").strip().lower()
+    if p == "auto":
+        m = str(model).lower().replace("\r", "").strip()
+        if "hopse" in m:
+            return "hopse"
+        if "topotune" in m:
+            return "topotune"
+        # ``simplicial/sann``, ``cell/sann``, ``simplicial/sann_online``, …
+        if m.split("/")[-1].startswith("sann"):
+            return "sann"
+        # ``scripts/sccnn.sh`` — same FIXED_ARGS as TopoTune / ``scripts/cwn.sh``.
+        if m.split("/")[-1].startswith("sccnn"):
+            return "sccnn"
+        if m.split("/")[-1] == "cwn":
+            return "cwn"
+        if m.startswith("graph/gin") or m.startswith("graph/gat") or m.startswith("graph/gcn"):
+            return "graph"
+        if m.startswith("graph/"):
+            return "graph"
+        # Other models: TopoTune-style extras only — never HOPSE-only CUDA preprocessor.
+        return "topotune"
+    return p
+
+
+def _benchmark_training_extras(profile: str) -> list[str]:
+    """Pieces of ``FIXED_ARGS`` from sweep scripts (excluding max_epochs / early stopping)."""
+    if profile in ("", "none"):
+        return []
+    out = [
+        "trainer.min_epochs=50",
+        "trainer.check_val_every_n_epoch=5",
+    ]
+    if profile == "hopse":
+        out.extend(
+            [
+                "delete_checkpoint_after_test=True",
+                "+combined_feature_encodings.preprocessor_device='cuda'",
+            ]
+        )
+    elif profile in ("topotune", "sann", "sccnn", "cwn"):
+        out.append("delete_checkpoint_after_test=True")
+    return out
+
+
+def _default_early_stopping_patience(profile: str) -> int:
+    return 5 if profile == "graph" else 10
+
+
+def _row_data_seeds(
+    row,
+    *,
+    keep_row_seed: bool,
+    default_seeds: list[str],
+) -> list[str]:
+    if not keep_row_seed:
+        return list(default_seeds)
+    if SEED_COLUMN not in row:
+        return list(default_seeds)
+    raw = row[SEED_COLUMN]
+    if pd.isna(raw):
+        return list(default_seeds)
+    s = str(raw).replace("\r", "").strip()
+    if s == "" or s.lower() in {"nan", "none"}:
+        return list(default_seeds)
+    x = float(s)
+    return [str(int(x)) if x.is_integer() else s]
+
+
 def _base_hydra_parts_for_row(
     row,
     *,
     skip_seed: set[str],
     data_seed: str,
     max_epochs: int,
-    early_stopping_patience: int,
+    early_stopping_patience: int | None,
+    fixed_args_profile: str,
     wandb_entity: str | None,
     wandb_project: str | None,
     wandb_run_name: bool,
+    wandb_run_suffix: str,
 ) -> tuple[str, str, list[str]]:
     """Hydra overrides for one winner row (no ``--append-arg`` extras, no ``trainer.devices``)."""
     model = str(row.get("model", "")).replace("\r", "").strip()
     dataset_raw = str(row.get("dataset", "")).replace("\r", "").strip()
     dataset = hydra_dataset_key_from_loader_identity(dataset_raw)
-    parts = hydra_overrides_from_aggregated_row(row, skip_keys=skip_seed)
+    resolved_profile = _resolve_fixed_args_profile(model, fixed_args_profile)
+
+    parts = hydra_overrides_from_aggregated_row(
+        row,
+        config_keys=list(CONFIG_PARAM_KEYS),
+        skip_keys=skip_seed,
+    )
+    parts.extend(_benchmark_training_extras(resolved_profile))
     if not any(p.startswith(f"{SEED_COLUMN}=") for p in parts):
         parts.append(f"{SEED_COLUMN}={data_seed}")
     parts.append(f"trainer.max_epochs={max_epochs}")
-    parts.append(f"callbacks.early_stopping.patience={early_stopping_patience}")
+    es = (
+        early_stopping_patience
+        if early_stopping_patience is not None
+        else _default_early_stopping_patience(resolved_profile)
+    )
+    parts.append(f"callbacks.early_stopping.patience={int(es)}")
+    parts.append("deterministic=True")
     if wandb_entity and wandb_project:
         parts.append(f"+logger.wandb.entity={wandb_entity}")
         parts.append(f"logger.wandb.project={wandb_project}")
         if wandb_run_name:
-            wname = safe_filename_token(
-                f"{model.replace('/', '__')}__{dataset.replace('/', '__')}",
-                max_len=120,
-            )
+            base_nm = f"{model.replace('/', '__')}__{dataset.replace('/', '__')}"
+            if wandb_run_suffix:
+                base_nm = f"{base_nm}{wandb_run_suffix}"
+            wname = safe_filename_token(base_nm, max_len=120)
             parts.append(f"+logger.wandb.name={wname}")
     return model, dataset, parts
 
@@ -172,12 +302,13 @@ def emit_sequential_rerun_script(
     *,
     path: Path,
     interpreter: str,
-    data_seed: str,
+    data_seeds: list[str],
     append_args: list[str],
     keep_row_seed: bool,
     group_cols: list[str],
     max_epochs: int,
-    early_stopping_patience: int,
+    early_stopping_patience: int | None,
+    fixed_args_profile: str,
     wandb_entity: str | None,
     wandb_project: str | None,
     wandb_run_name: bool,
@@ -193,23 +324,32 @@ def emit_sequential_rerun_script(
         "",
     ]
 
+    n_cmd = 0
     for row in rows:
-        model, dataset, base = _base_hydra_parts_for_row(
-            row,
-            skip_seed=skip_seed,
-            data_seed=data_seed,
-            max_epochs=max_epochs,
-            early_stopping_patience=early_stopping_patience,
-            wandb_entity=wandb_entity,
-            wandb_project=wandb_project,
-            wandb_run_name=wandb_run_name,
-        )
-        parts = list(base)
-        parts.extend(app)
-        cmd = shlex.join([interpreter, "-m", "topobench", *parts])
-        lines.append(f"# {model}  |  {dataset}")
-        lines.append(cmd)
-        lines.append("")
+        seeds = _row_data_seeds(row, keep_row_seed=keep_row_seed, default_seeds=data_seeds)
+        multi = len(seeds) > 1
+        for data_seed in seeds:
+            suffix = f"__ds{data_seed}" if multi and wandb_run_name else ""
+            model, dataset, base = _base_hydra_parts_for_row(
+                row,
+                skip_seed=skip_seed,
+                data_seed=data_seed,
+                max_epochs=max_epochs,
+                early_stopping_patience=early_stopping_patience,
+                fixed_args_profile=fixed_args_profile,
+                wandb_entity=wandb_entity,
+                wandb_project=wandb_project,
+                wandb_run_name=wandb_run_name,
+                wandb_run_suffix=suffix,
+            )
+            parts = list(base)
+            parts.extend(app)
+            cmd = shlex.join([interpreter, "-m", "topobench", *parts])
+            seed_note = f"  |  data_seed={data_seed}" if multi else ""
+            lines.append(f"# {model}  |  {dataset}{seed_note}")
+            lines.append(cmd)
+            lines.append("")
+            n_cmd += 1
 
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -220,7 +360,7 @@ def emit_sequential_rerun_script(
         path.chmod(path.stat().st_mode | 0o111)
     except OSError:
         pass
-    return len(rows)
+    return n_cmd
 
 
 def emit_parallel_rerun_script(
@@ -228,12 +368,13 @@ def emit_parallel_rerun_script(
     *,
     path: Path,
     interpreter: str,
-    data_seed: str,
+    data_seeds: list[str],
     append_args: list[str],
     keep_row_seed: bool,
     group_cols: list[str],
     max_epochs: int,
-    early_stopping_patience: int,
+    early_stopping_patience: int | None,
+    fixed_args_profile: str,
     wandb_entity: str | None,
     wandb_project: str | None,
     wandb_run_name: bool,
@@ -258,29 +399,38 @@ def emit_parallel_rerun_script(
         "",
     ]
 
+    n_cmd = 0
     for row in rows:
-        model, dataset, base = _base_hydra_parts_for_row(
-            row,
-            skip_seed=skip_seed,
-            data_seed=data_seed,
-            max_epochs=max_epochs,
-            early_stopping_patience=early_stopping_patience,
-            wandb_entity=wandb_entity,
-            wandb_project=wandb_project,
-            wandb_run_name=wandb_run_name,
-        )
-        pre = shlex.join([interpreter, "-m", "topobench", *base])
-        post = shlex.join(app) if app else ""
-        # Bash sets _gpu then Hydra sees trainer.devices=[0] style (variable expands inside [...]).
-        dev_fragment = r"trainer.devices=[${_gpu}]"
-        if post:
-            cmd_body = f"{pre} {dev_fragment} {post}"
-        else:
-            cmd_body = f"{pre} {dev_fragment}"
-        lines.append(f"# {model}  |  {dataset}")
-        lines.append('_gpu="${GPUS[$((_i % _NUM_GPUS))]}"; _i=$((_i + 1))')
-        lines.append(f"{cmd_body} &")
-        lines.append("")
+        seeds = _row_data_seeds(row, keep_row_seed=keep_row_seed, default_seeds=data_seeds)
+        multi = len(seeds) > 1
+        for data_seed in seeds:
+            suffix = f"__ds{data_seed}" if multi and wandb_run_name else ""
+            model, dataset, base = _base_hydra_parts_for_row(
+                row,
+                skip_seed=skip_seed,
+                data_seed=data_seed,
+                max_epochs=max_epochs,
+                early_stopping_patience=early_stopping_patience,
+                fixed_args_profile=fixed_args_profile,
+                wandb_entity=wandb_entity,
+                wandb_project=wandb_project,
+                wandb_run_name=wandb_run_name,
+                wandb_run_suffix=suffix,
+            )
+            pre = shlex.join([interpreter, "-m", "topobench", *base])
+            post = shlex.join(app) if app else ""
+            # Bash sets _gpu then Hydra sees trainer.devices=[0] style (variable expands inside [...]).
+            dev_fragment = r"trainer.devices=[${_gpu}]"
+            if post:
+                cmd_body = f"{pre} {dev_fragment} {post}"
+            else:
+                cmd_body = f"{pre} {dev_fragment}"
+            seed_note = f"  |  data_seed={data_seed}" if multi else ""
+            lines.append(f"# {model}  |  {dataset}{seed_note}")
+            lines.append('_gpu="${GPUS[$((_i % _NUM_GPUS))]}"; _i=$((_i + 1))')
+            lines.append(f"{cmd_body} &")
+            lines.append("")
+            n_cmd += 1
 
     lines.append("wait")
     lines.append('echo "All parallel reruns finished."')
@@ -294,7 +444,7 @@ def emit_parallel_rerun_script(
         path.chmod(path.stat().st_mode | 0o111)
     except OSError:
         pass
-    return len(rows)
+    return n_cmd
 
 
 def main() -> None:
@@ -344,9 +494,12 @@ def main() -> None:
         help="Python executable (default: python)",
     )
     p.add_argument(
-        "--data-seed",
-        default="0",
-        help="Appended as dataset.split_params.data_seed=... for each rerun (default: 0)",
+        "--data-seeds",
+        default=DEFAULT_SWEEP_DATA_SEEDS,
+        help=(
+            "Comma-separated dataset.split_params.data_seed values; emits one command "
+            f"per best-val row per seed (default: {DEFAULT_SWEEP_DATA_SEEDS})"
+        ),
     )
     p.add_argument(
         "--max-epochs",
@@ -357,10 +510,23 @@ def main() -> None:
     p.add_argument(
         "--early-stopping-patience",
         type=int,
-        default=DEFAULT_EARLY_STOPPING_PATIENCE,
+        default=None,
+        metavar="N",
         help=(
-            "callbacks.early_stopping.patience=... for every command "
-            f"(default: {DEFAULT_EARLY_STOPPING_PATIENCE})"
+            "callbacks.early_stopping.patience=...; if omitted, uses 5 for graph "
+            "gin/gat/gcn and 10 for HOPSE / TopoTune / SANN / SCCNN / CWN under the resolved "
+            "--fixed-args-profile (see --fixed-args-profile)."
+        ),
+    )
+    p.add_argument(
+        "--fixed-args-profile",
+        choices=("auto", "graph", "hopse", "topotune", "sann", "sccnn", "cwn", "none"),
+        default="auto",
+        help=(
+            "Sweep-style extras after row overrides: min_epochs, check_val_every_n_epoch, "
+            "and model-specific flags (HOPSE: delete_checkpoint + preprocessor_device; "
+            "TopoTune / SANN / SCCNN / CWN: delete_checkpoint only). ``auto`` picks from the "
+            "model path (default: auto)."
         ),
     )
     p.add_argument(
@@ -373,7 +539,10 @@ def main() -> None:
     p.add_argument(
         "--keep-row-seed",
         action="store_true",
-        help="Emit dataset.split_params.data_seed from the CSV when present; else use --data-seed.",
+        help=(
+            "If the CSV still has dataset.split_params.data_seed (per-run export), emit only "
+            "that seed per row; otherwise use --data-seeds."
+        ),
     )
     p.add_argument(
         "--wandb-entity",
@@ -421,14 +590,23 @@ def main() -> None:
             f"{len(DEFAULT_RERUN_ALLOWED_HYDRA_DATASETS)} allowed Hydra paths)"
         )
 
+    if args.keep_row_seed and SEED_COLUMN not in df.columns:
+        print(
+            f"Note: --keep-row-seed but CSV has no {SEED_COLUMN!r} column "
+            f"(expected for seed-aggregated exports); using --data-seeds."
+        )
+
+    seeds = _parse_data_seeds(str(args.data_seeds).replace("\r", ""))
+
     common_kw = dict(
         interpreter=args.interpreter,
-        data_seed=str(args.data_seed).replace("\r", ""),
+        data_seeds=seeds,
         append_args=list(args.append_arg),
         keep_row_seed=args.keep_row_seed,
         group_cols=list(args.group_by),
         max_epochs=int(args.max_epochs),
-        early_stopping_patience=int(args.early_stopping_patience),
+        early_stopping_patience=args.early_stopping_patience,
+        fixed_args_profile=str(args.fixed_args_profile),
         wandb_entity=wb_ent,
         wandb_project=wb_proj,
         wandb_run_name=not args.no_wandb_run_name,

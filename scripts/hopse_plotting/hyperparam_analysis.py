@@ -16,7 +16,9 @@ y-axis label adds a bold **lower is better** line.
 - Otherwise → **violin plot** per category with **jittered dots** (one point per
   aggregated row / seed-mean run) on top.
 
-Does not modify ``main_loader``.
+Does not modify ``main_loader``. Any model id present in the CSV (including
+``simplicial/sccnn_custom``, ``cell/cwn``, ``cell/sann``, …) gets a
+``(model, dataset)`` folder automatically.
 
 Usage::
 
@@ -25,6 +27,7 @@ Usage::
     python scripts/hopse_plotting/hyperparam_analysis.py -i scripts/hopse_plotting/csvs/hopse_experiments_wandb_export_seed_agg.csv
     python scripts/hopse_plotting/hyperparam_analysis.py --from-raw -i scripts/hopse_plotting/csvs/hopse_experiments_wandb_export.csv -o plots/out
     python scripts/hopse_plotting/hyperparam_analysis.py --models cell/hopse_m simplicial/hopse_m
+    python scripts/hopse_plotting/hyperparam_analysis.py --models simplicial/sccnn_custom cell/cwn
     python scripts/hopse_plotting/hyperparam_analysis.py --datasets graph/MUTAG
 """
 
