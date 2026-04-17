@@ -375,12 +375,16 @@ Specially useful in pre-processing steps, these are the general data manipulatio
 | IMDB-BIN | Classification | Graph-level classification. | [Source](https://dl.acm.org/doi/10.1145/2783258.2783417) |
 | IMDB-MUL | Classification | Graph-level classification. | [Source](https://dl.acm.org/doi/10.1145/2783258.2783417) |
 | REDDIT | Classification | Graph-level classification. | [Source](https://proceedings.neurips.cc/paper_files/paper/2017/file/5dd9db5e033da9c6fb5ba83c7a7ebea9-Paper.pdf) |
+| GraphUniverse-IND | Classification | Synthetic Generator Inductive Node Classification. | [Source](https://openreview.net/forum?id=jRWxvQnqUt&noteId=jRWxvQnqUt) |
+| GraphUniverse-TRA | Classification | Synthetic Generator Transductive Node Classification. | [Source](https://openreview.net/forum?id=jRWxvQnqUt&noteId=jRWxvQnqUt) |
 | Amazon | Classification | Heterophilic dataset. | [Source](https://arxiv.org/pdf/1205.6233) |
 | Minesweeper | Classification | Heterophilic dataset. | [Source](https://arxiv.org/pdf/2302.11640) |
 | Empire | Classification | Heterophilic dataset. | [Source](https://arxiv.org/pdf/2302.11640) |
 | Tolokers | Classification | Heterophilic dataset. | [Source](https://arxiv.org/pdf/2302.11640) |
 | US-county-demos | Regression | In turn each node attribute is used as the target label. | [Source](https://arxiv.org/pdf/2002.08274) |
 | ZINC | Regression | Graph-level regression. | [Source](https://pubs.acs.org/doi/10.1021/ci3001277) |
+
+**Remark:** GraphUniverse is a synthetic graph generator for community-structured data, enabling control over graph properties like homophily, feature-signal and degree structure. Live Demo: [Demo](https://graphuniverse.streamlit.app/). Package release: [PyPi](https://pypi.org/project/graph-universe/0.1.2/). GitHub repository: [Repo](https://github.com/LouisVanLangendonck/GraphUniverse).
 
 
 ### Simplicial
