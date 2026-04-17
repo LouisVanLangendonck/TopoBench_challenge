@@ -212,6 +212,20 @@ class TestConfigResolvers:
         out = infer_in_khop_feature_dim(dataset_in_channels, max_hop)
         assert out == [[7, 14, 42, 133], [7, 28, 91, 294], [7, 21, 70, 231]]
 
+    def test_infer_in_khop_feature_dim_with_complex_dim(self):
+        """Test infer_in_khop_feature_dim with complex_dim truncation."""
+        # dataset_in_channels has 4 elements (from lifting complex_dim=3)
+        # but transform only processes 3 ranks (complex_dim=3)
+        dataset_in_channels = [7, 7, 7, 7]
+        max_hop = 2
+        # Without truncation: rank 2 hop 1 = 28 (wrong, includes rank 3 neighbor)
+        out_no_trunc = infer_in_khop_feature_dim(dataset_in_channels, max_hop)
+        assert out_no_trunc[2][1] == 28
+        # With truncation: rank 2 hop 1 = 21 (correct, no rank 3 neighbor)
+        out_trunc = infer_in_khop_feature_dim(dataset_in_channels, max_hop, complex_dim=3)
+        assert out_trunc[2][1] == 21
+        assert len(out_trunc) == 3
+
     def test_check_pses_in_transforms_empty(self):
         """Test check_pses_in_transforms with no encodings."""
         transforms = OmegaConf.create({})
@@ -789,7 +803,7 @@ class TestConfigResolvers:
         assert check_fes_in_transforms(transforms) == 9
 
     def test_check_fes_combined_fes_pprfe_and_sheaf(self):
-        """CombinedFEs inner loop: PPRFE list + SheafConnLapPE."""
+        """Test CombinedFEs inner loop with PPRFE list and SheafConnLapPE."""
         transforms = OmegaConf.create(
             {
                 "CombinedFEs": {
@@ -808,7 +822,7 @@ class TestConfigResolvers:
         assert check_fes_in_transforms(transforms) == 7 + 4
 
     def test_check_fes_combined_fes_pprfe_default_alpha(self):
-        """CombinedFEs PPRFE: missing alpha_param uses default [0.1, 10] -> 10."""
+        """Test CombinedFEs PPRFE with missing alpha_param using default [0.1, 10]."""
         transforms = OmegaConf.create(
             {
                 "CombinedFEs": {
@@ -820,7 +834,7 @@ class TestConfigResolvers:
         assert check_fes_in_transforms(transforms) == 10
 
     def test_check_fes_combined_fes_pprfe_scalar_alpha(self):
-        """CombinedFEs PPRFE: scalar alpha_param."""
+        """Test CombinedFEs PPRFE with scalar alpha_param."""
         transforms = OmegaConf.create(
             {
                 "CombinedFEs": {
@@ -834,42 +848,42 @@ class TestConfigResolvers:
         assert check_fes_in_transforms(transforms) == 11
 
     def test_get_fes_dimensions_khopfe(self):
-        """get_fes_dimensions: KHopFE uses max_hop - 1."""
+        """Test get_fes_dimensions with KHopFE using max_hop - 1."""
         encodings = ["KHopFE"]
         parameters = {"KHopFE": {"max_hop": 5}}
         assert get_fes_dimensions(encodings, parameters) == [4]
 
     def test_get_fes_dimensions_pprfe_list_tuple(self):
-        """get_fes_dimensions: PPRFE alpha as tuple -> second element."""
+        """Test get_fes_dimensions with PPRFE alpha as tuple returning second element."""
         encodings = ["PPRFE"]
         parameters = {"PPRFE": {"alpha_param_PPRFE": (0.1, 6)}}
         assert get_fes_dimensions(encodings, parameters) == [6]
 
     def test_get_fes_dimensions_pprfe_omegaconf_list(self):
-        """get_fes_dimensions: PPRFE alpha as OmegaConf list."""
+        """Test get_fes_dimensions with PPRFE alpha as OmegaConf list."""
         parameters = OmegaConf.create(
             {"PPRFE": {"alpha_param_PPRFE": [0.1, 12]}}
         )
         assert get_fes_dimensions(["PPRFE"], parameters) == [12]
 
     def test_get_fes_dimensions_pprfe_scalar(self):
-        """get_fes_dimensions: PPRFE scalar alpha."""
+        """Test get_fes_dimensions with PPRFE scalar alpha."""
         encodings = ["PPRFE"]
         parameters = {"PPRFE": {"alpha_param_PPRFE": 5}}
         assert get_fes_dimensions(encodings, parameters) == [5]
 
     def test_get_fes_dimensions_pprfe_missing_uses_default(self):
-        """get_fes_dimensions: missing PPRFE block uses default alpha upper bound 10."""
+        """Test get_fes_dimensions with missing PPRFE block using default alpha upper bound 10."""
         assert get_fes_dimensions(["PPRFE"], {}) == [10]
 
     def test_get_fes_dimensions_sheaf(self):
-        """get_fes_dimensions: SheafConnLapPE."""
+        """Test get_fes_dimensions with SheafConnLapPE."""
         encodings = ["SheafConnLapPE"]
         parameters = {"SheafConnLapPE": {"max_pe_dim": 8}}
         assert get_fes_dimensions(encodings, parameters) == [8]
 
     def test_get_all_encoding_dimensions_khopfe_pprfe_sheaf(self):
-        """get_all_encoding_dimensions: FE branches KHopFE, PPRFE list, SheafConnLapPE."""
+        """Test get_all_encoding_dimensions with KHopFE, PPRFE list, and SheafConnLapPE branches."""
         encodings = ["KHopFE", "PPRFE", "SheafConnLapPE"]
         parameters = {
             "KHopFE": {"max_hop": 4},
@@ -879,11 +893,11 @@ class TestConfigResolvers:
         assert get_all_encoding_dimensions(encodings, parameters) == [3, 9, 3]
 
     def test_get_all_encoding_dimensions_pprfe_scalar(self):
-        """get_all_encoding_dimensions: PPRFE scalar alpha."""
+        """Test get_all_encoding_dimensions with PPRFE scalar alpha."""
         assert get_all_encoding_dimensions(
             ["PPRFE"], {"PPRFE": {"alpha_param_PPRFE": 2}}
         ) == [2]
 
     def test_get_all_encoding_dimensions_pprfe_missing_uses_default(self):
-        """get_all_encoding_dimensions: PPRFE absent from parameters -> default 10."""
+        """Test get_all_encoding_dimensions with PPRFE absent from parameters using default 10."""
         assert get_all_encoding_dimensions(["PPRFE"], {}) == [10]

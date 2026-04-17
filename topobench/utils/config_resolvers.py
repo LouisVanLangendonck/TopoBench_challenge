@@ -906,7 +906,7 @@ def get_list_element(list, index):
     return list[index]
 
 
-def infer_in_khop_feature_dim(dataset_in_channels, max_hop):
+def infer_in_khop_feature_dim(dataset_in_channels, max_hop, complex_dim=None):
     r"""Infer the dimension of the feature vector in the SANN k-hop model.
 
     Parameters
@@ -915,12 +915,19 @@ def infer_in_khop_feature_dim(dataset_in_channels, max_hop):
         1D array of input channels for the dataset.
     max_hop : int
         Maximum hop distance.
+    complex_dim : int, optional
+        Number of cell ranks processed by the transform. When provided,
+        ``dataset_in_channels`` is truncated to this length so the
+        recursive formula only considers ranks that actually appear in
+        the k-hop feature computation.
 
     Returns
     -------
     int :
         Dimension of the feature vector in the SANN k-hop model.
     """
+    if complex_dim is not None:
+        dataset_in_channels = list(dataset_in_channels)[:complex_dim]
 
     def compute_recursive_sequence(initial_values, time_steps):
         """Compute the sequence D_k^(t) based on the given recursive formula.
@@ -1056,7 +1063,9 @@ def set_preserve_edge_attr(model_name, default=True):
     bool
         Default if the model can preserve edge attributes, False otherwise.
     """
-    if model_name in ["sann", "hopse_m", "hopse_g"]:
+    if model_name in ["hopse_m", "hopse_g"]:
+        return True
+    elif model_name in ["sann"]:
         return False
     else:
         return default

@@ -1,8 +1,8 @@
 #!/bin/bash
 # ==============================================================================
-# SCRIPT: hopse_m_baselines.sh
+# SCRIPT: sann.sh
 # DESCRIPTION:
-#   Runs a scalable hyperparameter sweep for HOPSE_M models across both
+#   Runs a scalable hyperparameter sweep for SANN models across both
 #   simplicial and cellular domains.
 #   - ARCHITECTURE: Uses a "Cartesian Product" generation strategy.
 #   - CONCURRENCY: Uses "Virtual Slots" to run N jobs per GPU.
@@ -13,7 +13,8 @@
 
 export SELECTED_GPUS="0,1,2,3,4,5,6,7" 
 wandb_entity="gbg141-hopse"
-RESUME=true  # Set to true to skip already-completed runs (reads SUCCESSFUL_RUNS.log)
+RESUME=true
+  # Set to true to skip already-completed runs (reads SUCCESSFUL_RUNS.log)
 
 # ==============================================================================
 # SECTION 1: LOGGING & ENVIRONMENT SETUP
@@ -22,7 +23,7 @@ RESUME=true  # Set to true to skip already-completed runs (reads SUCCESSFUL_RUNS
 # 1.1 Define Project Identifiers
 script_name="$(basename "${BASH_SOURCE[0]}" .sh)"
 project_name="${script_name}"
-log_group="hopse_m_sweep"
+log_group="sann_sweep"
 LOG_DIR="./logs/${log_group}"
 
 echo "=========================================================="
@@ -143,44 +144,34 @@ for i in "${!gpus[@]}"; do slot_pids[$i]=0; done
 # ==============================================================================
 
 # --- Models (both domains) ---
-# Use "alias::hydra_value" to disambiguate run names (both share basename "hopse_m").
+# Use "alias::hydra_value" to disambiguate run names (both share basename "sann").
 models=(
-    "sim_hopse_m::simplicial/hopse_m"
-    "cell_hopse_m::cell/hopse_m"
+    "sim_sann::simplicial/sann"
 )
 
 # --- Datasets ---
 datasets=(
-    # "graph/MUTAG"
-    # "graph/cocitation_cora"
-    # "graph/PROTEINS"
-    # "graph/NCI1"
-    # "graph/NCI109"
-    # "graph/ZINC"
-    # "graph/cocitation_citeseer"
-    # "graph/cocitation_pubmed"
+    "graph/MUTAG"
+    "graph/PROTEINS"
+    "graph/NCI1"
+    "graph/NCI109"
+    "graph/BBB_Martins"
+    "graph/Caco2_Wang"
+    "graph/Clearance_Hepatocyte_AZ"
+    "graph/CYP3A4_Veith"
     "simplicial/mantra_name"
     "simplicial/mantra_orientation"
     "simplicial/mantra_betti_numbers"
+    "graph/cocitation_cora"
+    "graph/cocitation_citeseer"
+    "graph/cocitation_pubmed"
+    "graph/ZINC"
 )
 
-# --- Neighborhoods (8 configs from the original HOPSE study) ---
-# Use "alias::hydra_value" format for readable run names.
-neighborhoods=(
-    "adj1::[up_adjacency-0]"
-    "adj2::[up_adjacency-0,2-up_adjacency-0]"
-    "adj3::[up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2]"
-    "inc1::[up_incidence-0,2-up_incidence-0]"
-    "inc2::[up_incidence-0,up_incidence-1,2-up_incidence-0,down_incidence-1,down_incidence-2,2-down_incidence-2]"
-)
+# --- Max Hops (SANN-specific, controls k-hop feature precomputation) ---
+max_hops=(1 2 3)
 
-# --- Encodings (two families to compare) ---
-encodings=(
-    "pse::[LapPE,RWSE,ElectrostaticPE,HKdiagSE]"
-    "fe::[HKFE,KHopFE,PPRFE]"
-)
-
-# --- Hyperparameters (superset across all dataset groups) ---
+# --- Hyperparameters ---
 num_layers=(1 2 4)
 hidden_channels=(128 256)
 proj_dropouts=(0.25 0.5)
@@ -196,7 +187,6 @@ FIXED_ARGS=(
     "trainer.check_val_every_n_epoch=5"
     "callbacks.early_stopping.patience=10"
     "delete_checkpoint_after_test=True"
-    "+combined_feature_encodings.preprocessor_device='cuda'"
 )
 
 
@@ -206,14 +196,18 @@ FIXED_ARGS=(
 #
 # Values support an optional "alias::hydra_value" syntax for readable names.
 # The generator also filters out invalid model+dataset combos.
+#
+# Key differences from hopse_m:
+#   - No neighborhoods or encodings (SANN uses k-hop feature precomputation)
+#   - max_hop: transforms.sann_encoding.max_hop (SANN-specific)
+#   - Backbone layers: model.backbone.n_layers (same as hopse_m)
 # ==============================================================================
 
 SWEEP_CONFIG=(
     # --- LEVEL 1: SLOWEST CHANGING (Outer Loops) ---
     "|model|${models[*]}"
     "|dataset|${datasets[*]}"
-    "N|model.preprocessing_params.neighborhoods|${neighborhoods[*]}"
-    "enc|model.preprocessing_params.encodings|${encodings[*]}"
+    "mh|transforms.sann_encoding.max_hop|${max_hops[*]}"
 
     # --- LEVEL 2: HYPERPARAMETERS ---
     "L|model.backbone.n_layers|${num_layers[*]}"
@@ -316,6 +310,33 @@ for combo in combinations:
 
     valid.append(combo)
 
+# --- Helper: Resolve complex_dim per dataset ---
+# The PrecomputeKHopFeatures transform needs complex_dim to match the number
+# of incidence matrices. For graph datasets, this is determined by the clique
+# lifting's complex_dim (= max_dim_if_lifted, default 2). For simplicial
+# datasets, we read manifold_dim from the YAML (default 2).
+complex_dim_cache = {}
+def get_complex_dim(dataset_val):
+    if dataset_val in complex_dim_cache:
+        return complex_dim_cache[dataset_val]
+    yaml_path = os.path.join(config_dir, f'{dataset_val}.yaml')
+    dim = 2  # safe default (clique lifting default)
+    if os.path.exists(yaml_path):
+        with open(yaml_path, 'r') as f:
+            import re
+            content = f.read()
+            # Check for max_dim_if_lifted (graph datasets)
+            m = re.search(r'max_dim_if_lifted:\s*(\d+)', content)
+            if m:
+                dim = int(m.group(1))
+            elif dataset_val.startswith('simplicial/'):
+                # For simplicial datasets, use manifold_dim (default 2)
+                m2 = re.search(r'manifold_dim:\s*(\d+)', content)
+                if m2:
+                    dim = int(m2.group(1))
+    complex_dim_cache[dataset_val] = dim
+    return dim
+
 # 4. Print header
 print(f'TOTAL;{len(valid)}')
 if skipped:
@@ -325,6 +346,7 @@ if skipped:
 for combo in valid:
     name_parts = []
     cmd_args = []
+    dataset_val = ''
     for (tag, key, val) in combo:
         if '::' in val:
             alias, hydra_val_str = val.split('::', 1)
@@ -334,11 +356,25 @@ for combo in valid:
             clean_val = os.path.basename(val)
             actual_val = val
 
+        if key == 'dataset':
+            dataset_val = actual_val
+
         if tag:
             name_parts.append(f'{tag}{clean_val}')
         else:
             name_parts.append(clean_val)
         cmd_args.append(f'{key}={actual_val}')
+
+    # Append complex_dim, max_rank and selected_dimensions based on dataset.
+    # complex_dim=K means the transform reads incidence_1..incidence_K, producing
+    # features for ranks 0..K-1 (K ranks total).  The model's selected_dimensions
+    # and backbone/readout complex_dim (max_rank) must all agree on K.
+    cdim = get_complex_dim(dataset_val)
+    cmd_args.append(f'transforms.sann_encoding.complex_dim={cdim}')
+    cmd_args.append(f'transforms.sann_encoding.max_rank={cdim - 1}')
+    sel_dims = ','.join(str(x) for x in range(cdim))
+    cmd_args.append(f'model.feature_encoder.selected_dimensions=[{sel_dims}]')
+    cmd_args.append(f'++model.backbone.complex_dim={cdim}')
 
     run_name = '_'.join(name_parts)
     print(f'{run_name};' + ' '.join(cmd_args))

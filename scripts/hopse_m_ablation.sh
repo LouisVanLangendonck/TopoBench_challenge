@@ -1,6 +1,6 @@
 #!/bin/bash
 # ==============================================================================
-# SCRIPT: hopse_m_baselines.sh
+# SCRIPT: hopse_m_ablation.sh
 # DESCRIPTION:
 #   Runs a scalable hyperparameter sweep for HOPSE_M models across both
 #   simplicial and cellular domains.
@@ -22,7 +22,7 @@ RESUME=true  # Set to true to skip already-completed runs (reads SUCCESSFUL_RUNS
 # 1.1 Define Project Identifiers
 script_name="$(basename "${BASH_SOURCE[0]}" .sh)"
 project_name="${script_name}"
-log_group="hopse_m_sweep"
+log_group="hopse_m_ablation_sweep"
 LOG_DIR="./logs/${log_group}"
 
 echo "=========================================================="
@@ -112,7 +112,7 @@ try:
     elif min_mem_gb <= 10:
         jobs = 1
     elif min_mem_gb <= 30:
-        jobs = 2
+        jobs = 4
     else:
         jobs = 3
         
@@ -146,47 +146,58 @@ for i in "${!gpus[@]}"; do slot_pids[$i]=0; done
 # Use "alias::hydra_value" to disambiguate run names (both share basename "hopse_m").
 models=(
     "sim_hopse_m::simplicial/hopse_m"
-    "cell_hopse_m::cell/hopse_m"
+    # "cell_hopse_m::cell/hopse_m"
 )
 
 # --- Datasets ---
 datasets=(
-    # "graph/MUTAG"
-    # "graph/cocitation_cora"
-    # "graph/PROTEINS"
-    # "graph/NCI1"
-    # "graph/NCI109"
-    # "graph/ZINC"
-    # "graph/cocitation_citeseer"
-    # "graph/cocitation_pubmed"
+    "graph/MUTAG"
+    "graph/PROTEINS"
+    "graph/NCI1"
+    "graph/NCI109"
+    "graph/BBB_Martins"
+    "graph/Caco2_Wang"
+    "graph/Clearance_Hepatocyte_AZ"
+    "graph/CYP3A4_Veith"
     "simplicial/mantra_name"
     "simplicial/mantra_orientation"
     "simplicial/mantra_betti_numbers"
+    "graph/cocitation_cora"
+    "graph/cocitation_citeseer"
+    "graph/cocitation_pubmed"
+    "graph/ZINC"
 )
 
 # --- Neighborhoods (8 configs from the original HOPSE study) ---
 # Use "alias::hydra_value" format for readable run names.
 neighborhoods=(
     "adj1::[up_adjacency-0]"
-    "adj2::[up_adjacency-0,2-up_adjacency-0]"
+    # "adj2::[up_adjacency-0,2-up_adjacency-0]"
     "adj3::[up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2]"
-    "inc1::[up_incidence-0,2-up_incidence-0]"
+    # "inc1::[up_incidence-0,2-up_incidence-0]"
     "inc2::[up_incidence-0,up_incidence-1,2-up_incidence-0,down_incidence-1,down_incidence-2,2-down_incidence-2]"
 )
 
 # --- Encodings (two families to compare) ---
 encodings=(
-    "pse::[LapPE,RWSE,ElectrostaticPE,HKdiagSE]"
-    "fe::[HKFE,KHopFE,PPRFE]"
+    "lappe::[LapPE]"
+    "rwse::[RWSE]"
+    "electro::[ElectrostaticPE]"
+    "hkdiag::[HKdiagSE]"
+    "hkfe::[HKFE]"
+    "khopfe::[KHopFE]"
+    "pprfe::[PPRFE]"
+    # "pse::[LapPE,RWSE,ElectrostaticPE,HKdiagSE]"
+    # "fe::[HKFE,KHopFE,PPRFE]"
 )
 
 # --- Hyperparameters (superset across all dataset groups) ---
-num_layers=(1 2 4)
-hidden_channels=(128 256)
-proj_dropouts=(0.25 0.5)
-lrs=(0.01 0.001)
+num_layers=(1 2)
+hidden_channels=(128)
+proj_dropouts=(0.25)
+lrs=(0.001)
 weight_decays=(0.0001)
-batch_sizes=(128 256)
+batch_sizes=(128)
 DATA_SEEDS=(0 3 5 7 9)
 
 # --- Fixed Parameters ---
@@ -194,7 +205,7 @@ FIXED_ARGS=(
     "trainer.max_epochs=500"
     "trainer.min_epochs=50"
     "trainer.check_val_every_n_epoch=5"
-    "callbacks.early_stopping.patience=10"
+    "callbacks.early_stopping.patience=20"
     "delete_checkpoint_after_test=True"
     "+combined_feature_encodings.preprocessor_device='cuda'"
 )
