@@ -3,8 +3,10 @@
 Per-model bar plots of **n_seeds** (raw-run count per hyperparameter group) vs
 **n_groups** (how many groups have that count), for every dataset in the report.
 
-Uses the same pre-filter aggregate as ``aggregator.py`` (``build_seed_bucket_report``):
-one subplot per (model, dataset) pair for that model.
+Uses the same pipeline as ``aggregator.py``: drop raw runs with no finite
+``summary_test_best_rerun/*`` values (silent failures), aggregate by seed, then
+``build_seed_bucket_report``. Seed-count plots add a **silent fail** bar when
+that count is nonzero for the subplot's (model, dataset).
 
 Standalone (same input discovery as ``aggregator.py``)::
 
@@ -68,23 +70,39 @@ def _collect_input_paths(
 
 def seed_bucket_report_from_export_paths(
     paths: list[Path],
-) -> pd.DataFrame:
-    """Match aggregator: aggregate by seed, then ``build_seed_bucket_report`` (no ``--required-seeds`` cut)."""
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Match ``aggregator.py`` (without ``--required-seeds`` filtering): aggregate by
+    seed, ``build_seed_bucket_report``, and return
+    ``(report, silent_failure_counts)``.
+    """
     if not paths:
         raise ValueError("no input paths")
     if len(paths) == 1:
         df = load_wandb_export_csv(paths[0])
-        agg = aggregate_wandb_export_by_seed(df)
-        return build_seed_bucket_report(agg)
+        agg, silent = aggregate_wandb_export_by_seed(df)
+        return build_seed_bucket_report(agg), silent
 
     frames: list[pd.DataFrame] = []
+    silent_parts: list[pd.DataFrame] = []
     for p in paths:
         df = load_wandb_export_csv(p)
-        frames.append(aggregate_wandb_export_by_seed(df))
+        agg_i, silent_i = aggregate_wandb_export_by_seed(df)
+        frames.append(agg_i)
+        silent_parts.append(silent_i)
     cols = _union_column_order(frames)
     out = pd.concat(frames, ignore_index=True, sort=False)
     out = out.reindex(columns=cols)
-    return build_seed_bucket_report(out)
+    silent_concat = pd.concat(silent_parts, ignore_index=True, sort=False)
+    if silent_concat.empty:
+        silent = pd.DataFrame(columns=["model", "dataset", "n_silent_failures"])
+    else:
+        silent = (
+            silent_concat.groupby(["model", "dataset"], dropna=False)["n_silent_failures"]
+            .sum()
+            .reset_index()
+        )
+    return build_seed_bucket_report(out), silent
 
 
 def write_seed_distribution_plots(
@@ -92,6 +110,7 @@ def write_seed_distribution_plots(
     out_dir: Path,
     *,
     required_n_seeds: int | None = None,
+    silent_failures: pd.DataFrame | None = None,
     dpi: int = 150,
 ) -> int:
     """
@@ -100,6 +119,11 @@ def write_seed_distribution_plots(
     Each figure: grid of bar charts (x = ``n_seeds``, height = ``n_groups``) for
     every ``dataset`` that model appears in. Bars matching ``required_n_seeds``
     (if not None) are highlighted.
+
+    If ``silent_failures`` is given (columns ``model``, ``dataset``,
+    ``n_silent_failures``), an extra **silent fail** bar is drawn per subplot when
+    the count is positive (raw runs dropped before aggregation: no finite
+    ``summary_test_best_rerun/*`` values).
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -126,6 +150,16 @@ def write_seed_distribution_plots(
         if n_ds == 0:
             continue
 
+        sf_model = pd.DataFrame()
+        if silent_failures is not None and not silent_failures.empty:
+            sf_model = silent_failures[silent_failures["model"].astype(str) == str(model)]
+        any_silent_for_model = (
+            not sf_model.empty
+            and (
+                pd.to_numeric(sf_model["n_silent_failures"], errors="coerce").fillna(0) > 0
+            ).any()
+        )
+
         n_cols = min(4, n_ds)
         n_rows = math.ceil(n_ds / n_cols)
         fig_w = max(7.0, n_cols * 3.15)
@@ -142,23 +176,44 @@ def write_seed_distribution_plots(
             ax = axes[r][c]
             piece = sub_m[sub_m["dataset"].astype(str) == ds].copy()
             piece = piece.sort_values("n_seeds")
-            if piece.empty:
+            n_silent = 0
+            if silent_failures is not None and not silent_failures.empty:
+                sf = silent_failures
+                hit = sf[
+                    (sf["model"].astype(str) == model)
+                    & (sf["dataset"].astype(str) == ds)
+                ]
+                if not hit.empty:
+                    n_silent = int(pd.to_numeric(hit["n_silent_failures"], errors="coerce").fillna(0).sum())
+
+            if piece.empty and n_silent <= 0:
                 ax.text(0.5, 0.5, "no data", ha="center", va="center", transform=ax.transAxes, fontsize=9)
                 ax.set_title(_dataset_short_title(ds), fontsize=9, fontweight="semibold")
                 ax.set_axis_off()
                 continue
-            piece["n_seeds"] = pd.to_numeric(piece["n_seeds"], errors="coerce")
-            piece["n_groups"] = pd.to_numeric(piece["n_groups"], errors="coerce").fillna(0)
-            piece = piece.dropna(subset=["n_seeds"])
 
-            x = piece["n_seeds"].astype(int).astype(str).tolist()
-            y = piece["n_groups"].astype(float).tolist()
-            colors: list[str] = []
-            for ns in piece["n_seeds"].astype(int):
-                if required_n_seeds is not None and int(ns) == int(required_n_seeds):
-                    colors.append("#E74C3C")
-                else:
-                    colors.append("#4A90A4")
+            if piece.empty:
+                x = ["silent\nfail"]
+                y = [float(n_silent)]
+                colors = ["#D35400"]
+            else:
+                piece["n_seeds"] = pd.to_numeric(piece["n_seeds"], errors="coerce")
+                piece["n_groups"] = pd.to_numeric(piece["n_groups"], errors="coerce").fillna(0)
+                piece = piece.dropna(subset=["n_seeds"])
+
+                x = piece["n_seeds"].astype(int).astype(str).tolist()
+                y = piece["n_groups"].astype(float).tolist()
+                colors = []
+                for ns in piece["n_seeds"].astype(int):
+                    if required_n_seeds is not None and int(ns) == int(required_n_seeds):
+                        colors.append("#E74C3C")
+                    else:
+                        colors.append("#4A90A4")
+
+                if n_silent > 0:
+                    x = x + ["silent\nfail"]
+                    y = y + [float(n_silent)]
+                    colors = colors + ["#D35400"]
 
             ax.bar(x, y, color=colors, edgecolor="0.2", linewidth=0.45)
             ax.set_title(_dataset_short_title(ds), fontsize=9, fontweight="semibold")
@@ -174,15 +229,17 @@ def write_seed_distribution_plots(
             axes[r][c].set_visible(False)
 
         fig.suptitle(str(model), fontsize=11, fontweight="bold", y=1.02)
+        foot_lines: list[str] = []
         if required_n_seeds is not None:
-            fig.text(
-                0.5,
-                0.01,
-                f"Red bars: n_seeds == {required_n_seeds} (aggregator default filter)",
-                ha="center",
-                fontsize=8,
-                style="italic",
+            foot_lines.append(
+                f"Red bars: n_seeds == {required_n_seeds} (aggregator default filter)."
             )
+        if any_silent_for_model:
+            foot_lines.append(
+                "Terracotta bar (silent fail): raw runs dropped (no finite summary_test_best_rerun/*)."
+            )
+        if foot_lines:
+            fig.text(0.5, 0.01, " ".join(foot_lines), ha="center", fontsize=8, style="italic")
             fig.subplots_adjust(bottom=0.12, top=0.92)
         else:
             fig.subplots_adjust(bottom=0.08, top=0.92)
@@ -259,12 +316,13 @@ def main() -> None:
         input_dir=input_dir,
         input_pattern=args.input_pattern,
     )
-    report = seed_bucket_report_from_export_paths(paths)
+    report, silent = seed_bucket_report_from_export_paths(paths)
     req = int(args.required_seeds) if int(args.required_seeds) >= 0 else None
     n = write_seed_distribution_plots(
         report,
         args.output_dir,
         required_n_seeds=req,
+        silent_failures=silent,
         dpi=int(args.dpi),
     )
     print(f"Wrote {n} figure(s) -> {args.output_dir}")

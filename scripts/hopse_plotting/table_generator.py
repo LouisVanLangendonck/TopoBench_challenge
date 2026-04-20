@@ -5,7 +5,10 @@ W&B CSV: for each (model, dataset), pick the hyperparameter row with best **vali
 mean — same implementation as ``main_plot`` / ``collapse_aggregated_wandb_csv`` via
 ``utils.iter_best_val_group_picks`` (default ``group_cols``: ``model``, ``dataset``;
 ``monitor_column``: ``dataset.parameters.monitor_metric``), then read **test**
-``test_best_rerun`` mean ± std from that row.
+``test_best_rerun`` mean ± std from that row. **MANTRA Betti numbers** use val **loss**
+for the best-hparam pick but **two** table columns (``#f1-1``, ``#f1-2``; ``β₀`` omitted)
+with test **F1** and per-column significance (see ``utils.MANTRA_BETTI_*``). Column titles
+are ``$\\beta_1$`` / ``$\\beta_2$`` (metric is F1, not named in the header).
 
 The seed-aggregated CSV must include every sweep axis you care about (see
 ``utils.CONFIG_PARAM_KEYS`` and ``main_loader`` export), or distinct configs can collapse
@@ -16,25 +19,25 @@ during aggregation (e.g. missing ``transforms.hopse_encoding.pretrain_model`` fo
   (two-sided Z on independent means in code; SE = seed-agg std / sqrt(n_seeds)).
 
 Model blocks: graph GCN/GAT/GIN; simplicial HOPSE-M, HOPSE-G, TopoTune, SCCNN
-(``simplicial/sccnn_custom``); cell HOPSE-M, HOPSE-G, TopoTune, CWN (``cell/cwn``).
+(``simplicial/sccnn``; legacy exports may use ``simplicial/sccnn_custom``, merged when reading);
+cell HOPSE-M, HOPSE-G, TopoTune, CWN (``cell/cwn``).
 **Dataset columns** come from ``DATASETS`` in ``main_loader.py``, reordered so **all graph
-columns precede all simplicial**. By default **four** ``.tex`` files are written under ``tables/``:
+columns precede all simplicial**. Transductive cocitation datasets (Cora/Citeseer/PubMed) are
+**never** included. Two ``.tex`` files are written:
 
-- Base: ``main_table_all.tex`` / ``main_table_no_transductive.tex`` (one row per model).
-- **Submodels**: ``main_table_all_submodels.tex`` / ``main_table_no_transductive_submodels.tex`` —
-  GNN rows split by ``transforms`` (empty → plain name; ``combined_fe`` → ``-F``; ``combined_pe`` → ``-PE``);
-  HOPSE-M split by ``model.preprocessing_params.encodings`` (**HOPSE-M-F** if HFKE/HKFE appears in the
-  cell, else **HOPSE-M-PE**); HOPSE-G and TopoTune unchanged. Best validation row is chosen **within**
-  each sub-row group. Use ``--skip-submodel-tables`` to emit only the base pair.
+- **``main_table_all_big.tex``** — full submodel rows: GNN split by ``transforms`` (plain / ``-F`` /
+  ``-PE``); HOPSE-M split by encodings (**HOPSE-M-F** vs **HOPSE-M-PE**). Within Simplicial and Cell
+  bands, **TopoTune / SCCNN** (resp. **TopoTune / CWN**) appear **above** HOPSE rows.
+- **``main_table_all_compact.tex``** — same Simplicial and Cell rows; **one row per GNN backbone**
+  (GCN/GAT/GIN) showing the sub-configuration that achieved the **best validation** mean for each
+  dataset (test numbers from that winner).
 
 Usage::
 
     python scripts/hopse_plotting/table_generator.py
-    python scripts/hopse_plotting/table_generator.py -o scripts/hopse_plotting/tables/main_table_all.tex \\
-        --output-without-transductive scripts/hopse_plotting/tables/main_table_no_transductive.tex
+    python scripts/hopse_plotting/table_generator.py -o scripts/hopse_plotting/tables/main_table_all_big.tex
     python scripts/hopse_plotting/table_generator.py --stdout
-    python scripts/hopse_plotting/table_generator.py --skip-submodel-tables
-    python scripts/hopse_plotting/table_generator.py --group-by model dataset
+    python scripts/hopse_plotting/table_generator.py --skip-compact
 """
 
 from __future__ import annotations
@@ -50,28 +53,35 @@ import pandas as pd
 from main_loader import DATASETS as LOADER_DATASETS
 from utils import (
     DEFAULT_AGGREGATED_EXPORT_CSV,
+    HOPSE_M_MODEL_PATHS,
+    MANTRA_BETTI_F1_TAILS,
+    MANTRA_BETTI_HYDRA_DATASET,
+    MODEL_PREPROC_ENCODINGS,
     MONITOR_METRIC_COLUMN,
     TABLES_DIR,
     _first_existing_column,
     _paired_std_from_mean,
     _test_mean_columns_for_tail,
+    _val_mean_columns_for_tail,
+    hopse_m_encoding_f_vs_pe_sub_id,
     hydra_dataset_key_from_loader_identity,
+    is_mantra_betti_hydra_dataset,
     iter_best_val_group_picks,
     optimization_mode_for_metric_tail,
     load_wandb_export_csv,
     safe_filename_token,
 )
 
-DEFAULT_LATEX_TABLE_TEX = TABLES_DIR / "main_table_all.tex"
-DEFAULT_LATEX_TABLE_TEX_NO_TRANS = TABLES_DIR / "main_table_no_transductive.tex"
-DEFAULT_LATEX_TABLE_TEX_SUBMODELS = TABLES_DIR / "main_table_all_submodels.tex"
-DEFAULT_LATEX_TABLE_TEX_NO_TRANS_SUBMODELS = TABLES_DIR / "main_table_no_transductive_submodels.tex"
+DEFAULT_LATEX_TABLE_TEX = TABLES_DIR / "main_table_all_big.tex"
+DEFAULT_LATEX_TABLE_COMPACT = TABLES_DIR / "main_table_all_compact.tex"
+
+_GNN_COLLAPSE_BASES: tuple[str, ...] = ("graph/gcn", "graph/gat", "graph/gin")
 
 COL_TRANSFORMS = "transforms"
-COL_PREPROC_ENC = "model.preprocessing_params.encodings"
+COL_PREPROC_ENC = MODEL_PREPROC_ENCODINGS
 
 GRAPH_MPNN = frozenset({"graph/gcn", "graph/gat", "graph/gin"})
-MODEL_HOPSE_M = frozenset({"simplicial/hopse_m", "cell/hopse_m"})
+MODEL_HOPSE_M = HOPSE_M_MODEL_PATHS
 MODEL_HOPSE_G_TOPO = frozenset(
     {
         "simplicial/hopse_g",
@@ -81,19 +91,31 @@ MODEL_HOPSE_G_TOPO = frozenset(
     }
 )
 
-# Planetoid cocitation configs (transductive); must match loader ``graph/cocitation_*`` paths.
-TRANSDUCTIVE_GRAPH_PATHS: tuple[str, ...] = (
-    "graph/cocitation_cora",
-    "graph/cocitation_citeseer",
-    "graph/cocitation_pubmed",
+# Planetoid cocitation (transductive); excluded from tables even if listed in ``main_loader``.
+TRANSDUCTIVE_GRAPH_SET: frozenset[str] = frozenset(
+    {
+        "graph/cocitation_cora",
+        "graph/cocitation_citeseer",
+        "graph/cocitation_pubmed",
+    }
 )
-TRANSDUCTIVE_GRAPH_SET: frozenset[str] = frozenset(TRANSDUCTIVE_GRAPH_PATHS)
+
+# Hydra may expose SCCNN as ``simplicial/sccnn`` (current sweeps) or ``simplicial/sccnn_custom`` (older).
+_CANONICAL_SCCNN_MODEL = "simplicial/sccnn"
+
+
+def _normalize_table_model_id(model: str) -> str:
+    m = str(model).strip()
+    if m == "simplicial/sccnn_custom":
+        return _CANONICAL_SCCNN_MODEL
+    return m
+
 
 Z_CRIT_95 = 1.959963984540054
 
 # W&B often stores 0–1 fractions; publication tables use 0–100 for these tails.
 _DISPLAY_SCALE_100: frozenset[str] = frozenset(
-    {"accuracy", "f1", "precision", "recall", "auroc", "roc_auc"}
+    {"accuracy", "f1", "f1-1", "f1-2", "precision", "recall", "auroc", "roc_auc"}
 )
 
 
@@ -108,6 +130,18 @@ def _finite(x: Any) -> bool:
     except (TypeError, ValueError):
         return False
     return math.isfinite(v)
+
+
+def _val_mean_for_pick_row(w: pd.Series, tail: str, colset: set[str]) -> float:
+    """Seed-mean validation score used to compare GNN sub-rows (same resolution as ``iter_best_val_group_picks``)."""
+    t = (tail or "").strip()
+    if not t:
+        return float("nan")
+    val_src = _first_existing_column(_val_mean_columns_for_tail(t), colset)
+    if not val_src:
+        return float("nan")
+    v = pd.to_numeric(w.get(val_src), errors="coerce")
+    return float(v) if pd.notna(v) else float("nan")
 
 
 def _sem(std: float, n: int) -> float:
@@ -165,19 +199,40 @@ _DATASET_MIN_ARROW: frozenset[str] = frozenset(
     {
         "graph/Clearance_Hepatocyte_AZ",
         "graph/Caco2_Wang",
-        "simplicial/mantra_betti_numbers",
     }
 )
 
 
 def _latex_short_dataset_label(path: str) -> str:
+    if "#" in path:
+        base, _, suf = path.partition("#")
+        beta_lbl = {
+            "f1-1": r"$\beta_1$",
+            "f1-2": r"$\beta_2$",
+            "f1-0": r"$\beta_0$",
+        }.get(suf, suf.replace("_", r"\_"))
+        base_l = _DATASET_COLUMN_LABEL.get(base, base.rsplit("/", 1)[-1].replace("_", r"\_"))
+        return f"{base_l} {beta_lbl}"
     return _DATASET_COLUMN_LABEL.get(path, path.rsplit("/", 1)[-1].replace("_", r"\_"))
 
 
 def _auto_header_for_dataset_path(path: str) -> str:
     short = _latex_short_dataset_label(path)
-    arr = r"$\downarrow$" if path in _DATASET_MIN_ARROW else r"$\uparrow$"
+    base_path = path.partition("#")[0] if "#" in path else path
+    arr = r"$\downarrow$" if base_path in _DATASET_MIN_ARROW else r"$\uparrow$"
     return f"{short} ({arr})"
+
+
+def expand_mantra_betti_specs(specs: list[tuple[str, str]]) -> list[tuple[str, str]]:
+    """One column per ``β₁`` / ``β₂`` (test F1); ``β₀`` omitted; selection still uses val loss."""
+    out: list[tuple[str, str]] = []
+    for p, h in specs:
+        if is_mantra_betti_hydra_dataset(p) and "#" not in p:
+            out.append((f"{MANTRA_BETTI_HYDRA_DATASET}#f1-1", r"$\beta_1$ ($\uparrow$)"))
+            out.append((f"{MANTRA_BETTI_HYDRA_DATASET}#f1-2", r"$\beta_2$ ($\uparrow$)"))
+        else:
+            out.append((p, h))
+    return out
 
 
 def _specs_from_loader_paths() -> list[tuple[str, str]]:
@@ -188,36 +243,13 @@ def _specs_from_loader_paths() -> list[tuple[str, str]]:
     ]
 
 
-def partition_specs_three_way(
+def partition_specs_graph_simplicial(
     specs: list[tuple[str, str]],
 ) -> list[tuple[str, list[tuple[str, str]]]]:
     """
-    Graph (transductive) → Graph (inductive) → Simplicial (inductive).
-    Transductive columns are only Cora / Citeseer / PubMed (``cocitation_*``), in that order.
+    **Graph** then **Simplicial** column bands. Drops cocitation Cora/Citeseer/PubMed
+    (``graph/cocitation_*``) if present in ``specs``.
     """
-    by_path = {p: h for p, h in specs}
-    trans = [(p, by_path[p]) for p in TRANSDUCTIVE_GRAPH_PATHS if p in by_path]
-    graph_ind: list[tuple[str, str]] = []
-    simplicial: list[tuple[str, str]] = []
-    for p, h in specs:
-        if p in TRANSDUCTIVE_GRAPH_SET:
-            continue
-        if p.startswith("graph/"):
-            graph_ind.append((p, h))
-        elif p.startswith("simplicial/"):
-            simplicial.append((p, h))
-    blocks = [
-        ("Graph (transductive)", trans),
-        ("Graph (inductive)", graph_ind),
-        ("Simplicial (inductive)", simplicial),
-    ]
-    return [(title, blk) for title, blk in blocks if blk]
-
-
-def partition_specs_two_way_no_transductive(
-    specs: list[tuple[str, str]],
-) -> list[tuple[str, list[tuple[str, str]]]]:
-    """Graph then Simplicial; omits cocitation Cora/Citeseer/PubMed. Headers omit ``(inductive)``."""
     graph_ind: list[tuple[str, str]] = []
     simplicial: list[tuple[str, str]] = []
     for p, h in specs:
@@ -260,15 +292,8 @@ def _graph_transforms_sub_id(val: Any) -> str:
 
 
 def _hopse_m_enc_sub_id(val: Any) -> str:
-    """
-    HOPSE-M: HFKE (or HKFE as stored in exports) in ``model.preprocessing_params.encodings``
-    → ``f`` (display HOPSE-M-F), else ``pe`` (HOPSE-M-PE).
-    """
-    s = str(val if val is not None else "").replace("\r", "")
-    su = s.upper()
-    if "HFKE" in su or "HKFE" in su:
-        return "f"
-    return "pe"
+    """Delegate to ``utils.hopse_m_encoding_f_vs_pe_sub_id`` (HOPSE-M-F vs HOPSE-M-PE)."""
+    return hopse_m_encoding_f_vs_pe_sub_id(val)
 
 
 def _assign_sub_id_for_row(model: str, row: pd.Series) -> str:
@@ -335,22 +360,24 @@ def graph_submodel_table_rows(stats: dict[tuple[str, str], Any]) -> list[tuple[s
 
 
 def simplicial_submodel_table_rows() -> list[tuple[str, str]]:
+    """TopoTune / SCCNN first; HOPSE variants last."""
     return [
+        (r"simplicial/topotune|default", "TopoTune"),
+        (r"simplicial/sccnn|default", "SCCNN"),
         (r"simplicial/hopse_m|f", r"\textbf{HOPSE-M-F} (Our)"),
         (r"simplicial/hopse_m|pe", r"\textbf{HOPSE-M-PE} (Our)"),
         (r"simplicial/hopse_g|default", r"\textbf{HOPSE-G} (Our)"),
-        (r"simplicial/topotune|default", "TopoTune"),
-        (r"simplicial/sccnn_custom|default", "SCCNN"),
     ]
 
 
 def cell_submodel_table_rows() -> list[tuple[str, str]]:
+    """TopoTune / CWN first; HOPSE variants last."""
     return [
+        (r"cell/topotune|default", "TopoTune"),
+        (r"cell/cwn|default", "CWN"),
         (r"cell/hopse_m|f", r"\textbf{HOPSE-M-F} (Our)"),
         (r"cell/hopse_m|pe", r"\textbf{HOPSE-M-PE} (Our)"),
         (r"cell/hopse_g|default", r"\textbf{HOPSE-G} (Our)"),
-        (r"cell/topotune|default", "TopoTune"),
-        (r"cell/cwn|default", "CWN"),
     ]
 
 
@@ -376,17 +403,35 @@ def collect_winner_test_by_model_dataset(
         if len(gk) != len(group_cols):
             raise RuntimeError("groupby key length mismatch vs group_cols")
         zd = dict(zip(group_cols, gk, strict=True))
-        model = str(zd["model"]).strip()
+        model = _normalize_table_model_id(str(zd["model"]))
         dataset_raw = str(zd["dataset"]).strip()
         dataset = hydra_dataset_key_from_loader_identity(dataset_raw)
         w = df.loc[pick_idx]
+        n_raw = w.get("n_seeds", float("nan"))
+        n = int(pd.to_numeric(n_raw, errors="coerce")) if _finite(n_raw) else 0
+
+        if is_mantra_betti_hydra_dataset(dataset_raw):
+            for fi_tail in MANTRA_BETTI_F1_TAILS:
+                test_src = _first_existing_column(_test_mean_columns_for_tail(fi_tail), colset)
+                te_std = _paired_std_from_mean(test_src, colset) if test_src else None
+                mu = pd.to_numeric(w.get(test_src), errors="coerce") if test_src else float("nan")
+                sd = pd.to_numeric(w.get(te_std), errors="coerce") if te_std else float("nan")
+                col_key = f"{MANTRA_BETTI_HYDRA_DATASET}#{fi_tail}"
+                out[(model, col_key)] = {
+                    "test_mean": float(mu) if pd.notna(mu) else float("nan"),
+                    "test_std": float(sd) if pd.notna(sd) else float("nan"),
+                    "n_seeds": max(n, 0),
+                    "tail": fi_tail,
+                    "mode": "max",
+                    "monitor_raw": str(monitor_val).strip(),
+                }
+            continue
+
         mode: Literal["max", "min"] = optimization_mode_for_metric_tail(tail) if tail else "max"
         test_src = _first_existing_column(_test_mean_columns_for_tail(tail), colset)
         te_std = _paired_std_from_mean(test_src, colset) if test_src else None
         mu = pd.to_numeric(w.get(test_src), errors="coerce") if test_src else float("nan")
         sd = pd.to_numeric(w.get(te_std), errors="coerce") if te_std else float("nan")
-        n_raw = w.get("n_seeds", float("nan"))
-        n = int(pd.to_numeric(n_raw, errors="coerce")) if _finite(n_raw) else 0
         out[(model, dataset)] = {
             "test_mean": float(mu) if pd.notna(mu) else float("nan"),
             "test_std": float(sd) if pd.notna(sd) else float("nan"),
@@ -413,19 +458,40 @@ def collect_winner_test_by_submodel(df: pd.DataFrame) -> dict[tuple[str, str], d
     for keys, pick_idx, monitor_val, tail in iter_best_val_group_picks(
         work, group_cols=gc, monitor_column=MONITOR_METRIC_COLUMN
     ):
-        model = str(keys[0]).strip()
+        model = _normalize_table_model_id(str(keys[0]))
         dataset_raw = str(keys[1]).strip()
         sub_id = str(keys[2]).strip()
         dataset = hydra_dataset_key_from_loader_identity(dataset_raw)
         row_key = f"{model}|{sub_id}"
         w = work.loc[pick_idx]
+        n_raw = w.get("n_seeds", float("nan"))
+        n = int(pd.to_numeric(n_raw, errors="coerce")) if _finite(n_raw) else 0
+
+        if is_mantra_betti_hydra_dataset(dataset_raw):
+            for fi_tail in MANTRA_BETTI_F1_TAILS:
+                test_src = _first_existing_column(_test_mean_columns_for_tail(fi_tail), colset)
+                te_std = _paired_std_from_mean(test_src, colset) if test_src else None
+                mu = pd.to_numeric(w.get(test_src), errors="coerce") if test_src else float("nan")
+                sd = pd.to_numeric(w.get(te_std), errors="coerce") if te_std else float("nan")
+                col_key = f"{MANTRA_BETTI_HYDRA_DATASET}#{fi_tail}"
+                vm = _val_mean_for_pick_row(w, fi_tail, colset)
+                out[(row_key, col_key)] = {
+                    "test_mean": float(mu) if pd.notna(mu) else float("nan"),
+                    "test_std": float(sd) if pd.notna(sd) else float("nan"),
+                    "n_seeds": max(n, 0),
+                    "tail": fi_tail,
+                    "mode": "max",
+                    "monitor_raw": str(monitor_val).strip(),
+                    "val_mean": vm,
+                }
+            continue
+
         mode: Literal["max", "min"] = optimization_mode_for_metric_tail(tail) if tail else "max"
         test_src = _first_existing_column(_test_mean_columns_for_tail(tail), colset)
         te_std = _paired_std_from_mean(test_src, colset) if test_src else None
         mu = pd.to_numeric(w.get(test_src), errors="coerce") if test_src else float("nan")
         sd = pd.to_numeric(w.get(te_std), errors="coerce") if te_std else float("nan")
-        n_raw = w.get("n_seeds", float("nan"))
-        n = int(pd.to_numeric(n_raw, errors="coerce")) if _finite(n_raw) else 0
+        vm = _val_mean_for_pick_row(w, tail, colset)
         out[(row_key, dataset)] = {
             "test_mean": float(mu) if pd.notna(mu) else float("nan"),
             "test_std": float(sd) if pd.notna(sd) else float("nan"),
@@ -433,7 +499,59 @@ def collect_winner_test_by_submodel(df: pd.DataFrame) -> dict[tuple[str, str], d
             "tail": tail,
             "mode": mode,
             "monitor_raw": str(monitor_val).strip(),
+            "val_mean": vm,
         }
+    return out
+
+
+def collapse_gnn_submodel_rows_to_base(
+    stats_sub: dict[tuple[str, str], dict[str, Any]],
+) -> dict[tuple[str, str], dict[str, Any]]:
+    """
+    One row per GNN backbone (``graph/gcn``, …): for each dataset, keep the sub-row
+    (plain / ``-F`` / ``-PE`` / …) whose **validation** mean is best; copy its test stats.
+    Non-GNN rows are unchanged.
+    """
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for k, v in stats_sub.items():
+        rk, ds = k
+        if not any(rk.startswith(b + "|") for b in _GNN_COLLAPSE_BASES):
+            out[k] = dict(v)
+
+    for base in _GNN_COLLAPSE_BASES:
+        prefix = base + "|"
+        dss = {ds for (rk, ds) in stats_sub if rk.startswith(prefix)}
+        for ds in dss:
+            candidates = [
+                (rk, st)
+                for (rk, dsk), st in stats_sub.items()
+                if dsk == ds and rk.startswith(prefix)
+            ]
+            if not candidates:
+                continue
+            mode = str(candidates[0][1].get("mode", "max"))
+            finite_val = [
+                (rk, st)
+                for rk, st in candidates
+                if _finite(float(st.get("val_mean", float("nan"))))
+            ]
+            if finite_val:
+                if mode == "min":
+                    _win_rk, win_st = min(finite_val, key=lambda x: float(x[1]["val_mean"]))
+                else:
+                    _win_rk, win_st = max(finite_val, key=lambda x: float(x[1]["val_mean"]))
+            else:
+                ok_test = [
+                    (rk, st)
+                    for rk, st in candidates
+                    if _finite(float(st.get("test_mean", float("nan"))))
+                ]
+                if not ok_test:
+                    continue
+                _win_rk, win_st = ok_test[0]
+
+            merged = dict(win_st)
+            out[(base, ds)] = merged
     return out
 
 
@@ -479,7 +597,8 @@ def build_latex_table(
     cell_rows: list[tuple[str, str]],
     decimals: int = 2,
     scale_fraction_metrics: bool = True,
-    label: str = "tbl:hopse_wandb_graph_trans_ind_sim",
+    label: str = "tbl:hopse_wandb_graph_sim",
+    caption: str | None = None,
 ) -> str:
     """
     Return full LaTeX fragment (table env + suggested \\definecolor comments).
@@ -553,11 +672,10 @@ def build_latex_table(
     )
     lines.append("\\definecolor{bestgray}{HTML}{D9D9D9}")
     lines.append("\\begin{table}[t]")
-    cap = (
-        "Test mean $\\pm$ std over seeds (hyperparameters chosen on validation). "
-        "Best mean result per dataset highlighted in \\textbf{Bold}. "
-        "Results in \\protect\\colorbox{stdblue}{blue} are not significantly different "
-        "from best model (95\\,\\% confidence)."
+    cap = caption or (
+        "Test mean $\\pm$ std over seeds (validation-tuned configs). "
+        "\\textbf{Bold}: best per column; "
+        "\\protect\\colorbox{stdblue}{blue}: not significantly different (95\\,\\%)."
     )
     lines.append(f"\\caption{{{cap}}}")
     lines.append(f"\\label{{{label}}}")
@@ -630,27 +748,21 @@ def main() -> None:
         "--output",
         type=Path,
         default=DEFAULT_LATEX_TABLE_TEX,
-        help=(
-            "Output .tex for the three-band table: Graph (transductive), Graph (inductive), "
-            f"Simplicial (inductive) (default: {DEFAULT_LATEX_TABLE_TEX})"
-        ),
+        help=f"Full submodel table .tex (default: {DEFAULT_LATEX_TABLE_TEX})",
     )
     p.add_argument(
-        "--output-without-transductive",
+        "--output-compact",
         type=Path,
-        default=DEFAULT_LATEX_TABLE_TEX_NO_TRANS,
+        default=DEFAULT_LATEX_TABLE_COMPACT,
         help=(
-            "Second .tex: no cocitation Cora/Citeseer/PubMed; band titles Graph / Simplicial "
-            f"(no '(inductive)') (default: {DEFAULT_LATEX_TABLE_TEX_NO_TRANS})"
+            "Second .tex: GNN rows collapsed to best val sub-config per backbone "
+            f"(default: {DEFAULT_LATEX_TABLE_COMPACT})"
         ),
     )
     p.add_argument(
         "--stdout",
         action="store_true",
-        help=(
-            "Print LaTeX to stdout (three-band first, then a comment separator, then two-band "
-            "if that version has at least one column)"
-        ),
+        help="Print LaTeX to stdout (big table, then compact unless --skip-compact).",
     )
     p.add_argument(
         "--datasets",
@@ -659,8 +771,8 @@ def main() -> None:
         metavar="PATH:HEADER",
         help=(
             "Dataset columns as path or path:LaTeX header. "
-            "Default: DATASETS from main_loader.py, reordered to "
-            "transductive graph (cocitation cora/citeseer/pubmed) → other graph → simplicial."
+            "Default: DATASETS from main_loader.py (cocitation graph datasets excluded), "
+            "then graph columns → simplicial."
         ),
     )
     p.add_argument("--decimals", type=int, default=2, help="Decimal places for numbers (default: 2)")
@@ -670,170 +782,78 @@ def main() -> None:
         help="Do not multiply accuracy/f1/... by 100 for display (W&B is often 0–1).",
     )
     p.add_argument(
-        "--skip-submodel-tables",
+        "--skip-compact",
         action="store_true",
-        help="Do not emit submodel-split tables (GNN by transforms; HOPSE-M-F / HOPSE-M-PE).",
-    )
-    p.add_argument(
-        "-o-sub",
-        "--output-submodels",
-        type=Path,
-        default=DEFAULT_LATEX_TABLE_TEX_SUBMODELS,
-        help=f"Submodel three-band .tex (default: {DEFAULT_LATEX_TABLE_TEX_SUBMODELS})",
-    )
-    p.add_argument(
-        "--output-without-transductive-submodels",
-        type=Path,
-        default=DEFAULT_LATEX_TABLE_TEX_NO_TRANS_SUBMODELS,
-        help=(
-            "Submodel two-band .tex (no cocitation trio) "
-            f"(default: {DEFAULT_LATEX_TABLE_TEX_NO_TRANS_SUBMODELS})"
-        ),
-    )
-    p.add_argument(
-        "--group-by",
-        metavar="COL",
-        nargs="+",
-        default=["model", "dataset"],
-        help=(
-            "Columns for best-val hyperparameter pick (default: model dataset). "
-            "Must include both model and dataset; same meaning as ``main_plot --group-by``."
-        ),
+        help="Do not write or print the GNN-collapsed compact table.",
     )
     args = p.parse_args()
-
-    group_cols = tuple(args.group_by)
     df = load_wandb_export_csv(args.input)
-    stats = collect_winner_test_by_model_dataset(df, group_cols=group_cols)
-    stats_sub = (
-        collect_winner_test_by_submodel(df) if not args.skip_submodel_tables else {}
-    )
+    stats_sub = collect_winner_test_by_submodel(df)
 
     if args.datasets:
-        base_specs = _parse_dataset_specs(args.datasets)
+        base_specs = expand_mantra_betti_specs(_parse_dataset_specs(args.datasets))
     else:
-        base_specs = _specs_from_loader_paths()
+        base_specs = expand_mantra_betti_specs(_specs_from_loader_paths())
 
-    groups_three = partition_specs_three_way(base_specs)
-    groups_two = partition_specs_two_way_no_transductive(base_specs)
-    n_two_cols = sum(len(b) for _, b in groups_two)
-
-    graph_rows_base: list[tuple[str, str]] = [
-        ("graph/gcn", "GCN"),
-        ("graph/gat", "GAT"),
-        ("graph/gin", "GIN"),
-    ]
-    simplicial_rows_base: list[tuple[str, str]] = [
-        ("simplicial/hopse_m", "\\textbf{HOPSE-M} (Our)"),
-        ("simplicial/hopse_g", "\\textbf{HOPSE-G} (Our)"),
-        ("simplicial/topotune", "TopoTune"),
-        ("simplicial/sccnn_custom", "SCCNN"),
-    ]
-    cell_rows_base: list[tuple[str, str]] = [
-        ("cell/hopse_m", "\\textbf{HOPSE-M} (Our)"),
-        ("cell/hopse_g", "\\textbf{HOPSE-G} (Our)"),
-        ("cell/topotune", "TopoTune"),
-        ("cell/cwn", "CWN"),
-    ]
+    groups = partition_specs_graph_simplicial(base_specs)
 
     graph_rows_sub = graph_submodel_table_rows(stats_sub)
     simplicial_rows_sub = simplicial_submodel_table_rows()
     cell_rows_sub = cell_submodel_table_rows()
 
-    tex_three = build_latex_table(
-        stats,
-        column_groups=groups_three,
-        graph_rows=graph_rows_base,
-        simplicial_rows=simplicial_rows_base,
-        cell_rows=cell_rows_base,
+    graph_rows_compact: list[tuple[str, str]] = [
+        ("graph/gcn", "GCN"),
+        ("graph/gat", "GAT"),
+        ("graph/gin", "GIN"),
+    ]
+
+    caption_compact = (
+        "Test mean $\\pm$ std over seeds (validation-tuned configs). "
+        "\\textbf{Bold}: best per column; "
+        "\\protect\\colorbox{stdblue}{blue}: not significantly different (95\\,\\%)."
+    )
+
+    tex_big = build_latex_table(
+        stats_sub,
+        column_groups=groups,
+        graph_rows=graph_rows_sub,
+        simplicial_rows=simplicial_rows_sub,
+        cell_rows=cell_rows_sub,
         decimals=args.decimals,
         scale_fraction_metrics=not args.no_scale_fractions,
-        label="tbl:hopse_wandb_graph_trans_ind_sim",
+        label="tbl:hopse_wandb_graph_sim_big",
     )
-    tex_two: str | None = None
-    if n_two_cols > 0:
-        tex_two = build_latex_table(
-            stats,
-            column_groups=groups_two,
-            graph_rows=graph_rows_base,
-            simplicial_rows=simplicial_rows_base,
-            cell_rows=cell_rows_base,
-            decimals=args.decimals,
-            scale_fraction_metrics=not args.no_scale_fractions,
-            label="tbl:hopse_wandb_graph_ind_sim",
-        )
 
-    tex_three_sub: str | None = None
-    tex_two_sub: str | None = None
-    if not args.skip_submodel_tables:
-        tex_three_sub = build_latex_table(
-            stats_sub,
-            column_groups=groups_three,
-            graph_rows=graph_rows_sub,
-            simplicial_rows=simplicial_rows_sub,
-            cell_rows=cell_rows_sub,
-            decimals=args.decimals,
-            scale_fraction_metrics=not args.no_scale_fractions,
-            label="tbl:hopse_wandb_graph_trans_ind_sim_sub",
-        )
-        if n_two_cols > 0:
-            tex_two_sub = build_latex_table(
-                stats_sub,
-                column_groups=groups_two,
-                graph_rows=graph_rows_sub,
-                simplicial_rows=simplicial_rows_sub,
-                cell_rows=cell_rows_sub,
-                decimals=args.decimals,
-                scale_fraction_metrics=not args.no_scale_fractions,
-                label="tbl:hopse_wandb_graph_ind_sim_sub",
-            )
+    stats_compact = collapse_gnn_submodel_rows_to_base(stats_sub)
+    tex_compact = build_latex_table(
+        stats_compact,
+        column_groups=groups,
+        graph_rows=graph_rows_compact,
+        simplicial_rows=simplicial_rows_sub,
+        cell_rows=cell_rows_sub,
+        decimals=args.decimals,
+        scale_fraction_metrics=not args.no_scale_fractions,
+        label="tbl:hopse_wandb_graph_sim_compact",
+        caption=caption_compact,
+    )
 
     if args.stdout:
-        sys.stdout.write(tex_three)
-        if tex_two is not None:
+        sys.stdout.write(tex_big)
+        if not args.skip_compact:
             sys.stdout.write(
-                "\n% --- version without transductive graph (cocitation cora/citeseer/pubmed) ---\n\n"
+                "\n% --- compact: GNN = best val sub-config per backbone (GCN/GAT/GIN) ---\n\n"
             )
-            sys.stdout.write(tex_two)
-        if tex_three_sub is not None:
-            sys.stdout.write(
-                "\n% --- submodels: GNN by transforms; HOPSE-M-F / HOPSE-M-PE by encodings ---\n\n"
-            )
-            sys.stdout.write(tex_three_sub)
-        if tex_two_sub is not None:
-            sys.stdout.write(
-                "\n% --- submodels without transductive graph columns ---\n\n"
-            )
-            sys.stdout.write(tex_two_sub)
+            sys.stdout.write(tex_compact)
     else:
-        out1 = Path(args.output)
-        out1.parent.mkdir(parents=True, exist_ok=True)
-        out1.write_text(tex_three, encoding="utf-8")
-        print(f"Wrote {out1}")
-        if tex_two is not None:
-            out2 = Path(args.output_without_transductive)
-            out2.parent.mkdir(parents=True, exist_ok=True)
-            out2.write_text(tex_two, encoding="utf-8")
-            print(f"Wrote {out2}")
-        else:
-            print(
-                "Skipped second table (--output-without-transductive): "
-                "no columns left after dropping transductive graph datasets."
-            )
-        if tex_three_sub is not None:
-            out_s1 = Path(args.output_submodels)
-            out_s1.parent.mkdir(parents=True, exist_ok=True)
-            out_s1.write_text(tex_three_sub, encoding="utf-8")
-            print(f"Wrote {out_s1}")
-        if tex_two_sub is not None:
-            out_s2 = Path(args.output_without_transductive_submodels)
-            out_s2.parent.mkdir(parents=True, exist_ok=True)
-            out_s2.write_text(tex_two_sub, encoding="utf-8")
-            print(f"Wrote {out_s2}")
-        elif not args.skip_submodel_tables and n_two_cols == 0:
-            print(
-                "Skipped submodel two-band table: no columns left after dropping transductive graph datasets."
-            )
+        out_big = Path(args.output)
+        out_big.parent.mkdir(parents=True, exist_ok=True)
+        out_big.write_text(tex_big, encoding="utf-8")
+        print(f"Wrote {out_big}")
+        if not args.skip_compact:
+            out_c = Path(args.output_compact)
+            out_c.parent.mkdir(parents=True, exist_ok=True)
+            out_c.write_text(tex_compact, encoding="utf-8")
+            print(f"Wrote {out_c}")
 
 
 if __name__ == "__main__":

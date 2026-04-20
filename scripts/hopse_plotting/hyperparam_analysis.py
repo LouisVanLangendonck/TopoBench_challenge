@@ -103,7 +103,8 @@ def _prepare_frame(
 ) -> pd.DataFrame:
     raw = load_wandb_export_csv(input_path)
     if from_raw:
-        return aggregate_wandb_export_by_seed(raw)
+        agg, _silent = aggregate_wandb_export_by_seed(raw)
+        return agg
     return raw
 
 

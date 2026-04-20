@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """
-From a **seed-aggregated** W&B CSV, pick the best validation row per (model, dataset)
-(same rule as ``collapse_aggregated_wandb_by_best_val`` / ``main_plot`` / ``table_generator``:
-``utils.iter_best_val_group_picks``), then emit **two** bash scripts with the same Hydra commands:
+From a **seed-aggregated** W&B CSV, pick the best validation row per group (default: model,
+dataset, and an internal HOPSE-M F/PE shard — same val rule as ``utils.iter_best_val_group_picks``
+used in ``collapse_aggregated_wandb_by_best_val`` / ``main_plot`` / ``table_generator``), then emit
+**two** bash scripts with the same Hydra commands:
 
 1. **Sequential** (default ``scripts/best_val_reruns_sequential.sh``): one ``python -m topobench``
    line after another (no GPU assignment; use ``--append-arg trainer.devices=[0]`` if needed).
@@ -24,6 +25,16 @@ Dataset overrides use Hydra config stems (e.g. ``graph/cocitation_cora``): loade
 By default only **non-transductive** loader datasets are emitted: ``main_loader.DATASETS``
 minus ``graph/cocitation_{cora,citeseer,pubmed}``. Use ``--all-datasets`` to emit every
 (model, dataset) group in the CSV.
+
+With default ``--group-by model dataset``, **HOPSE-M** (``simplicial/hopse_m`` and ``cell/hopse_m``)
+is split like ``table_generator`` / ``hopse_m.sh``: encodings are bucketed into **FE** vs **PE**
+(``utils.hopse_m_encoding_f_vs_pe_sub_id``: HKFE/HKFE-style → ``f``, else ``pe`` — same sweep
+labels as ``fe::`` vs ``pse::`` in ``hopse_m.sh``), and the best-val row is chosen **separately**
+per ``(model, dataset, branch)``. HOPSE-G and other models use a single winner per
+``(model, dataset)``. Override ``--group-by`` to skip the HOPSE-M split (advanced).
+
+At the top of this file, set ``RERUN_MODEL_ALLOWLIST`` / ``RERUN_HOPSE_M_BRANCHES`` to restrict
+which models (and optionally which HOPSE-M branch) get commands in the emitted ``.sh`` files.
 
 **Training defaults** mirror the sweep scripts (``gat.sh`` / ``gcn.sh`` / ``hopse_m.sh`` /
 ``topotune.sh`` / ``sann.sh`` / ``sccnn.sh`` / ``cwn.sh``): ``trainer.min_epochs=50``,
@@ -55,15 +66,16 @@ On the **parallel** script, ``--append-arg trainer.devices=...`` overrides the r
 for that slot (still appended last).
 
 **Hydra overrides from the winner row** use ``utils.hydra_overrides_from_aggregated_row`` with
-``utils.CONFIG_PARAM_KEYS`` (same column contract as ``main_loader`` / seed aggregation). That
-includes sweep axes that must be present for correct reruns, for example:
+``utils.CONFIG_PARAM_KEYS`` (same column contract as ``main_loader`` / seed aggregation; see
+the list header comment in ``utils.py`` for sweep script coverage: ``hopse_m`` / ``hopse_g``,
+``topotune``, ``sann``, ``sccnn``, ``cwn``, GNN ``transforms`` / ``Combined*``). Non-empty cells
+become CLI overrides. Examples:
 
 - **HOPSE_G / GPSE** — ``transforms.hopse_encoding.pretrain_model`` (and related
   ``transforms.hopse_encoding.*`` keys) so molpcba vs zinc checkpoints are not dropped.
 - **SANN** — ``transforms.sann_encoding.*``, ``model.feature_encoder.selected_dimensions``, etc.
 
-Only non-empty cells become ``key=value`` flags; re-export from W&B after extending
-``CONFIG_PARAM_KEYS`` so the seed-aggregated CSV carries those columns.
+Re-export from W&B after extending ``CONFIG_PARAM_KEYS`` so the seed-aggregated CSV carries any new sweep axes.
 
 Usage::
 
@@ -88,13 +100,43 @@ from main_loader import DATASETS as LOADER_DATASETS
 from utils import (
     CONFIG_PARAM_KEYS,
     DEFAULT_AGGREGATED_EXPORT_CSV,
+    HOPSE_M_MODEL_PATHS,
+    MODEL_PREPROC_ENCODINGS,
     SEED_COLUMN,
     aggregated_rows_best_validation_per_group,
+    hopse_m_encoding_f_vs_pe_sub_id,
     hydra_dataset_key_from_loader_identity,
     hydra_overrides_from_aggregated_row,
     load_wandb_export_csv,
     safe_filename_token,
 )
+
+# -----------------------------------------------------------------------------
+# Which reruns to emit (edit here)
+# -----------------------------------------------------------------------------
+# ``None`` → every model that survives dataset filtering gets a rerun (unchanged behaviour).
+# Otherwise only ``model`` values exactly matching these Hydra paths are kept.
+#
+# Example (uncomment / adjust):
+RERUN_MODEL_ALLOWLIST = frozenset(
+ {
+     "graph/gcn",
+     "graph/gat",
+     "graph/gin",
+     "cell/hopse_m",
+     "simplicial/hopse_m",
+     "cell/hopse_g",
+     "simplicial/hopse_g",
+     "cell/cwn"
+ }
+ )
+#RERUN_MODEL_ALLOWLIST: frozenset[str] | None = None
+
+# For ``simplicial/hopse_m`` and ``cell/hopse_m`` only (requires default ``--group-by`` so the
+# FE vs PE shard exists): ``None`` → emit **both** best-val winners (FE branch ``f`` and PE ``pe``).
+# ``frozenset({"f"})`` → FE encodings only (HKFE/KHopFE-style, same idea as ``fe::`` in hopse_m.sh);
+# ``frozenset({"pe"})`` → PE encodings only (``pse::`` / LapPE-style sweeps).
+RERUN_HOPSE_M_BRANCHES: frozenset[str] | None = None
 
 # Repo ``scripts/`` (parent of ``hopse_plotting/``)
 _DEFAULT_SCRIPTS_DIR = Path(__file__).resolve().parent.parent
@@ -125,11 +167,36 @@ DEFAULT_RERUN_ALLOWED_HYDRA_DATASETS: frozenset[str] = frozenset(
 
 DEFAULT_PARALLEL_GPUS = "0,1,2,3,4,5,6,7"
 
+# Internal only (not in ``CONFIG_PARAM_KEYS``); used when ``--group-by`` is default ``model dataset``.
+_RERUN_HOPSE_M_BRANCH_COL = "_rerun_hopse_m_branch"
+_DEFAULT_RERUN_GROUP_COLS: tuple[str, ...] = ("model", "dataset")
 
-def _sort_key_model_dataset(row) -> tuple[str, str]:
+
+def dataframe_with_hopse_m_rerun_branch(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add ``_rerun_hopse_m_branch`` (``f`` / ``pe`` / empty) so HOPSE-M best-val matches
+    ``table_generator`` HOPSE-M-F vs HOPSE-M-PE picks.
+    """
+    out = df.copy()
+    branches: list[str] = []
+    for _idx, row in out.iterrows():
+        m = str(row.get("model", "")).strip()
+        if m in HOPSE_M_MODEL_PATHS:
+            ev = row[MODEL_PREPROC_ENCODINGS] if MODEL_PREPROC_ENCODINGS in row.index else None
+            branches.append(hopse_m_encoding_f_vs_pe_sub_id(ev))
+        else:
+            branches.append("")
+    out[_RERUN_HOPSE_M_BRANCH_COL] = branches
+    return out
+
+
+def _sort_key_rerun_row(row) -> tuple[str, str, str]:
     m = str(row.get("model", ""))
     d = str(row.get("dataset", ""))
-    return (m, d)
+    b = ""
+    if _RERUN_HOPSE_M_BRANCH_COL in row.index:
+        b = str(row.get(_RERUN_HOPSE_M_BRANCH_COL, "") or "")
+    return (m, d, b)
 
 
 def dataframe_filter_rerun_datasets(
@@ -281,6 +348,12 @@ def _base_hydra_parts_for_row(
         parts.append(f"logger.wandb.project={wandb_project}")
         if wandb_run_name:
             base_nm = f"{model.replace('/', '__')}__{dataset.replace('/', '__')}"
+            if _RERUN_HOPSE_M_BRANCH_COL in row.index:
+                br = str(row.get(_RERUN_HOPSE_M_BRANCH_COL, "") or "").strip()
+                if br == "f":
+                    base_nm = f"{base_nm}__hopse_m_F"
+                elif br == "pe":
+                    base_nm = f"{base_nm}__hopse_m_PE"
             if wandb_run_suffix:
                 base_nm = f"{base_nm}{wandb_run_suffix}"
             wname = safe_filename_token(base_nm, max_len=120)
@@ -293,8 +366,46 @@ def _sorted_winner_rows(df, *, group_cols: list[str]):
     if winners.empty:
         raise ValueError("No rows after best-val selection (empty input?)")
     rows = [winners.iloc[i] for i in range(len(winners))]
-    rows.sort(key=_sort_key_model_dataset)
+    rows.sort(key=_sort_key_rerun_row)
     return rows
+
+
+def _filter_winner_rows_by_allowlist(rows: list) -> list:
+    """
+    Apply ``RERUN_MODEL_ALLOWLIST`` and ``RERUN_HOPSE_M_BRANCHES`` (see module constants).
+
+    HOPSE-M branch filtering only applies when ``_rerun_hopse_m_branch`` is present on the row
+    (default ``--group-by`` with internal HOPSE shard).
+    """
+    allow = RERUN_MODEL_ALLOWLIST
+    branches = RERUN_HOPSE_M_BRANCHES
+    if allow is None and branches is None:
+        return rows
+
+    out: list = []
+    for row in rows:
+        m = str(row.get("model", "")).replace("\r", "").strip()
+        if allow is not None and m not in allow:
+            continue
+        if branches is not None and m in HOPSE_M_MODEL_PATHS:
+            if _RERUN_HOPSE_M_BRANCH_COL not in row.index:
+                continue
+            br = str(row.get(_RERUN_HOPSE_M_BRANCH_COL, "") or "").strip()
+            if br not in branches:
+                continue
+        out.append(row)
+    return out
+
+
+def _hopse_m_branch_comment(row) -> str:
+    if _RERUN_HOPSE_M_BRANCH_COL not in row.index:
+        return ""
+    br = str(row.get(_RERUN_HOPSE_M_BRANCH_COL, "") or "").strip()
+    if br == "f":
+        return "  |  HOPSE-M-F"
+    if br == "pe":
+        return "  |  HOPSE-M-PE"
+    return ""
 
 
 def emit_sequential_rerun_script(
@@ -315,11 +426,17 @@ def emit_sequential_rerun_script(
 ) -> int:
     skip_seed = set() if keep_row_seed else {SEED_COLUMN}
     rows = _sorted_winner_rows(df, group_cols=group_cols)
+    rows = _filter_winner_rows_by_allowlist(rows)
+    if not rows:
+        raise ValueError(
+            "No rerun rows after RERUN_MODEL_ALLOWLIST / RERUN_HOPSE_M_BRANCHES filter "
+            "(see top of best_rerun_sh_generator.py)."
+        )
     app = [a.replace("\r", "") for a in append_args]
 
     lines: list[str] = [
         "#!/usr/bin/env bash",
-        "# Auto-generated: best val per (model, dataset) — run commands one after another.",
+        "# Auto-generated: best val per (model, dataset[, HOPSE-M F/PE branch]) — run sequentially.",
         "# Pair script: best_val_reruns_parallel.sh (GPUs in parallel, then wait).",
         "",
     ]
@@ -346,7 +463,7 @@ def emit_sequential_rerun_script(
             parts.extend(app)
             cmd = shlex.join([interpreter, "-m", "topobench", *parts])
             seed_note = f"  |  data_seed={data_seed}" if multi else ""
-            lines.append(f"# {model}  |  {dataset}{seed_note}")
+            lines.append(f"# {model}  |  {dataset}{_hopse_m_branch_comment(row)}{seed_note}")
             lines.append(cmd)
             lines.append("")
             n_cmd += 1
@@ -379,23 +496,58 @@ def emit_parallel_rerun_script(
     wandb_project: str | None,
     wandb_run_name: bool,
     gpu_ids: list[int],
+    jobs_per_gpu: int = 1,
 ) -> int:
     skip_seed = set() if keep_row_seed else {SEED_COLUMN}
     rows = _sorted_winner_rows(df, group_cols=group_cols)
+    rows = _filter_winner_rows_by_allowlist(rows)
+    if not rows:
+        raise ValueError(
+            "No rerun rows after RERUN_MODEL_ALLOWLIST / RERUN_HOPSE_M_BRANCHES filter "
+            "(see top of best_rerun_sh_generator.py)."
+        )
     app = [a.replace("\r", "") for a in append_args]
 
+    jpg = max(1, int(jobs_per_gpu))
     gpu_bash_array = " ".join(str(g) for g in gpu_ids)
     lines: list[str] = [
         "#!/usr/bin/env bash",
-        "# Auto-generated: same best-val reruns as best_val_reruns_sequential.sh, but launch in parallel.",
-        "# trainer.devices=[GPU] round-robins over GPUS; each job runs in background; wait at end.",
+        "# Auto-generated: same best-val reruns as best_val_reruns_sequential.sh, with bounded parallelism.",
+        "# Uses virtual GPU slots + wait -n (same pattern as scripts/hopse_m.sh): never launch all jobs at once.",
         "",
-        "# Optional: match hopse_m.sh thread limits when many jobs share a machine",
+        "# Concurrent jobs per physical GPU at generation time; override without regenerating:",
+        f'_JOBS_PER_GPU="${{RERUN_JOBS_PER_GPU:-{jpg}}}"',
+        "",
+        "# Optional: match hopse_m.sh thread limits when multiple jobs share a machine",
         "# export OMP_NUM_THREADS=1 MKL_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1",
         "",
-        f"GPUS=({gpu_bash_array})",
-        "_NUM_GPUS=${#GPUS[@]}",
-        "_i=0",
+        f"_PHYSICAL_GPUS=({gpu_bash_array})",
+        "gpus=()",
+        'for gpu in "${_PHYSICAL_GPUS[@]}"; do',
+        '  for ((j=1; j<=_JOBS_PER_GPU; j++)); do gpus+=("$gpu"); done',
+        "done",
+        'declare -a slot_pids',
+        'for i in "${!gpus[@]}"; do slot_pids[$i]=0; done',
+        "",
+        "_acquire_rerun_slot() {",
+        "    assigned_slot=-1",
+        '    while [ "$assigned_slot" -eq -1 ]; do',
+        '        for i in "${!gpus[@]}"; do',
+        '            pid="${slot_pids[$i]}"',
+        '            if [ "$pid" -eq 0 ] || ! kill -0 "$pid" 2>/dev/null; then',
+        "                assigned_slot=$i",
+        "                break",
+        "            fi",
+        "        done",
+        '        if [ "$assigned_slot" -eq -1 ]; then',
+        "            wait -n",
+        "        fi",
+        "    done",
+        "    _RERUN_SLOT_IDX=$assigned_slot",
+        '    _gpu="${gpus[$assigned_slot]}"',
+        "}",
+        "",
+        'echo "Parallel reruns: ${#gpus[@]} slot(s) (${_JOBS_PER_GPU} job(s)/GPU × ${#_PHYSICAL_GPUS[@]} GPU(s))."',
         "",
     ]
 
@@ -426,9 +578,10 @@ def emit_parallel_rerun_script(
             else:
                 cmd_body = f"{pre} {dev_fragment}"
             seed_note = f"  |  data_seed={data_seed}" if multi else ""
-            lines.append(f"# {model}  |  {dataset}{seed_note}")
-            lines.append('_gpu="${GPUS[$((_i % _NUM_GPUS))]}"; _i=$((_i + 1))')
+            lines.append(f"# {model}  |  {dataset}{_hopse_m_branch_comment(row)}{seed_note}")
+            lines.append("_acquire_rerun_slot")
             lines.append(f"{cmd_body} &")
+            lines.append("slot_pids[$_RERUN_SLOT_IDX]=$!")
             lines.append("")
             n_cmd += 1
 
@@ -482,11 +635,26 @@ def main() -> None:
         help=f"Comma-separated GPU indices for round-robin trainer.devices (default: {DEFAULT_PARALLEL_GPUS})",
     )
     p.add_argument(
+        "--parallel-jobs-per-gpu",
+        type=int,
+        default=1,
+        metavar="N",
+        help=(
+            "Parallel script only: concurrent jobs allowed per physical GPU "
+            "(virtual slots = N × len(--parallel-gpus)). Default 1. "
+            "Override at run time with env RERUN_JOBS_PER_GPU."
+        ),
+    )
+    p.add_argument(
         "--group-by",
         metavar="COL",
         nargs="+",
         default=["model", "dataset"],
-        help="Group columns for best-val pick (default: model dataset)",
+        help=(
+            "Group columns for best-val pick. Default ``model dataset`` adds an internal "
+            "HOPSE-M F vs PE shard (same as ``table_generator`` submodels). Pass explicit columns "
+            "to disable that behavior (CSV must contain every named column)."
+        ),
     )
     p.add_argument(
         "--interpreter",
@@ -596,14 +764,36 @@ def main() -> None:
             f"(expected for seed-aggregated exports); using --data-seeds."
         )
 
+    requested_group = tuple(str(c).strip() for c in args.group_by)
+    if requested_group == _DEFAULT_RERUN_GROUP_COLS:
+        df = dataframe_with_hopse_m_rerun_branch(df)
+        effective_group = list(_DEFAULT_RERUN_GROUP_COLS) + [_RERUN_HOPSE_M_BRANCH_COL]
+        print(
+            f"Grouping: {effective_group!r} (HOPSE-M: separate best-val winner per F vs PE encodings)."
+        )
+    else:
+        effective_group = list(args.group_by)
+        missing_g = [c for c in effective_group if c not in df.columns]
+        if missing_g:
+            raise SystemExit(
+                "best_rerun_sh_generator: CSV missing column(s) for --group-by: "
+                + ", ".join(repr(c) for c in missing_g)
+            )
+
     seeds = _parse_data_seeds(str(args.data_seeds).replace("\r", ""))
+
+    if RERUN_MODEL_ALLOWLIST is not None or RERUN_HOPSE_M_BRANCHES is not None:
+        print(
+            f"Rerun filter: RERUN_MODEL_ALLOWLIST={RERUN_MODEL_ALLOWLIST!r}, "
+            f"RERUN_HOPSE_M_BRANCHES={RERUN_HOPSE_M_BRANCHES!r}"
+        )
 
     common_kw = dict(
         interpreter=args.interpreter,
         data_seeds=seeds,
         append_args=list(args.append_arg),
         keep_row_seed=args.keep_row_seed,
-        group_cols=list(args.group_by),
+        group_cols=effective_group,
         max_epochs=int(args.max_epochs),
         early_stopping_patience=args.early_stopping_patience,
         fixed_args_profile=str(args.fixed_args_profile),
@@ -617,10 +807,17 @@ def main() -> None:
 
     if not args.no_parallel_script:
         gpus = _parse_parallel_gpus(args.parallel_gpus)
-        n2 = emit_parallel_rerun_script(df, path=args.output_parallel, gpu_ids=gpus, **common_kw)
+        n2 = emit_parallel_rerun_script(
+            df,
+            path=args.output_parallel,
+            gpu_ids=gpus,
+            jobs_per_gpu=int(args.parallel_jobs_per_gpu),
+            **common_kw,
+        )
+        slots = len(gpus) * max(1, int(args.parallel_jobs_per_gpu))
         print(
             f"Wrote {n2} parallel command(s) -> {args.output_parallel} "
-            f"(GPUS round-robin: {gpus})"
+            f"(GPUs {gpus}, max {slots} concurrent via slot pool)"
         )
 
 
