@@ -72,6 +72,7 @@ CONFIG_PARAM_KEYS: list[str] = [
     "model",
     "dataset",
     "transforms",
+    "model.params.total",
     "transforms.CombinedPSEs.encodings",
     "transforms.CombinedFEs.encodings",
     # SANN sweeps (``scripts/sann.sh``): k-hop transform + backbone/complex dims.
@@ -121,6 +122,7 @@ SUMMARY_COLUMN_PREFIX = "summary_"
 # e.g. torch_geometric GAT: range(num_layers - 2).
 HYDRA_WHOLE_NUMBER_OVERRIDE_KEYS: frozenset[str] = frozenset(
     {
+        "model.params.total",
         "model.backbone.num_layers",
         "model.backbone.n_layers",
         "model.backbone.GNN.num_layers",
