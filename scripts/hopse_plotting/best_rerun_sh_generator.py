@@ -74,6 +74,12 @@ become CLI overrides. Examples:
 - **HOPSE_G / GPSE** — ``transforms.hopse_encoding.pretrain_model`` (and related
   ``transforms.hopse_encoding.*`` keys) so molpcba vs zinc checkpoints are not dropped.
 - **SANN** — ``transforms.sann_encoding.*``, ``model.feature_encoder.selected_dimensions``, etc.
+- **SCCNN** — CSV / sweeps may record ``model=simplicial/sccnn`` (TopoModelX backbone). Reruns
+  rewrite that override to ``simplicial/sccnn_custom`` (``topobench`` backbone), matching
+  stable GPU runs used elsewhere in this repo.
+- **``model.backbone.complex_dim``** — some W&B exports log this, but current model YAMLs
+  keep ``complex_dim`` on ``backbone_wrapper`` / ``readout`` (or omit it on ``SCCNNCustom``).
+  That override is dropped from emitted reruns so Hydra struct mode does not error.
 
 Re-export from W&B after extending ``CONFIG_PARAM_KEYS`` so the seed-aggregated CSV carries any new sweep axes.
 
@@ -115,21 +121,17 @@ from utils import (
 # Which reruns to emit (edit here)
 # -----------------------------------------------------------------------------
 # ``None`` → every model that survives dataset filtering gets a rerun (unchanged behaviour).
-# Otherwise only ``model`` values exactly matching these Hydra paths are kept.
+# Otherwise only rows whose CSV ``model`` matches these Hydra paths are kept (exact string).
+# Exception: allowlisting ``simplicial/sccnn_custom`` also keeps CSV ``simplicial/sccnn`` (and
+# the reverse), since sweeps record ``sccnn`` but emitted reruns rewrite to ``sccnn_custom``.
 #
 # Example (uncomment / adjust):
 RERUN_MODEL_ALLOWLIST = frozenset(
- {
-     "graph/gcn",
-     "graph/gat",
-     "graph/gin",
-     "cell/hopse_m",
-     "simplicial/hopse_m",
-     "cell/hopse_g",
-     "simplicial/hopse_g",
-     "cell/cwn"
- }
- )
+    {
+        "simplicial/sann",
+        "simplicial/sccnn_custom",
+    }
+)
 #RERUN_MODEL_ALLOWLIST: frozenset[str] | None = None
 
 # For ``simplicial/hopse_m`` and ``cell/hopse_m`` only (requires default ``--group-by`` so the
@@ -165,11 +167,31 @@ DEFAULT_RERUN_ALLOWED_HYDRA_DATASETS: frozenset[str] = frozenset(
     d for d in LOADER_DATASETS if d not in _TRANSDUCTIVE_COCITATION_HYDRA
 )
 
-DEFAULT_PARALLEL_GPUS = "0,1,2,3,4,5,6,7"
+DEFAULT_PARALLEL_GPUS = "2,3"
 
 # Internal only (not in ``CONFIG_PARAM_KEYS``); used when ``--group-by`` is default ``model dataset``.
 _RERUN_HOPSE_M_BRANCH_COL = "_rerun_hopse_m_branch"
 _DEFAULT_RERUN_GROUP_COLS: tuple[str, ...] = ("model", "dataset")
+
+# Sweeps use ``simplicial/sccnn`` (``topomodelx``); reruns use the in-repo implementation.
+_RERUN_SCCNN_MODEL_CSV = "simplicial/sccnn"
+_RERUN_SCCNN_MODEL_HYDRA = "simplicial/sccnn_custom"
+
+
+def _apply_rerun_model_hydra_rewrites(parts: list[str], *, csv_model: str) -> None:
+    """In-place: adjust ``model=`` overrides where the rerun CLI should differ from the CSV row."""
+    m = str(csv_model).replace("\r", "").strip()
+    if m == _RERUN_SCCNN_MODEL_CSV:
+        target = f"model={_RERUN_SCCNN_MODEL_HYDRA}"
+        for i, p in enumerate(parts):
+            if p.startswith("model="):
+                parts[i] = target
+                break
+
+
+def _strip_legacy_backbone_complex_dim_override(parts: list[str]) -> None:
+    """Remove ``model.backbone.complex_dim`` (logged in some exports; not on backbone in repo YAML)."""
+    parts[:] = [p for p in parts if not p.startswith("model.backbone.complex_dim=")]
 
 
 def dataframe_with_hopse_m_rerun_branch(df: pd.DataFrame) -> pd.DataFrame:
@@ -332,6 +354,8 @@ def _base_hydra_parts_for_row(
         config_keys=list(CONFIG_PARAM_KEYS),
         skip_keys=skip_seed,
     )
+    _apply_rerun_model_hydra_rewrites(parts, csv_model=model)
+    _strip_legacy_backbone_complex_dim_override(parts)
     parts.extend(_benchmark_training_extras(resolved_profile))
     if not any(p.startswith(f"{SEED_COLUMN}=") for p in parts):
         parts.append(f"{SEED_COLUMN}={data_seed}")
@@ -370,6 +394,17 @@ def _sorted_winner_rows(df, *, group_cols: list[str]):
     return rows
 
 
+def _csv_model_matches_rerun_allowlist(m: str, allow: frozenset[str]) -> bool:
+    """CSV ``model`` vs ``RERUN_MODEL_ALLOWLIST`` (see ``_RERUN_SCCNN_MODEL_*`` SCCNN rename)."""
+    if m in allow:
+        return True
+    if m == _RERUN_SCCNN_MODEL_CSV and _RERUN_SCCNN_MODEL_HYDRA in allow:
+        return True
+    if m == _RERUN_SCCNN_MODEL_HYDRA and _RERUN_SCCNN_MODEL_CSV in allow:
+        return True
+    return False
+
+
 def _filter_winner_rows_by_allowlist(rows: list) -> list:
     """
     Apply ``RERUN_MODEL_ALLOWLIST`` and ``RERUN_HOPSE_M_BRANCHES`` (see module constants).
@@ -385,7 +420,7 @@ def _filter_winner_rows_by_allowlist(rows: list) -> list:
     out: list = []
     for row in rows:
         m = str(row.get("model", "")).replace("\r", "").strip()
-        if allow is not None and m not in allow:
+        if allow is not None and not _csv_model_matches_rerun_allowlist(m, allow):
             continue
         if branches is not None and m in HOPSE_M_MODEL_PATHS:
             if _RERUN_HOPSE_M_BRANCH_COL not in row.index:

@@ -299,6 +299,11 @@ def get_from_flat(flat: Mapping[str, Any], dotted: str) -> Any:
     slashy = dotted.replace(".", "/")
     if slashy in flat:
         return flat[slashy]
+    # W&B often nests keys logged with ``/`` (e.g. ``AvgTime/train_epoch_mean``) as
+    # ``{"AvgTime": {"train_epoch_mean": ...}}`` → ``flatten_config`` → ``AvgTime.train_epoch_mean``.
+    dotty = dotted.replace("/", ".")
+    if dotty in flat and dotty != dotted:
+        return flat[dotty]
     return ""
 
 

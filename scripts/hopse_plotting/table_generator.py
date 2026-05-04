@@ -18,8 +18,8 @@ during aggregation (e.g. missing ``transforms.hopse_encoding.pretrain_model`` fo
 - **stdblue**: not significantly different from the column best at 95% confidence
   (two-sided Z on independent means in code; SE = seed-agg std / sqrt(n_seeds)).
 
-Model blocks: graph GCN/GAT/GIN; simplicial HOPSE-M, HOPSE-G, TopoTune, SCCNN
-(``simplicial/sccnn``; legacy exports may use ``simplicial/sccnn_custom``, merged when reading);
+Model blocks: graph GCN/GAT/GIN; simplicial TopoTune, SCCNN (``simplicial/sccnn``; legacy exports may
+use ``simplicial/sccnn_custom``, merged when reading), SANN (``simplicial/sann``), HOPSE-M, HOPSE-G;
 cell HOPSE-M, HOPSE-G, TopoTune, CWN (``cell/cwn``).
 **Dataset columns** come from ``DATASETS`` in ``main_loader.py``, reordered so **all graph
 columns precede all simplicial**. Transductive cocitation datasets (Cora/Citeseer/PubMed) are
@@ -27,7 +27,7 @@ columns precede all simplicial**. Transductive cocitation datasets (Cora/Citesee
 
 - **``main_table_all_big.tex``** — full submodel rows: GNN split by ``transforms`` (plain / ``-F`` /
   ``-PE``); HOPSE-M split by encodings (**HOPSE-M-F** vs **HOPSE-M-PE**). Within Simplicial and Cell
-  bands, **TopoTune / SCCNN** (resp. **TopoTune / CWN**) appear **above** HOPSE rows.
+  bands, **TopoTune / SCCNN / SANN** (resp. **TopoTune / CWN**) appear **above** HOPSE rows.
 - **``main_table_all_compact.tex``** — same Simplicial and Cell rows; **one row per GNN backbone**
   (GCN/GAT/GIN) showing the sub-configuration that achieved the **best validation** mean for each
   dataset (test numbers from that winner).
@@ -360,10 +360,11 @@ def graph_submodel_table_rows(stats: dict[tuple[str, str], Any]) -> list[tuple[s
 
 
 def simplicial_submodel_table_rows() -> list[tuple[str, str]]:
-    """TopoTune / SCCNN first; HOPSE variants last."""
+    """TopoTune / SCCNN / SANN first; HOPSE variants last (``_sub_id`` from ``dataframe_with_submodel_id``)."""
     return [
         (r"simplicial/topotune|default", "TopoTune"),
         (r"simplicial/sccnn|default", "SCCNN"),
+        (r"simplicial/sann|default", "SANN"),
         (r"simplicial/hopse_m|f", r"\textbf{HOPSE-M-F} (Our)"),
         (r"simplicial/hopse_m|pe", r"\textbf{HOPSE-M-PE} (Our)"),
         (r"simplicial/hopse_g|default", r"\textbf{HOPSE-G} (Our)"),

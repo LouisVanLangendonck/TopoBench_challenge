@@ -8,14 +8,19 @@ column layout as ``table_generator`` compact mode:
 1. **Performance** — test mean ± std from ``summary_test_best_rerun/*`` (same picks as main tables).
 2. **Train time per epoch** — from ``AvgTime/train_epoch_mean`` / ``AvgTime/train_epoch_std``.
    TopoBench logs these via ``log_hyperparams`` (W&B **config**, not scalar summary); this
-   script copies them into ``summary_*`` for the CSV. One raw run per group at
-   ``--epoch-timing-seed`` (default ``0``); ± is within-run epoch variability.
+   script copies them into ``summary_*`` for the CSV. For each (model, dataset, submodel),
+   among all raw seeds with finite timing, the run with the **lowest within-run epoch std**
+   (``summary_AvgTime/train_epoch_std``) is kept as the most stable timing; ± is that
+   within-run variability. Two LaTeX tables use the same numbers: one bolds the column
+   minimum **per domain** (graph / simplicial / cell), the other **across all models**.
 3. **End-to-end wall time** — W&B's ``_runtime`` (seconds) is mapped to ``summary_Runtime`` and
    aggregated across seeds (mean ± std).
 
-Time ``.tex`` tables use the same **bold / blue** convention as ``table_generator``, but per
-column **lowest mean time** is best; blue cells are not significantly slower than that minimum
-(two-sided $Z$ at 95\\,\\%, SE $= \\sigma/\\sqrt{n\_\\mathrm{seeds}}$).
+Time ``.tex`` tables (runtime + per-epoch): default **bold** = lowest mean in that **dataset
+column** within the same **domain band**; **blue** = not significantly different from that
+within-domain minimum (two-sided $Z$ at 95\\,\\%, SE $= \\sigma/\\sqrt{n\_\\mathrm{seeds}}$).
+The extra ``rerun_time_train_epoch_bold_global.tex`` uses the same per-epoch cells but bolds
+the minimum **across all models** in each column.
 
 Run from repo root (``sys.path`` includes this directory when invoking the script)::
 
@@ -294,16 +299,46 @@ def collect_runtime_stats_from_agg_winners(
     return out
 
 
-def collect_epoch_time_stats_one_seed(
+def _pick_raw_row_min_epoch_timing_std(
+    sub: pd.DataFrame, *, mean_col: str, std_col: str
+) -> pd.Series | None:
+    """
+    Among raw runs in ``sub``, require finite ``mean_col`` (seconds per epoch).
+    Prefer the run with the lowest ``std_col`` (within-run epoch timing variability); tie-break
+    by lower mean (faster), then lower data seed.
+    """
+    best: tuple[tuple, pd.Series] | None = None
+    for _idx, sr in sub.iterrows():
+        mu = pd.to_numeric(sr.get(mean_col), errors="coerce")
+        if pd.isna(mu) or not math.isfinite(float(mu)):
+            continue
+        mu_f = float(mu)
+        sig = float("nan")
+        if std_col and std_col in sub.columns:
+            v = pd.to_numeric(sr.get(std_col), errors="coerce")
+            if pd.notna(v) and math.isfinite(float(v)):
+                sig = float(v)
+        seed_tie = pd.to_numeric(sr.get(SEED_COLUMN), errors="coerce")
+        seed_tie = float(seed_tie) if pd.notna(seed_tie) else float("inf")
+        if math.isfinite(sig):
+            key = (0, sig, mu_f, seed_tie)
+        else:
+            key = (1, float("inf"), mu_f, seed_tie)
+        if best is None or key < best[0]:
+            best = (key, sr)
+    return None if best is None else best[1]
+
+
+def collect_epoch_time_stats_min_timing_std(
     df_raw: pd.DataFrame,
     *,
-    preferred_seed: int,
     mean_col: str,
     std_col: str,
 ) -> dict[tuple[str, str], dict[str, Any]]:
     """
-    One raw row per (model, dataset, _sub_id) at ``preferred_seed`` (fallback: any row).
-    Values stored as ``test_mean`` / ``test_std`` for table + GNN collapse.
+    One raw row per (model, dataset, _sub_id): pick the seed whose logged **epoch-time std**
+    (within-run) is smallest among rows with finite per-epoch mean. Values stored as
+    ``test_mean`` / ``test_std`` for table + GNN collapse.
     """
     work = dataframe_with_submodel_id(df_raw)
     colset = set(work.columns)
@@ -319,11 +354,9 @@ def collect_epoch_time_stats_one_seed(
         ds_raw = str(dataset_raw).strip()
         dataset = hydra_dataset_key_from_loader_identity(ds_raw)
 
-        seeds = pd.to_numeric(sub[SEED_COLUMN], errors="coerce")
-        pick = sub.loc[seeds == preferred_seed]
-        if pick.empty:
-            pick = sub
-        row = pick.iloc[0]
+        row = _pick_raw_row_min_epoch_timing_std(sub, mean_col=mean_col, std_col=std_col)
+        if row is None:
+            continue
 
         mu = float(pd.to_numeric(row.get(mean_col), errors="coerce"))
         if not math.isfinite(mu):
@@ -365,6 +398,33 @@ def collect_epoch_time_stats_one_seed(
     return out
 
 
+def _domain_row_keys_for_time_table(
+    row_key: str,
+    *,
+    graph_rows: list[tuple[str, str]],
+    simplicial_rows: list[tuple[str, str]],
+    cell_rows: list[tuple[str, str]],
+) -> list[str]:
+    """Stats row keys in the same rotated band as ``row_key`` (graph / simplicial / cell)."""
+    if str(row_key).startswith("graph/"):
+        return [rk for rk, _ in graph_rows]
+    if str(row_key).startswith("simplicial/"):
+        return [rk for rk, _ in simplicial_rows]
+    if str(row_key).startswith("cell/"):
+        return [rk for rk, _ in cell_rows]
+    return [rk for rk, _ in graph_rows + simplicial_rows + cell_rows]
+
+
+def _all_row_keys_for_time_table(
+    *,
+    graph_rows: list[tuple[str, str]],
+    simplicial_rows: list[tuple[str, str]],
+    cell_rows: list[tuple[str, str]],
+) -> list[str]:
+    """Every model row key (graph + simplicial + cell) for column-global minimum / Z comparisons."""
+    return [rk for rk, _ in graph_rows + simplicial_rows + cell_rows]
+
+
 def build_rerun_metric_table_plain(
     stats: dict[tuple[str, str], dict[str, Any]],
     *,
@@ -375,12 +435,16 @@ def build_rerun_metric_table_plain(
     caption: str,
     label: str,
     decimals: int = 2,
+    comparison_scope: str = "domain",
 ) -> str:
     """
-    Same geometry as ``build_latex_table``. **Lower mean time is better** per column:
-    \\cellcolor{bestgray} + \\boldmath for the fastest mean; \\cellcolor{stdblue} when a
-    two-sided Z-test (same SE rule as ``table_generator``) finds no significant difference
-    from that column's fastest mean at 95\\,\\%.
+    Same geometry as ``build_latex_table``. **Lower mean time is better** per dataset column.
+
+    ``comparison_scope``:
+
+    - ``"domain"`` (default): bold / blue use the minimum **within the same band** (graph,
+      simplicial, or cell) as ``row_key``.
+    - ``"global"``: bold / blue use the minimum **across all model rows** in that column.
     """
     dataset_specs: list[tuple[str, str]] = []
     group_ranges: list[tuple[str, int, int]] = []
@@ -393,8 +457,6 @@ def build_rerun_metric_table_plain(
 
     n_d = len(dataset_specs)
     colspec = "@{}ll" + "c" * n_d + "@{}"
-
-    all_row_keys = [rk for rk, _ in graph_rows + simplicial_rows + cell_rows]
 
     def _tol_eq(a: float, b: float) -> bool:
         return abs(a - b) <= 1e-9 * (1.0 + abs(b))
@@ -410,8 +472,21 @@ def build_rerun_metric_table_plain(
         n_seeds = int(pd.to_numeric(n_raw, errors="coerce")) if _finite(n_raw) else 0
         se = _sem(sd, max(n_seeds, 0))
 
+        if comparison_scope == "global":
+            band_keys = _all_row_keys_for_time_table(
+                graph_rows=graph_rows,
+                simplicial_rows=simplicial_rows,
+                cell_rows=cell_rows,
+            )
+        else:
+            band_keys = _domain_row_keys_for_time_table(
+                row_key,
+                graph_rows=graph_rows,
+                simplicial_rows=simplicial_rows,
+                cell_rows=cell_rows,
+            )
         mus: list[float] = []
-        for rk in all_row_keys:
+        for rk in band_keys:
             t = stats.get((rk, ds_key))
             if t and _finite(t.get("test_mean")):
                 mus.append(float(t["test_mean"]))
@@ -424,7 +499,7 @@ def build_rerun_metric_table_plain(
         is_best = _tol_eq(mu, best_val)
 
         ref_mu, ref_se = best_val, 0.0
-        for rk in all_row_keys:
+        for rk in band_keys:
             t = stats.get((rk, ds_key))
             if not t or not _finite(t.get("test_mean")):
                 continue
@@ -545,12 +620,6 @@ def main() -> None:
         help="Do not filter on n_seeds.",
     )
     p.add_argument(
-        "--epoch-timing-seed",
-        type=int,
-        default=0,
-        help="Data seed used for per-epoch AvgTime columns (default: 0).",
-    )
-    p.add_argument(
         "--tables-dir",
         type=Path,
         default=TABLES_DIR,
@@ -630,8 +699,8 @@ def main() -> None:
     stats_rt_compact = collapse_gnn_submodel_rows_to_base(stats_rt_sub) if stats_rt_sub else {}
 
     cap_rt = (
-        "End-to-end time in seconds (mean $\\pm$ std over seeds). "
-        "\\textbf{Bold}: lowest mean per column; "
+        "End-to-end time (without preprocessing) in seconds (mean $\\pm$ std over seeds). "
+        "\\textbf{Bold}: lowest mean per dataset (column) and domain type (graph, simplicial or cell). "
         "\\protect\\colorbox{stdblue}{blue}: not significantly slower than that minimum (95\\,\\%, two-sided $Z$)."
     )
     tex_rt_compact = build_rerun_metric_table_plain(
@@ -647,9 +716,8 @@ def main() -> None:
 
     stats_ep_sub: dict[tuple[str, str], dict[str, Any]] = {}
     if SUMMARY_EPOCH_MEAN in df_raw.columns:
-        stats_ep_sub = collect_epoch_time_stats_one_seed(
+        stats_ep_sub = collect_epoch_time_stats_min_timing_std(
             df_raw,
-            preferred_seed=int(args.epoch_timing_seed),
             mean_col=SUMMARY_EPOCH_MEAN,
             std_col=SUMMARY_EPOCH_STD if SUMMARY_EPOCH_STD in df_raw.columns else "",
         )
@@ -660,9 +728,8 @@ def main() -> None:
     stats_ep_compact = collapse_gnn_submodel_rows_to_base(stats_ep_sub) if stats_ep_sub else {}
 
     cap_ep = (
-        "Train seconds per epoch (mean $\\pm$ intra-run std), "
-        f"data seed {int(args.epoch_timing_seed)}. "
-        "\\textbf{Bold}: lowest mean per column; "
+        "Train seconds per epoch (mean $\\pm$ std) "
+        "\\textbf{Bold}: lowest mean per dataset (column) within domain (graph, simplicial or cell). "
         "\\protect\\colorbox{stdblue}{blue}: not significantly slower than that minimum (95\\,\\%, two-sided $Z$)."
     )
     tex_ep_compact = build_rerun_metric_table_plain(
@@ -674,6 +741,24 @@ def main() -> None:
         caption=cap_ep,
         label="tbl:best_rerun_epoch_time",
         decimals=args.decimals,
+        comparison_scope="domain",
+    )
+    cap_ep_global = (
+        "Same per-epoch times as the domain-banded table. "
+        "\\textbf{Bold}: lowest mean per dataset (column) across \\textbf{all} models (not per domain). "
+        "\\protect\\colorbox{stdblue}{blue}: not significantly slower than that column minimum "
+        "(95\\,\\%, two-sided $Z$)."
+    )
+    tex_ep_global = build_rerun_metric_table_plain(
+        stats_ep_compact,
+        column_groups=groups,
+        graph_rows=graph_rows_compact,
+        simplicial_rows=simplicial_rows_sub,
+        cell_rows=cell_rows_sub,
+        caption=cap_ep_global,
+        label="tbl:best_rerun_epoch_time_global_min",
+        decimals=args.decimals,
+        comparison_scope="global",
     )
 
     out_dir = Path(args.tables_dir)
@@ -682,6 +767,7 @@ def main() -> None:
         "rerun_main_table.tex": tex_perf_compact,
         "rerun_time_runtime.tex": tex_rt_compact,
         "rerun_time_train_epoch.tex": tex_ep_compact,
+        "rerun_time_train_epoch_bold_global.tex": tex_ep_global,
     }
     for name, body in paths.items():
         path = out_dir / name
