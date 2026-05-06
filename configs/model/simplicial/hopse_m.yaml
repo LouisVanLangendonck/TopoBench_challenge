@@ -5,15 +5,15 @@ model_domain: simplicial
 
 preprocessing_params:
   neighborhoods: 
-    - 'up_adjacency-0'
-    # - 'up_adjacency-1'
+    #- 'up_adjacency-0'
+    - 'up_adjacency-1'
     # - 'down_adjacency-1'
     # - 'down_adjacency-2'
     # - 'up_incidence-0'
     # - 'up_incidence-1'
-    - 'down_incidence-1'
-    - 'down_incidence-2'
-  encodings: ["KHopFE", "HKFE", "LapPE", "RWSE", "ElectrostaticPE", "HKdiagSE"]
+    #- 'down_incidence-1'
+    #- 'down_incidence-2'
+  encodings: ["RWSE"] #["KHopFE", "HKFE", "LapPE", "RWSE", "ElectrostaticPE", "HKdiagSE"]
   copy_initial: True
 
 feature_encoder:

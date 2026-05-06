@@ -7,7 +7,6 @@ from pathlib import Path
 import torch
 from ogb.utils import smiles2graph
 from omegaconf import DictConfig
-from tdc.single_pred import ADME
 from torch_geometric.data import Data, InMemoryDataset
 
 from topobench.data.loaders.base import AbstractLoader
@@ -137,6 +136,18 @@ class ADMEDatasetLoader(AbstractLoader):
         # Create raw data directory for TDC to download to
         raw_dir = os.path.join(self.root_data_dir, dataset_name, "raw")
         os.makedirs(raw_dir, exist_ok=True)
+
+        # Import only when this loader runs (avoids requiring ``tdc`` for TU-only workflows:
+        # ``graph`` package init imports every loader module.)
+        try:
+            from tdc.single_pred import ADME
+        except ModuleNotFoundError as e:
+            raise ModuleNotFoundError(
+                "ADMEDatasetLoader needs the PyTDC package (``pip install PyTDC`` or "
+                "``conda install -c conda-forge pytdc``). On Windows, PyTDC often pulls "
+                "``tiledbsoma``; if ``pip`` fails, try conda-forge for ``tiledbsoma`` / "
+                "``cellxgene-census`` or use WSL2/Linux."
+            ) from e
 
         # Load data from TDC with scaffold split, specify path for downloads
         data = ADME(name=dataset_name, path=raw_dir)
