@@ -128,10 +128,26 @@ from utils import (
 # Exception: allowlisting ``simplicial/sccnn_custom`` also keeps CSV ``simplicial/sccnn`` (and
 # the reverse), since sweeps record ``sccnn`` but emitted reruns rewrite to ``sccnn_custom``.
 #
-# Example (uncomment / adjust):
+# Aligned with ``main_loader.MODELS``: graph short names → ``graph/…``; ``topotune`` /
+# ``hopse_*`` / ``sann`` → both ``simplicial/`` and ``cell/`` where sweeps exist;
+# ``sccnn`` → ``simplicial/sccnn`` (CSV ``simplicial/sccnn_custom`` still matches via
+# ``_csv_model_matches_rerun_allowlist``); ``cwn`` / ``cccn`` → ``cell/…``.
 RERUN_MODEL_ALLOWLIST = frozenset(
     {
+        "graph/gat",
+        "graph/gcn",
+        "graph/gin",
+        "cell/cccn",
+        "cell/cwn",
+        "cell/hopse_g",
+        "cell/hopse_m",
+        "cell/sann",
+        "cell/topotune",
         "simplicial/hopse_g",
+        "simplicial/hopse_m",
+        "simplicial/sann",
+        "simplicial/sccnn",
+        "simplicial/topotune",
     }
 )
 #RERUN_MODEL_ALLOWLIST: frozenset[str] | None = None
