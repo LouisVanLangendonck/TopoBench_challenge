@@ -97,33 +97,33 @@ MISSING_COMBOS=(
     # # --- HOPSE-G (cell) ---
     # "cell/hopse_g | graph/CYP3A4_Veith | [up_adjacency-0] | null | transforms.hopse_encoding.pretrain_model=molpcba,zinc"
     
-    # # --- HOPSE-G (simplicial) ---
+    # --- HOPSE-G (simplicial) ---
     # "simplicial/hopse_g | simplicial/mantra_name | [up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2];[up_incidence-0,2-up_incidence-0];[up_incidence-0,up_incidence-1,2-up_incidence-0,down_incidence-1,down_incidence-2,2-down_incidence-2] | null | transforms.hopse_encoding.pretrain_model=molpcba,zinc"
     # "simplicial/hopse_g | simplicial/mantra_orientation | [up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2];[up_incidence-0,2-up_incidence-0];[up_incidence-0,up_incidence-1,2-up_incidence-0,down_incidence-1,down_incidence-2,2-down_incidence-2] | null | transforms.hopse_encoding.pretrain_model=molpcba,zinc"
-    # "simplicial/hopse_g | simplicial/mantra_betti_numbers | [up_adjacency-0];[up_adjacency-0,2-up_adjacency-0];[up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2];[up_incidence-0,2-up_incidence-0];[up_incidence-0,up_incidence-1,2-up_incidence-0,down_incidence-1,down_incidence-2,2-down_incidence-2] | null | transforms.hopse_encoding.pretrain_model=molpcba,zinc evaluator=betti_numbers"
+    "simplicial/hopse_g | simplicial/mantra_betti_numbers | [up_adjacency-0];[up_adjacency-0,2-up_adjacency-0];[up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2];[up_incidence-0,2-up_incidence-0];[up_incidence-0,up_incidence-1,2-up_incidence-0,down_incidence-1,down_incidence-2,2-down_incidence-2] | null | transforms.hopse_encoding.pretrain_model=molpcba,zinc evaluator=betti_numbers"
 
     # --- TOPOTUNE (simplicial) ---
-    "simplicial/topotune | graph/MUTAG | [up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2] | null | "
-    "simplicial/topotune | graph/NCI1 | [up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2] | null | "
-    "simplicial/topotune | graph/NCI109 | [up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2] | null | "
-    "simplicial/topotune | graph/BBB_Martins | [up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2];[up_incidence-0,up_incidence-1,2-up_incidence-0,down_incidence-1,down_incidence-2,2-down_incidence-2] | null | "
-    "simplicial/topotune | graph/CYP3A4_Veith | [up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2] | null | "
-    "simplicial/topotune | graph/Clearance_Hepatocyte_AZ | [up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2] | null | "
-    "simplicial/topotune | graph/Caco2_Wang | [up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2];[up_incidence-0,2-up_incidence-0];[up_incidence-0,up_incidence-1,2-up_incidence-0,down_incidence-1,down_incidence-2,2-down_incidence-2] | null | "
-    "simplicial/topotune | simplicial/mantra_betti_numbers | [up_incidence-0,up_incidence-1,2-up_incidence-0,down_incidence-1,down_incidence-2,2-down_incidence-2] | null | evaluator=betti_numbers"
+    # "simplicial/topotune | graph/MUTAG | [up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2] | null | "
+    # "simplicial/topotune | graph/NCI1 | [up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2] | null | "
+    # "simplicial/topotune | graph/NCI109 | [up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2] | null | "
+    # "simplicial/topotune | graph/BBB_Martins | [up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2];[up_incidence-0,up_incidence-1,2-up_incidence-0,down_incidence-1,down_incidence-2,2-down_incidence-2] | null | "
+    # "simplicial/topotune | graph/CYP3A4_Veith | [up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2] | null | "
+    # "simplicial/topotune | graph/Clearance_Hepatocyte_AZ | [up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2] | null | "
+    # "simplicial/topotune | graph/Caco2_Wang | [up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2];[up_incidence-0,2-up_incidence-0];[up_incidence-0,up_incidence-1,2-up_incidence-0,down_incidence-1,down_incidence-2,2-down_incidence-2] | null | "
+    # "simplicial/topotune | simplicial/mantra_betti_numbers | [up_incidence-0,up_incidence-1,2-up_incidence-0,down_incidence-1,down_incidence-2,2-down_incidence-2] | null | evaluator=betti_numbers"
 
-    # --- TOPOTUNE (cell) ---
-    "cell/topotune | graph/Caco2_Wang | [up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2];[up_incidence-0,up_incidence-1,2-up_incidence-0,down_incidence-1,down_incidence-2,2-down_incidence-2] | null | "
-    "cell/topotune | graph/BBB_Martins | [up_incidence-0,up_incidence-1,2-up_incidence-0,down_incidence-1,down_incidence-2,2-down_incidence-2] | null | "
+    # # --- TOPOTUNE (cell) ---
+    # "cell/topotune | graph/Caco2_Wang | [up_adjacency-0,up_adjacency-1,2-up_adjacency-0,down_adjacency-1,down_adjacency-2,2-down_adjacency-2];[up_incidence-0,up_incidence-1,2-up_incidence-0,down_incidence-1,down_incidence-2,2-down_incidence-2] | null | "
+    # "cell/topotune | graph/BBB_Martins | [up_incidence-0,up_incidence-1,2-up_incidence-0,down_incidence-1,down_incidence-2,2-down_incidence-2] | null | "
 )
 
 # Shared Search Space (Hyperparameters)
-L_vals=(1 2 4)
-h_vals=(128 256)
-pdro_vals=(0.25 0.5)
+L_vals=(2 4)
+h_vals=(256)
+pdro_vals=(0.5)
 lr_vals=(0.01 0.001)
 wd_vals=(0.0001)
-bs_vals=(128 256)
+bs_vals=(256)
 SEEDS=(0 3 5 7 9)
 
 FIXED_ARGS=(
@@ -225,7 +225,7 @@ generate_all_commands() {
                                 for v in "${VALS[@]}"; do
                                     final_args=("${args[@]}" "$key=$v" "${FIXED_ARGS[@]}")
                                     final_name="${run_name}_${v}"
-                                    echo "${final_name};python -m topobench ${final_args[*]} logger.wandb.project=$proj logger.wandb.entity=$wandb_entity +logger.wandb.name=$final_name"
+                                    echo "${final_name};python -m topobench ${final_args[*]} logger.wandb.project=$proj +logger.wandb.entity=$wandb_entity +logger.wandb.name=$final_name"
                                 done
                                 continue 2 
                             else
@@ -235,7 +235,7 @@ generate_all_commands() {
                     fi
 
                     final_args=("${args[@]}" "${FIXED_ARGS[@]}")
-                    echo "${run_name};python -m topobench ${final_args[*]} logger.wandb.project=$proj logger.wandb.entity=$wandb_entity +logger.wandb.name=$run_name"
+                    echo "${run_name};python -m topobench ${final_args[*]} logger.wandb.project=$proj +logger.wandb.entity=$wandb_entity +logger.wandb.name=$run_name"
 
                 done; done; done; done; done; done; done
             done
