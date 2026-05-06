@@ -12,6 +12,10 @@ By default writes **multiple** smaller CSVs (one per model, all datasets) under
 ``--shard-by none -o path.csv`` for a single monolithic export under ``csvs/``.
 Run ``aggregator`` to produce **one** combined seed-aggregated CSV.
 
+Each raw row includes **timing** promoted into ``summary_*`` columns (train epoch mean/std from
+``AvgTime/*`` in the run config, wall seconds as ``summary_Runtime`` from W&B), so you normally
+do not need a second W&B fetch for timing plots or tables.
+
 Usage (from repo root)::
 
     python scripts/hopse_plotting/main_loader.py
@@ -39,9 +43,9 @@ from utils import (
 
 WANDB_ENTITY = "gbg141-hopse"
 
-MODELS = ["sann"]#["gin","gat", "gcn", "topotune", "hopse_m", "hopse_g", "sann", "sccnn", "cwn"]
+MODELS = ["hopse_g"] #["gin","gat", "gcn", "topotune", "hopse_m", "hopse_g", "sann", "sccnn", "cwn", "cccn"]
 
-DATASETS = [
+DATASETS = [    
     "graph/MUTAG",
     "graph/PROTEINS",
     "graph/NCI1",

@@ -16,7 +16,7 @@ test **F1** per column; y-axis labels use **f1** (not ``f1-1`` / ``f1-2``), and 
 use ``$\\beta_1$`` / ``$\\beta_2$``.
 
 Seed aggregation and reruns assume the export includes all swept config columns listed in
-``utils.CONFIG_PARAM_KEYS`` (e.g. HOPSE_G ``transforms.hopse_encoding.pretrain_model``,
+``utils.CONFIG_PARAM_KEYS`` (e.g. HOPSE-GPSE ``transforms.hopse_encoding.pretrain_model``,
 SANN ``transforms.sann_encoding.*``); see ``main_loader`` / ``aggregator`` docs.
 
 The figure uses one column per dataset (max 4 per row), bars = models, error bars
@@ -60,12 +60,16 @@ from utils import (
     collapse_aggregated_wandb_csv,
     metric_name_tail,
     optimization_mode_for_metric_tail,
+    publication_label_hopse_from_hydra_model_path,
     safe_metric_col_token,
 )
 
 def _label_short(s: str, max_len: int = 28) -> str:
     t = str(s).strip()
-    if "/" in t:
+    hop = publication_label_hopse_from_hydra_model_path(t)
+    if hop:
+        t = hop
+    elif "/" in t:
         t = t.rsplit("/", 1)[-1]
     return t if len(t) <= max_len else t[: max_len - 1] + "..."
 
@@ -138,7 +142,7 @@ def model_category(m: str) -> str:
     return "other"
 
 
-# Panel / legend order: MPNN, TopoTune, SANN, SCCNN, CWN, HOPSE-M, HOPSE-G, then other.
+# Panel / legend order: MPNN, TopoTune, SANN, SCCNN, CWN, HOPSE-M-*, HOPSE-GPSE, then other.
 _CATEGORY_ORDER = {
     "mpnn": 0,
     "topotune": 1,

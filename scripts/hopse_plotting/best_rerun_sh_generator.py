@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 From a **seed-aggregated** W&B CSV, pick the best validation row per group (default: model,
-dataset, and an internal HOPSE-M F/PE shard — same val rule as ``utils.iter_best_val_group_picks``
+dataset, and an internal HOPSE-M F/C shard (``pe`` config bucket → **HOPSE-M-C**) — same val rule as ``utils.iter_best_val_group_picks``
 used in ``collapse_aggregated_wandb_by_best_val`` / ``main_plot`` / ``table_generator``), then emit
 **two** bash scripts with the same Hydra commands:
 
@@ -27,10 +27,10 @@ minus ``graph/cocitation_{cora,citeseer,pubmed}``. Use ``--all-datasets`` to emi
 (model, dataset) group in the CSV.
 
 With default ``--group-by model dataset``, **HOPSE-M** (``simplicial/hopse_m`` and ``cell/hopse_m``)
-is split like ``table_generator`` / ``hopse_m.sh``: encodings are bucketed into **FE** vs **PE**
+is split like ``table_generator`` / ``hopse_m.sh``: encodings are bucketed into **HOPSE-M-F** vs **HOPSE-M-C**
 (``utils.hopse_m_encoding_f_vs_pe_sub_id``: HKFE/HKFE-style → ``f``, else ``pe`` — same sweep
 labels as ``fe::`` vs ``pse::`` in ``hopse_m.sh``), and the best-val row is chosen **separately**
-per ``(model, dataset, branch)``. HOPSE-G and other models use a single winner per
+per ``(model, dataset, branch)``. **HOPSE-GPSE** and other models use a single winner per
 ``(model, dataset)``. Override ``--group-by`` to skip the HOPSE-M split (advanced).
 
 At the top of this file, set ``RERUN_MODEL_ALLOWLIST`` / ``RERUN_HOPSE_M_BRANCHES`` to restrict
@@ -69,17 +69,20 @@ for that slot (still appended last).
 ``utils.CONFIG_PARAM_KEYS`` (same column contract as ``main_loader`` / seed aggregation; see
 the list header comment in ``utils.py`` for sweep script coverage: ``hopse_m`` / ``hopse_g``,
 ``topotune``, ``sann``, ``sccnn``, ``cwn``, GNN ``transforms`` / ``Combined*``). Non-empty cells
-become CLI overrides. Examples:
+become CLI overrides. **``model.params.total``** is always skipped for reruns (aggregate metric,
+not a reproducibility knob). Examples:
 
-- **HOPSE_G / GPSE** — ``transforms.hopse_encoding.pretrain_model`` (and related
+- **HOPSE-GPSE** — ``transforms.hopse_encoding.pretrain_model`` (and related
   ``transforms.hopse_encoding.*`` keys) so molpcba vs zinc checkpoints are not dropped.
 - **SANN** — ``transforms.sann_encoding.*``, ``model.feature_encoder.selected_dimensions``, etc.
 - **SCCNN** — CSV / sweeps may record ``model=simplicial/sccnn`` (TopoModelX backbone). Reruns
   rewrite that override to ``simplicial/sccnn_custom`` (``topobench`` backbone), matching
   stable GPU runs used elsewhere in this repo.
-- **``model.backbone.complex_dim``** — some W&B exports log this, but current model YAMLs
-  keep ``complex_dim`` on ``backbone_wrapper`` / ``readout`` (or omit it on ``SCCNNCustom``).
-  That override is dropped from emitted reruns so Hydra struct mode does not error.
+- **``model.backbone.complex_dim``** — most model YAMLs keep ``complex_dim`` on
+  ``backbone_wrapper`` / ``readout`` (or omit it on ``SCCNNCustom``), so stray W&B overrides
+  are dropped. **Exception:** for **simplicial** SANN (``simplicial/sann``, ``simplicial/sann_online``,
+  …) the HOPSE backbone still needs ``++model.backbone.complex_dim`` aligned with
+  ``transforms.sann_encoding.complex_dim``; reruns add (or replace) that override accordingly.
 
 Re-export from W&B after extending ``CONFIG_PARAM_KEYS`` so the seed-aggregated CSV carries any new sweep axes.
 
@@ -128,8 +131,7 @@ from utils import (
 # Example (uncomment / adjust):
 RERUN_MODEL_ALLOWLIST = frozenset(
     {
-        "simplicial/sann",
-        "simplicial/sccnn_custom",
+        "simplicial/hopse_g",
     }
 )
 #RERUN_MODEL_ALLOWLIST: frozenset[str] | None = None
@@ -169,6 +171,9 @@ DEFAULT_RERUN_ALLOWED_HYDRA_DATASETS: frozenset[str] = frozenset(
 
 DEFAULT_PARALLEL_GPUS = "2,3"
 
+# Always excluded from rerun CLI (W&B summary / param count; must not override the model config).
+_RERUN_SKIP_HYDRA_KEYS: frozenset[str] = frozenset({"model.params.total"})
+
 # Internal only (not in ``CONFIG_PARAM_KEYS``); used when ``--group-by`` is default ``model dataset``.
 _RERUN_HOPSE_M_BRANCH_COL = "_rerun_hopse_m_branch"
 _DEFAULT_RERUN_GROUP_COLS: tuple[str, ...] = ("model", "dataset")
@@ -189,15 +194,40 @@ def _apply_rerun_model_hydra_rewrites(parts: list[str], *, csv_model: str) -> No
                 break
 
 
-def _strip_legacy_backbone_complex_dim_override(parts: list[str]) -> None:
-    """Remove ``model.backbone.complex_dim`` (logged in some exports; not on backbone in repo YAML)."""
-    parts[:] = [p for p in parts if not p.startswith("model.backbone.complex_dim=")]
+_SANN_ENCODING_COMPLEX_DIM_PREFIX = "transforms.sann_encoding.complex_dim="
+_BACKBONE_COMPLEX_DIM_PREFIXES = ("++model.backbone.complex_dim=", "model.backbone.complex_dim=")
+
+
+def _is_backbone_complex_dim_override(part: str) -> bool:
+    return part.startswith(_BACKBONE_COMPLEX_DIM_PREFIXES)
+
+
+def _is_simplicial_sann_model(model: str) -> bool:
+    m = str(model).replace("\r", "").strip().lower()
+    if not m.startswith("simplicial/"):
+        return False
+    tail = m.split("/")[-1]
+    return tail.startswith("sann")
+
+
+def _apply_backbone_complex_dim_overrides(parts: list[str], *, model: str) -> None:
+    """Drop or sync ``++model.backbone.complex_dim`` (simplicial SANN) / strip legacy single ``model.*``."""
+    if _is_simplicial_sann_model(model):
+        enc_val: str | None = None
+        for p in parts:
+            if p.startswith(_SANN_ENCODING_COMPLEX_DIM_PREFIX):
+                enc_val = p.split("=", 1)[1]
+        parts[:] = [p for p in parts if not _is_backbone_complex_dim_override(p)]
+        if enc_val is not None:
+            parts.append(f"++model.backbone.complex_dim={enc_val}")
+        return
+    parts[:] = [p for p in parts if not _is_backbone_complex_dim_override(p)]
 
 
 def dataframe_with_hopse_m_rerun_branch(df: pd.DataFrame) -> pd.DataFrame:
     """
     Add ``_rerun_hopse_m_branch`` (``f`` / ``pe`` / empty) so HOPSE-M best-val matches
-    ``table_generator`` HOPSE-M-F vs HOPSE-M-PE picks.
+    ``table_generator`` HOPSE-M-F vs HOPSE-M-C picks.
     """
     out = df.copy()
     branches: list[str] = []
@@ -352,10 +382,10 @@ def _base_hydra_parts_for_row(
     parts = hydra_overrides_from_aggregated_row(
         row,
         config_keys=list(CONFIG_PARAM_KEYS),
-        skip_keys=skip_seed,
+        skip_keys=set(skip_seed) | set(_RERUN_SKIP_HYDRA_KEYS),
     )
     _apply_rerun_model_hydra_rewrites(parts, csv_model=model)
-    _strip_legacy_backbone_complex_dim_override(parts)
+    _apply_backbone_complex_dim_overrides(parts, model=model)
     parts.extend(_benchmark_training_extras(resolved_profile))
     if not any(p.startswith(f"{SEED_COLUMN}=") for p in parts):
         parts.append(f"{SEED_COLUMN}={data_seed}")
@@ -377,7 +407,7 @@ def _base_hydra_parts_for_row(
                 if br == "f":
                     base_nm = f"{base_nm}__hopse_m_F"
                 elif br == "pe":
-                    base_nm = f"{base_nm}__hopse_m_PE"
+                    base_nm = f"{base_nm}__hopse_m_C"
             if wandb_run_suffix:
                 base_nm = f"{base_nm}{wandb_run_suffix}"
             wname = safe_filename_token(base_nm, max_len=120)
@@ -439,7 +469,7 @@ def _hopse_m_branch_comment(row) -> str:
     if br == "f":
         return "  |  HOPSE-M-F"
     if br == "pe":
-        return "  |  HOPSE-M-PE"
+        return "  |  HOPSE-M-C"
     return ""
 
 
@@ -471,7 +501,7 @@ def emit_sequential_rerun_script(
 
     lines: list[str] = [
         "#!/usr/bin/env bash",
-        "# Auto-generated: best val per (model, dataset[, HOPSE-M F/PE branch]) — run sequentially.",
+        "# Auto-generated: best val per (model, dataset[, HOPSE-M F/C branch]) — run sequentially.",
         "# Pair script: best_val_reruns_parallel.sh (GPUs in parallel, then wait).",
         "",
     ]
@@ -687,7 +717,7 @@ def main() -> None:
         default=["model", "dataset"],
         help=(
             "Group columns for best-val pick. Default ``model dataset`` adds an internal "
-            "HOPSE-M F vs PE shard (same as ``table_generator`` submodels). Pass explicit columns "
+            "HOPSE-M F vs C shard (same as ``table_generator`` submodels). Pass explicit columns "
             "to disable that behavior (CSV must contain every named column)."
         ),
     )
@@ -804,7 +834,7 @@ def main() -> None:
         df = dataframe_with_hopse_m_rerun_branch(df)
         effective_group = list(_DEFAULT_RERUN_GROUP_COLS) + [_RERUN_HOPSE_M_BRANCH_COL]
         print(
-            f"Grouping: {effective_group!r} (HOPSE-M: separate best-val winner per F vs PE encodings)."
+            f"Grouping: {effective_group!r} (HOPSE-M: separate best-val winner per F vs C encodings)."
         )
     else:
         effective_group = list(args.group_by)

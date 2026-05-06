@@ -8,6 +8,10 @@ files; otherwise the monolithic ``csvs/hopse_experiments_wandb_export.csv``.
 Several shard files are aggregated then concatenated into one ``-o`` CSV
 (default: ``csvs/hopse_experiments_wandb_export_seed_agg.csv``).
 
+**Timing:** ``summary_AvgTime/train_epoch_mean``, ``summary_AvgTime/train_epoch_std``, and
+``summary_Runtime`` are aggregated like other metrics (``__mean`` / ``__std`` across seeds)
+when present in the export.
+
 By default only hyperparameter groups with exactly ``--required-seeds`` raw
 runs (after grouping on everything except the data seed) are written to the
 output CSV; see the printed per-(model, dataset) distribution for other counts.

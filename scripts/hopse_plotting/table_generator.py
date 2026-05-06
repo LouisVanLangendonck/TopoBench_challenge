@@ -12,22 +12,22 @@ are ``$\\beta_1$`` / ``$\\beta_2$`` (metric is F1, not named in the header).
 
 The seed-aggregated CSV must include every sweep axis you care about (see
 ``utils.CONFIG_PARAM_KEYS`` and ``main_loader`` export), or distinct configs can collapse
-during aggregation (e.g. missing ``transforms.hopse_encoding.pretrain_model`` for HOPSE_G).
+during aggregation (e.g. missing ``transforms.hopse_encoding.pretrain_model`` for HOPSE-GPSE).
 
 - **bestgray** + bold: best test value in the column (ties share the style).
 - **stdblue**: not significantly different from the column best at 95% confidence
   (two-sided Z on independent means in code; SE = seed-agg std / sqrt(n_seeds)).
 
 Model blocks: graph GCN/GAT/GIN; simplicial TopoTune, SCCNN (``simplicial/sccnn``; legacy exports may
-use ``simplicial/sccnn_custom``, merged when reading), SANN (``simplicial/sann``), HOPSE-M, HOPSE-G;
-cell HOPSE-M, HOPSE-G, TopoTune, CWN (``cell/cwn``).
+use ``simplicial/sccnn_custom``, merged when reading), SANN (``simplicial/sann``), HOPSE-M, HOPSE-GPSE;
+cell HOPSE-M, HOPSE-GPSE, TopoTune, CWN, CCCN (``cell/cwn``, ``cell/cccn``).
 **Dataset columns** come from ``DATASETS`` in ``main_loader.py``, reordered so **all graph
 columns precede all simplicial**. Transductive cocitation datasets (Cora/Citeseer/PubMed) are
 **never** included. Two ``.tex`` files are written:
 
 - **``main_table_all_big.tex``** — full submodel rows: GNN split by ``transforms`` (plain / ``-F`` /
-  ``-PE``); HOPSE-M split by encodings (**HOPSE-M-F** vs **HOPSE-M-PE**). Within Simplicial and Cell
-  bands, **TopoTune / SCCNN / SANN** (resp. **TopoTune / CWN**) appear **above** HOPSE rows.
+  ``-PE``); HOPSE-M split by encodings (**HOPSE-M-F** vs **HOPSE-M-C**). Within Simplicial and Cell
+  bands, **TopoTune / SCCNN / SANN** (resp. **TopoTune / CWN / CCCN**) appear **above** HOPSE rows.
 - **``main_table_all_compact.tex``** — same Simplicial and Cell rows; **one row per GNN backbone**
   (GCN/GAT/GIN) showing the sub-configuration that achieved the **best validation** mean for each
   dataset (test numbers from that winner).
@@ -292,7 +292,7 @@ def _graph_transforms_sub_id(val: Any) -> str:
 
 
 def _hopse_m_enc_sub_id(val: Any) -> str:
-    """Delegate to ``utils.hopse_m_encoding_f_vs_pe_sub_id`` (HOPSE-M-F vs HOPSE-M-PE)."""
+    """Delegate to ``utils.hopse_m_encoding_f_vs_pe_sub_id`` (HOPSE-M-F vs HOPSE-M-C)."""
     return hopse_m_encoding_f_vs_pe_sub_id(val)
 
 
@@ -366,19 +366,20 @@ def simplicial_submodel_table_rows() -> list[tuple[str, str]]:
         (r"simplicial/sccnn|default", "SCCNN"),
         (r"simplicial/sann|default", "SANN"),
         (r"simplicial/hopse_m|f", r"\textbf{HOPSE-M-F} (Our)"),
-        (r"simplicial/hopse_m|pe", r"\textbf{HOPSE-M-PE} (Our)"),
-        (r"simplicial/hopse_g|default", r"\textbf{HOPSE-G} (Our)"),
+        (r"simplicial/hopse_m|pe", r"\textbf{HOPSE-M-C} (Our)"),
+        (r"simplicial/hopse_g|default", r"\textbf{HOPSE-GPSE} (Our)"),
     ]
 
 
 def cell_submodel_table_rows() -> list[tuple[str, str]]:
-    """TopoTune / CWN first; HOPSE variants last."""
+    """TopoTune / CWN / CCCN first; HOPSE variants last."""
     return [
         (r"cell/topotune|default", "TopoTune"),
         (r"cell/cwn|default", "CWN"),
+        (r"cell/cccn|default", "CCCN"),
         (r"cell/hopse_m|f", r"\textbf{HOPSE-M-F} (Our)"),
-        (r"cell/hopse_m|pe", r"\textbf{HOPSE-M-PE} (Our)"),
-        (r"cell/hopse_g|default", r"\textbf{HOPSE-G} (Our)"),
+        (r"cell/hopse_m|pe", r"\textbf{HOPSE-M-C} (Our)"),
+        (r"cell/hopse_g|default", r"\textbf{HOPSE-GPSE} (Our)"),
     ]
 
 
@@ -450,7 +451,7 @@ def collect_winner_test_by_submodel(df: pd.DataFrame) -> dict[tuple[str, str], d
 
     Row keys in the returned map are ``f"{model}|{sub_id}"`` where ``sub_id`` comes from
     ``transforms`` (GNN) or ``model.preprocessing_params.encodings`` (HOPSE-M), or
-    ``default`` for HOPSE-G / TopoTune.
+    ``default`` for HOPSE-GPSE / TopoTune.
     """
     work = dataframe_with_submodel_id(df)
     colset = set(work.columns)

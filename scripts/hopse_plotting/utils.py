@@ -21,6 +21,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, Literal
 
+import numpy as np
 import pandas as pd
 
 # -----------------------------------------------------------------------------
@@ -55,9 +56,55 @@ MODEL_PREPROC_ENCODINGS = "model.preprocessing_params.encodings"
 HOPSE_M_MODEL_PATHS: frozenset[str] = frozenset({"simplicial/hopse_m", "cell/hopse_m"})
 
 
+# Publication-facing names (plots / LaTeX). Internal ``_sub_id`` for the manual-PSE branch stays ``pe``.
+HOPSE_PUBLICATION_LABEL_M_F = "HOPSE-M-F"
+HOPSE_PUBLICATION_LABEL_M_C = "HOPSE-M-C"
+HOPSE_PUBLICATION_LABEL_GPSE = "HOPSE-GPSE"
+HOPSE_PUBLICATION_LABEL_M = "HOPSE-M"
+
+
+def publication_label_hopse_from_backbone_token(model_backbone: str) -> str | None:
+    """
+    Map internal backbone tokens (e.g. from timing plots: ``hopse_m_F``, ``hopse_m_PE``, ``hopse_g``)
+    to publication labels. Unknown tokens return ``None``.
+    """
+    t = str(model_backbone or "").strip().replace("\r", "")
+    if not t:
+        return None
+    key = t.replace("-", "_")
+    if key == "hopse_m_F":
+        return HOPSE_PUBLICATION_LABEL_M_F
+    if key == "hopse_m_PE":
+        return HOPSE_PUBLICATION_LABEL_M_C
+    if key == "hopse_g":
+        return HOPSE_PUBLICATION_LABEL_GPSE
+    if key == "hopse_m":
+        return HOPSE_PUBLICATION_LABEL_M
+    low = key.lower()
+    if low.startswith("hopse_m_"):
+        suf = low[len("hopse_m_") :]
+        if suf == "f":
+            return HOPSE_PUBLICATION_LABEL_M_F
+        if suf == "pe":
+            return HOPSE_PUBLICATION_LABEL_M_C
+    return None
+
+
+def publication_label_hopse_from_hydra_model_path(model_path: str) -> str | None:
+    """Basename-only label when encoding branch is not in the dataframe (e.g. collapsed leaderboard)."""
+    m = str(model_path or "").replace("\r", "").strip()
+    low = m.lower()
+    base = low.rsplit("/", 1)[-1] if "/" in low else low
+    if base == "hopse_g":
+        return HOPSE_PUBLICATION_LABEL_GPSE
+    if base == "hopse_m":
+        return HOPSE_PUBLICATION_LABEL_M
+    return None
+
+
 def hopse_m_encoding_f_vs_pe_sub_id(encodings_val: Any) -> str:
     """
-    HFKE or HKFE in ``model.preprocessing_params.encodings`` → ``f`` (HOPSE-M-F), else ``pe`` (HOPSE-M-PE).
+    HFKE or HKFE in ``model.preprocessing_params.encodings`` → ``f`` (HOPSE-M-F), else ``pe`` (manual PSE → **HOPSE-M-C** in figures).
 
     Matches the sweep / LaTeX split in ``table_generator`` for separate best-val picks per branch.
     """
@@ -79,7 +126,7 @@ CONFIG_PARAM_KEYS: list[str] = [
     "transforms.sann_encoding.max_hop",
     "transforms.sann_encoding.complex_dim",
     "transforms.sann_encoding.max_rank",
-    # HOPSE_G / GPSE (``scripts/hopse_g.sh``): without ``pretrain_model``, molpcba vs zinc
+    # HOPSE-GPSE / ``hopse_g`` (``scripts/hopse_g.sh``): without ``pretrain_model``, molpcba vs zinc
     # runs merge in seed aggregation (2 checkpoints × 5 seeds → ``n_seeds==10``).
     "transforms.hopse_encoding.pretrain_model",
     "transforms.hopse_encoding.neighborhoods",
@@ -394,6 +441,54 @@ def iter_runs(api, entity: str, project: str, *, state: str | None):
     return run_with_wandb_retry(_list, label=f"W&B list runs {path}")
 
 
+def _merge_wandb_timing_into_export_row(row: dict[str, Any], run) -> dict[str, Any]:
+    """
+    Add ``summary_AvgTime/train_epoch_*`` (from run config / summary) and
+    ``summary_Runtime`` (W&B wall seconds, usually ``run.summary['_runtime']``).
+
+    Matches ``process_reruns.augment_run_row_wandb_timing`` so ``main_loader`` exports
+    are ready for seed aggregation without a second W&B pass.
+    """
+    out = dict(row)
+    flat_cfg = flatten_config(dict(run.config or {}))
+
+    for key in ("AvgTime/train_epoch_mean", "AvgTime/train_epoch_std"):
+        v = get_from_flat(flat_cfg, key)
+        if v is None or v == "":
+            continue
+        cell = _serialize_cell(v)
+        if cell:
+            out[f"{SUMMARY_COLUMN_PREFIX}{key}"] = cell
+
+    try:
+        summary = dict(run.summary) if run.summary is not None else {}
+    except Exception:
+        summary = {}
+
+    for key in ("AvgTime/train_epoch_mean", "AvgTime/train_epoch_std"):
+        col = f"{SUMMARY_COLUMN_PREFIX}{key}"
+        if col in out and str(out[col]).strip():
+            continue
+        if key in summary:
+            out[col] = _serialize_cell(summary[key])
+
+    wall = None
+    for wb_key in ("_runtime", "Runtime", "runtime"):
+        if wb_key in summary:
+            wall = summary[wb_key]
+            break
+    if wall is None:
+        v = get_from_flat(flat_cfg, "_runtime")
+        if v not in (None, ""):
+            wall = v
+    if wall is not None:
+        ser = _serialize_cell(wall)
+        # Match ``summary_to_prefixed_row`` for W&B key ``_runtime`` → ``summary__runtime``.
+        out[f"{SUMMARY_COLUMN_PREFIX}_runtime"] = ser
+
+    return out
+
+
 def run_to_row(
     *,
     entity: str,
@@ -413,7 +508,8 @@ def run_to_row(
     params = extract_config_params(flat)
     summ = summary_to_prefixed_row(dict(run.summary))
 
-    return {**meta, **params, **summ}
+    base = {**meta, **params, **summ}
+    return _merge_wandb_timing_into_export_row(base, run)
 
 
 def collect_all_runs(
@@ -492,9 +588,53 @@ def is_seed_aggregatable_summary_column(name: str) -> bool:
     return False
 
 
+def is_timing_summary_column(name: str) -> bool:
+    """Per-epoch averages and wall runtime (seconds), for seed aggregation."""
+    if not name.startswith(SUMMARY_COLUMN_PREFIX):
+        return False
+    tail = name[len(SUMMARY_COLUMN_PREFIX) :]
+    if tail.startswith("AvgTime/"):
+        return True
+    tl = str(tail).lower()
+    # W&B ``_runtime`` → CSV ``summary__runtime``; merged export may use ``summary_Runtime``.
+    if tl in ("runtime", "_runtime") or tl.endswith("runtime"):
+        return True
+    return False
+
+
+def coalesce_seed_agg_wall_runtime_mean_std(df: pd.DataFrame) -> tuple[pd.Series, pd.Series]:
+    """
+    Wall-clock training seconds from a seed-aggregated export (``...__mean`` / ``...__std``).
+
+    The same run duration may appear as ``summary_Runtime`` (capital R) or as
+    ``summary__runtime`` (W&B ``_runtime`` flattened with a double underscore). Exports
+    often contain **both** columns; one can be all-NaN for some models while the other is
+    populated. For each row, use the first finite mean (and matching std), then fill from
+    the other column where still missing.
+    """
+    mean_out = pd.Series(np.nan, index=df.index, dtype=float)
+    std_out = pd.Series(np.nan, index=df.index, dtype=float)
+    for base in (f"{SUMMARY_COLUMN_PREFIX}Runtime", f"{SUMMARY_COLUMN_PREFIX}_runtime"):
+        mcol = f"{base}__mean"
+        scol = f"{base}__std"
+        if mcol not in df.columns:
+            continue
+        vm = pd.to_numeric(df[mcol], errors="coerce")
+        vs = (
+            pd.to_numeric(df[scol], errors="coerce")
+            if scol in df.columns
+            else pd.Series(np.nan, index=df.index, dtype=float)
+        )
+        take = mean_out.isna() & vm.notna()
+        mean_out = mean_out.where(~take, vm)
+        std_out = std_out.where(~take, vs)
+    return mean_out, std_out
+
+
 def list_seed_aggregatable_summary_columns(df: pd.DataFrame) -> list[str]:
-    cols = [c for c in df.columns if is_seed_aggregatable_summary_column(c)]
-    return sorted(cols)
+    metric_cols = [c for c in df.columns if is_seed_aggregatable_summary_column(c)]
+    timing_cols = [c for c in df.columns if is_timing_summary_column(c)]
+    return sorted(set(metric_cols) | set(timing_cols))
 
 
 TEST_BEST_RERUN_SUMMARY_PREFIX = f"{SUMMARY_COLUMN_PREFIX}test_best_rerun/"

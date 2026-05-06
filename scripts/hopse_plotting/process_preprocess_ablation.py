@@ -6,7 +6,7 @@ read scalar ``preprocessor_time`` (exported as ``summary_preprocessor_time``), a
 
 1. A flat CSV keyed by model branch, neighborhood alias, and dataset.
 2. A LaTeX table: **Cell** / **Simplicial** as vertical ``\rotatebox`` band labels (compact-table
-   style), then **model** (HOPSE-M-PE / HOPSE-M-F / HOPSE-G) and **neighborhood** (five rows per
+   style), then **model** (HOPSE-M-C / HOPSE-M-F / HOPSE-GPSE) and **neighborhood** (five rows per
    model), then dataset columns (Graph / Simplicial bands; no performance arrows). Light rules
    separate model blocks. **bestgray** + bold = fastest time in each dataset column **within that
    domain** (Cell vs Simplicial).
@@ -48,22 +48,22 @@ DEFAULT_TEX = TABLES_DIR / "preprocess_ablation_preprocessor_time.tex"
 
 SUMMARY_PREPROC = f"{SUMMARY_COLUMN_PREFIX}preprocessor_time"
 
-# LaTeX row order: domain block → model (W&B tag still cell_m_pe / …; labels are HOPSE-M-PE / …).
+# LaTeX row order: domain block → model (W&B tag still cell_m_pe / …; labels are HOPSE-M-C / …).
 DOMAIN_BLOCKS: list[tuple[str, list[tuple[str, str]]]] = [
     (
         "Cell",
         [
-            ("cell_m_pe", r"\textbf{HOPSE-M-PE}"),
+            ("cell_m_pe", r"\textbf{HOPSE-M-C}"),
             ("cell_m_fe", r"\textbf{HOPSE-M-F}"),
-            ("cell_g", r"\textbf{HOPSE-G}"),
+            ("cell_g", r"\textbf{HOPSE-GPSE}"),
         ],
     ),
     (
         "Simplicial",
         [
-            ("sim_m_pe", r"\textbf{HOPSE-M-PE}"),
+            ("sim_m_pe", r"\textbf{HOPSE-M-C}"),
             ("sim_m_fe", r"\textbf{HOPSE-M-F}"),
-            ("sim_g", r"\textbf{HOPSE-G}"),
+            ("sim_g", r"\textbf{HOPSE-GPSE}"),
         ],
     ),
 ]
@@ -80,7 +80,6 @@ TABLE_COLUMN_SPECS: list[tuple[str, str]] = [
     ("graph/CYP3A4_Veith", r"CYP3A4"),
     ("graph/Clearance_Hepatocyte_AZ", r"Cl.Hep."),
     ("graph/Caco2_Wang", r"Caco2"),
-    ("graph/ZINC", r"ZINC"),
     ("simplicial/mantra_name", r"NAME"),
     ("simplicial/mantra_orientation", r"ORIENT"),
     ("simplicial/mantra_betti_numbers", r"$\beta_1$"),
@@ -320,7 +319,6 @@ def build_latex_table(
     lines.append(f"\\label{{{label}}}")
     lines.append("\\centering")
     lines.append("\\begin{adjustbox}{width=1.\\textwidth}")
-    lines.append("\\renewcommand{\\arraystretch}{1.4}")
     lines.append(f"\\begin{{tabular}}{{{colspec}}}")
     lines.append("\\toprule")
     lines.append(
