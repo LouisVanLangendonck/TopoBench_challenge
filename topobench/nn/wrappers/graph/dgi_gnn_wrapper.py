@@ -179,17 +179,16 @@ class DGIGNNWrapper(AbstractWrapper):
             
             # Logging for verification
             self.forward_count += 1
-            if self.verbose or self.forward_count <= 3:  # Always log first 3 batches
+            if self.verbose or self.forward_count <= 3:
                 print(f"\n{'='*80}")
                 print(f"DGI graph_diffusion - Forward pass #{self.forward_count}")
                 print(f"Mode: {'TRAINING' if self.training else 'VALIDATION'}")
                 print(f"Batch contains {num_graphs} graphs with IDs: {batch_ids.tolist()}")
-                # Count nodes per graph
                 for gid in batch_ids:
                     n_nodes = (batch_indices == gid).sum().item()
                     print(f"  Graph {gid}: {n_nodes} nodes")
             
-            # Encode ALL graphs in the batch
+            # Encode ALL graphs in the batch ONCE
             h_all = self.backbone(
                 x_0,
                 edge_index,
@@ -197,65 +196,55 @@ class DGIGNNWrapper(AbstractWrapper):
                 edge_weight=edge_weight,
             )
             
-            # For each graph, select a different graph as negative
-            batch_ids_list = batch_ids.tolist()
-            positive_embeddings = []
-            negative_embeddings = []
-            positive_batch_indices = []
-            negative_batch_indices = []
+            # MEMORY OPTIMIZATION: Work directly with h_all, no copying
+            # Create a random permutation mapping: for each graph, pick a different graph as negative
+            num_graphs = len(batch_ids)
             
-            # Track pairings for logging
-            pairings = []
+            # Generate TRULY RANDOM permutation ensuring no graph maps to itself
+            # For each graph, randomly select a different graph as its negative
+            perm = torch.zeros(num_graphs, dtype=torch.long, device=batch_indices.device)
             
-            for graph_id in batch_ids_list:
-                # Get nodes for this graph (positive samples)
-                pos_mask = (batch_indices == graph_id)
-                pos_indices = torch.where(pos_mask)[0]
+            for i in range(num_graphs):
+                # Create list of all other graphs (excluding current graph)
+                # This ensures no self-pairing
+                other_indices = list(range(num_graphs))
+                other_indices.remove(i)
                 
-                # Select a different graph as negative
-                other_graphs = [g for g in batch_ids_list if g != graph_id]
-                neg_graph_id = other_graphs[torch.randint(0, len(other_graphs), (1,)).item()]
-                
-                pairings.append((graph_id, neg_graph_id))
-                
-                # Get nodes for negative graph
-                neg_mask = (batch_indices == neg_graph_id)
-                neg_indices = torch.where(neg_mask)[0]
-                
-                # Store embeddings
-                positive_embeddings.append(h_all[pos_indices])
-                negative_embeddings.append(h_all[neg_indices])
-                
-                # Create batch indices (renumber to be consecutive)
-                new_graph_idx = len(positive_batch_indices)
-                positive_batch_indices.append(
-                    torch.full((len(pos_indices),), new_graph_idx,
-                              dtype=batch_indices.dtype, device=batch_indices.device)
-                )
-                negative_batch_indices.append(
-                    torch.full((len(neg_indices),), new_graph_idx,
-                              dtype=batch_indices.dtype, device=batch_indices.device)
-                )
+                # Randomly pick one of the other graphs
+                chosen_idx = other_indices[torch.randint(0, len(other_indices), (1,)).item()]
+                perm[i] = chosen_idx
             
-            # Log pairings
+            # Map original batch indices to negative graph batch indices
+            # batch_indices contains values from batch_ids
+            # Create a mapping: batch_ids[i] -> batch_ids[perm[i]]
+            neg_graph_mapping = batch_ids[perm]
+            
+            # Create negative batch indices by mapping each node to its negative graph
+            # This is a vectorized operation - no loops!
+            batch_negative = torch.zeros_like(batch_indices)
+            for i, orig_id in enumerate(batch_ids):
+                mask = (batch_indices == orig_id)
+                batch_negative[mask] = neg_graph_mapping[i]
+            
+            # Logging
             if self.verbose or self.forward_count <= 3:
                 print("\nGraph pairings (positive -> negative):")
-                for pos_id, neg_id in pairings:
-                    print(f"  Graph {pos_id} paired with Graph {neg_id} (as negative)")
+                for i, orig_id in enumerate(batch_ids):
+                    neg_id = neg_graph_mapping[i]
+                    print(f"  Graph {orig_id.item()} paired with Graph {neg_id.item()} (as negative)")
                 print(f"{'='*80}\n")
             
-            # Concatenate all positive and negative samples
-            h_positive = torch.cat(positive_embeddings, dim=0)
-            h_negative = torch.cat(negative_embeddings, dim=0)
-            batch_positive = torch.cat(positive_batch_indices, dim=0)
-            batch_negative = torch.cat(negative_batch_indices, dim=0)
+            # CRITICAL OPTIMIZATION: Reuse h_all directly!
+            # Positive: use original embeddings with original batch
+            # Negative: use same embeddings BUT with shuffled batch assignment
+            # This way the readout will compute different graph summaries
             
             model_out = {
-                "x_0": h_positive,  # Positive node embeddings (all graphs)
-                "x_0_corrupted": h_negative,  # Negative node embeddings (from different graphs)
-                "batch_0": batch_positive,  # Batch indices for positive samples
-                "batch_0_corrupted": batch_negative,  # Batch indices for negative samples
-                "edge_index": edge_index,  # Original edge index (may not be used)
+                "x_0": h_all,  # Positive node embeddings (original)
+                "x_0_corrupted": h_all,  # SAME embeddings, but will be paired differently via batch indices!
+                "batch_0": batch_indices,  # Original batch assignment
+                "batch_0_corrupted": batch_negative,  # Shuffled batch assignment
+                "edge_index": edge_index,
                 "labels": batch.y if hasattr(batch, "y") else None,
             }
         

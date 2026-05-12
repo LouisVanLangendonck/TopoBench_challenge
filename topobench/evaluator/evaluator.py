@@ -1,8 +1,21 @@
 """This module contains the Evaluator class that is responsible for computing the metrics."""
 
+import torch
 from torchmetrics import MetricCollection
 
 from topobench.evaluator import METRICS, AbstractEvaluator
+
+
+def _align_regression_target_for_metrics(
+    preds: torch.Tensor, target: torch.Tensor
+) -> torch.Tensor:
+    """Match ``DatasetLoss._align_regression_target_for_loss`` so metrics see the same layout."""
+    t = target
+    if t.dim() == 3 and t.size(1) == 1:
+        t = t.squeeze(1)
+    if t.dim() == 1 and preds.dim() == 2 and preds.size(1) == 1:
+        t = t.unsqueeze(1)
+    return t
 
 
 class TBEvaluator(AbstractEvaluator):
@@ -90,7 +103,8 @@ class TBEvaluator(AbstractEvaluator):
         target = model_out["labels"].cpu()
 
         if self.task == "regression":
-            self.metrics.update(preds, target.unsqueeze(1))
+            t = _align_regression_target_for_metrics(preds, target)
+            self.metrics.update(preds, t)
 
         elif self.task == "classification":
             self.metrics.update(preds, target)

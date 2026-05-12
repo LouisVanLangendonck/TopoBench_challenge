@@ -4,12 +4,20 @@
 # order of defaults determines the order in which configs override each other
 defaults:
   - _self_
-  - dataset: graph/GraphUniverse_CD
-  - model: graph/gcn
-  - transforms: ${get_default_transform:${dataset},${model}} #no_transform
+  - dataset: graph/ogbg-molhiv
+  - model: graph/gps
+
+  # Transforms: automatically selected based on dataset, model, and pretraining task
+  - transforms: ${get_pretraining_transform:${dataset},${model},${oc.select:pretraining.enabled,false},${oc.select:pretraining.transform_suffix,""}}
   - optimizer: default
-  - loss: vgae
-  - evaluator: vgae
+  
+  # These are defaults that will be overridden by pretraining config if pretraining != none
+  - loss: default
+  - evaluator: default
+  
+  # Pretraining configuration. Set to 'none' for supervised learning (default)
+  - pretraining: none
+  
   - callbacks: default
   - logger: wandb # set logger here or use command line (e.g. `python train.py logger=tensorboard`)
   - trainer: ${get_default_trainer:} #default

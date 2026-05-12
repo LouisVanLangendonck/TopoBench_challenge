@@ -1,0 +1,37 @@
+# @package _global_
+
+# Deep Graph Infomax (DGI) Pretraining Configuration
+# Maximizes mutual information between node and graph representations
+
+pretraining:
+  enabled: true
+  task: dgi
+  transform_suffix: _dgi
+
+# Override loss and evaluator
+loss:
+  _target_: topobench.loss.TBLoss
+  dataset_loss:
+    _target_: topobench.loss.dataset.DGILoss
+    loss_type: bce
+    reduction: mean
+  modules_losses:
+    feature_encoder: ${oc.select:model.feature_encoder.loss,null}
+    backbone: ${oc.select:model.backbone.loss,null}
+    readout: ${oc.select:model.readout.loss,null}
+
+evaluator:
+  _target_: topobench.evaluator.dgi_evaluator.DGIEvaluator
+  metrics:
+    - loss
+    - loss_positive
+    - loss_negative
+    - accuracy
+  
+# Override dataset parameters for DGI pretraining
+dataset:
+  parameters:
+    task: dgi
+    loss_type: dgi
+    monitor_metric: accuracy
+    task_level: node

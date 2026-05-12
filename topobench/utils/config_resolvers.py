@@ -60,6 +60,62 @@ def get_default_trainer():
     return "gpu" if torch.cuda.is_available() else "cpu"
 
 
+def get_pretraining_transform(dataset, model, pretraining_enabled=False, pretraining_suffix=""):
+    r"""Get default transform with pretraining task suffix if applicable.
+    
+    This resolver extends get_default_transform to handle pretraining configs.
+    If pretraining is enabled and has a transform_suffix, it appends that suffix
+    to the model name when looking for model-specific transforms.
+    
+    Parameters
+    ----------
+    dataset : str
+        Dataset name in format "data_domain/name".
+    model : str
+        Model name in format "model_domain/name".
+    pretraining_enabled : bool
+        Whether pretraining is enabled.
+    pretraining_suffix : str
+        Suffix to append to model name for pretraining transforms (e.g., "_graphmaev2").
+    
+    Returns
+    -------
+    str
+        Transform configuration path.
+        
+    Examples
+    --------
+    >>> # Supervised learning (no pretraining)
+    >>> get_pretraining_transform("graph/ogbg-molhiv", "graph/gps", False, "")
+    "model_defaults/gps"
+    
+    >>> # GraphMAEv2 pretraining
+    >>> get_pretraining_transform("graph/ogbg-molhiv", "graph/gps", True, "_graphmaev2")
+    "model_defaults/gps_graphmaev2"
+    """
+    # Extract model name from "model_domain/model_name" format
+    model_domain, model_name = model.split("/")
+    
+    # Check if pretraining is enabled and has a transform_suffix
+    if pretraining_enabled and pretraining_suffix:
+        # Try to find the pretraining-specific transform
+        base_dir = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+        model_configs_dir = os.path.join(
+            base_dir, "configs", "transforms", "model_defaults"
+        )
+        pretraining_transform_file = f"{model_name}{pretraining_suffix}.yaml"
+        pretraining_transform_path = os.path.join(model_configs_dir, pretraining_transform_file)
+        
+        # If pretraining-specific transform exists, use it
+        if os.path.exists(pretraining_transform_path):
+            return f"model_defaults/{model_name}{pretraining_suffix}"
+    
+    # Fall back to standard transform resolution
+    return get_default_transform(dataset, model)
+
+
 def get_default_transform(dataset, model):
     r"""Get default transform for a given data domain and model.
 

@@ -1,0 +1,38 @@
+# @package _global_
+
+# GraphMAEv2 Pretraining Configuration
+# Masked autoencoding with EMA teacher and latent matching
+
+pretraining:
+  enabled: true
+  task: graphmaev2
+  # Suffix to append to model name for transform lookup (e.g., gps -> gps_graphmaev2)
+  transform_suffix: _graphmaev2
+
+# Override loss and evaluator
+loss:
+  _target_: topobench.loss.TBLoss
+  dataset_loss:
+    _target_: topobench.loss.dataset.GraphMAEv2Loss
+    loss_type: sce
+    alpha: 2
+    lam: 1.0
+  modules_losses:
+    feature_encoder: ${oc.select:model.feature_encoder.loss,null}
+    backbone: ${oc.select:model.backbone.loss,null}
+    readout: ${oc.select:model.readout.loss,null}
+
+evaluator:
+  _target_: topobench.evaluator.graphmaev2_evaluator.GraphMAEv2Evaluator
+  metrics:
+    - recon_loss
+    - latent_loss
+    - cosine_sim
+  
+# Override dataset parameters for GraphMAEv2 pretraining
+dataset:
+  parameters:
+    task: graphmaev2
+    loss_type: sce
+    monitor_metric: recon_loss
+    task_level: node  # GraphMAEv2 does node-level reconstruction

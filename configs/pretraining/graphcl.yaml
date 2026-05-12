@@ -1,0 +1,35 @@
+# @package _global_
+
+# GraphCL Pretraining Configuration
+# Contrastive learning with graph augmentations
+
+pretraining:
+  enabled: true
+  task: graphcl
+  transform_suffix: _graphcl
+
+# Override loss and evaluator
+loss:
+  _target_: topobench.loss.TBLoss
+  dataset_loss:
+    _target_: topobench.loss.dataset.GraphCLLoss
+    temperature: 0.1
+  modules_losses:
+    feature_encoder: ${oc.select:model.feature_encoder.loss,null}
+    backbone: ${oc.select:model.backbone.loss,null}
+    readout: ${oc.select:model.readout.loss,null}
+
+evaluator:
+  _target_: topobench.evaluator.graphcl_evaluator.GraphCLEvaluator
+  metrics:
+    - contrastive_loss
+    - alignment
+    - cosine_sim
+  
+# Override dataset parameters for GraphCL pretraining
+dataset:
+  parameters:
+    task: graphcl
+    loss_type: graphcl
+    monitor_metric: cosine_sim
+    task_level: node

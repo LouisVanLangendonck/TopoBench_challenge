@@ -1,0 +1,35 @@
+# @package _global_
+
+# Bootstrapped Graph Latent Representation Learning (BGRL) Configuration
+# Self-supervised learning via bootstrapping
+
+pretraining:
+  enabled: true
+  task: bgrl
+  transform_suffix: _bgrl
+
+# Override loss and evaluator
+loss:
+  _target_: topobench.loss.TBLoss
+  dataset_loss:
+    _target_: topobench.loss.dataset.BGRLLoss
+  modules_losses:
+    feature_encoder: ${oc.select:model.feature_encoder.loss,null}
+    backbone: ${oc.select:model.backbone.loss,null}
+    readout: ${oc.select:model.readout.loss,null}
+
+evaluator:
+  _target_: topobench.evaluator.bgrl_evaluator.BGRLEvaluator
+  metrics:
+    - loss
+    - loss_12
+    - loss_21
+    - cosine_sim
+  
+# Override dataset parameters for BGRL pretraining
+dataset:
+  parameters:
+    task: bgrl
+    loss_type: bgrl
+    monitor_metric: cosine_sim
+    task_level: node

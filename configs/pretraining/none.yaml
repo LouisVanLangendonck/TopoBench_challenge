@@ -1,0 +1,8 @@
+# @package _global_
+
+# No pretraining - supervised learning mode (default)
+# This config keeps all dataset parameters as-is
+
+pretraining:
+  enabled: false
+  task: null

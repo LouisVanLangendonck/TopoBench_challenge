@@ -1,0 +1,36 @@
+# @package _global_
+
+# GRACE Pretraining Configuration
+# Graph contrastive learning with adaptive augmentation
+
+pretraining:
+  enabled: true
+  task: grace
+  transform_suffix: _grace
+
+# Override loss and evaluator
+loss:
+  _target_: topobench.loss.TBLoss
+  dataset_loss:
+    _target_: topobench.loss.dataset.GRACELoss
+    tau: 0.5
+    batch_size: null
+  modules_losses:
+    feature_encoder: ${oc.select:model.feature_encoder.loss,null}
+    backbone: ${oc.select:model.backbone.loss,null}
+    readout: ${oc.select:model.readout.loss,null}
+
+evaluator:
+  _target_: topobench.evaluator.grace_evaluator.GRACEEvaluator
+  metrics:
+    - loss
+    - loss_view1
+    - loss_view2
+  
+# Override dataset parameters for GRACE pretraining
+dataset:
+  parameters:
+    task: grace
+    loss_type: grace
+    monitor_metric: loss  # GRACE minimizes contrastive loss
+    task_level: node

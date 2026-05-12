@@ -6,6 +6,23 @@ import torch_geometric
 from topobench.loss.base import AbstractLoss
 
 
+def _align_regression_target_for_loss(
+    logits: torch.Tensor, target: torch.Tensor
+) -> torch.Tensor:
+    """Make ``target`` the same rank/shape as expected by ``criterion`` vs ``logits``.
+
+    - PyG graph labels ``y`` of shape ``[1, K]`` per graph batch to ``[B, 1, K]``;
+      squeeze to ``[B, K]`` to match logits ``[B, K]``.
+    - Legacy scalar graph regression: ``logits`` ``[B, 1]``, ``target`` ``[B]`` → ``[B, 1]``.
+    """
+    t = target
+    if t.dim() == 3 and t.size(1) == 1:
+        t = t.squeeze(1)
+    if t.dim() == 1 and logits.dim() == 2 and logits.size(1) == 1:
+        t = t.unsqueeze(1)
+    return t
+
+
 class DatasetLoss(AbstractLoss):
     r"""Defines the default model loss for the given task.
 
@@ -76,7 +93,7 @@ class DatasetLoss(AbstractLoss):
             Loss value.
         """
         if self.task == "regression":
-            target = target.unsqueeze(1)
+            target = _align_regression_target_for_loss(logits, target)
             dataset_loss = self.criterion(logits, target)
 
         elif self.task == "classification":

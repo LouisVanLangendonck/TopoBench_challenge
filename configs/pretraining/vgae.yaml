@@ -1,0 +1,37 @@
+# @package _global_
+
+# Variational Graph Auto-Encoder (VGAE) Pretraining Configuration
+# Unsupervised link prediction via variational inference
+
+pretraining:
+  enabled: true
+  task: vgae
+  transform_suffix: _vgae
+
+# Override loss and evaluator
+loss:
+  _target_: topobench.loss.TBLoss
+  dataset_loss:
+    _target_: topobench.loss.dataset.VAELoss
+    kl_weight: 0.05
+    pos_weight: 1.0
+  modules_losses:
+    feature_encoder: ${oc.select:model.feature_encoder.loss,null}
+    backbone: ${oc.select:model.backbone.loss,null}
+    readout: ${oc.select:model.readout.loss,null}
+
+evaluator:
+  _target_: topobench.evaluator.vgae_evaluator.VGAEEvaluator
+  metrics:
+    - loss
+    - elbo
+    - accuracy
+    - auroc
+  
+# Override dataset parameters for VGAE pretraining
+dataset:
+  parameters:
+    task: vgae
+    loss_type: vgae
+    monitor_metric: auroc
+    task_level: node
