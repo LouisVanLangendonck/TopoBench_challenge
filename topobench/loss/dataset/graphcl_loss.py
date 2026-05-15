@@ -25,7 +25,7 @@ class GraphCLLoss(AbstractLoss):
         Temperature parameter for scaling similarities (default: 0.2).
     """
 
-    def __init__(self, temperature: float = 0.2):
+    def __init__(self, temperature: float = 0.2, **kwargs):
         super().__init__()
         self.temperature = temperature
 

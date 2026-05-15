@@ -22,7 +22,7 @@ class GRACELoss(AbstractLoss):
         If None, computes full similarity matrix at once.
     """
 
-    def __init__(self, tau: float = 0.5, batch_size: int = None):
+    def __init__(self, tau: float = 0.5, batch_size: int = None, **kwargs):
         super().__init__()
         self.tau = tau
         self.batch_size = batch_size

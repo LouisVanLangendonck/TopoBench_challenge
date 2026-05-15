@@ -373,11 +373,11 @@ class GRACEGNNWrapper(AbstractWrapper):
             edge_weight=edge_weight if edge_index_2.size(1) == edge_index.size(1) else None,
         )
         
-        # Return both views for contrastive loss
+        # Return both views for contrastive loss (h_1/h_2 as expected by GRACELoss)
         model_out = {
-            "x_0": z_1,  # View 1 embeddings
-            "z_1": z_1,  # View 1 embeddings (explicit)
-            "z_2": z_2,  # View 2 embeddings
+            "x_0": z_1,
+            "h_1": z_1,
+            "h_2": z_2,
             "labels": batch.y if hasattr(batch, "y") else None,
             "batch_0": batch_indices,
             "edge_index": edge_index,

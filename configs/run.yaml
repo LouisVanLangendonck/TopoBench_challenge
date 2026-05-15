@@ -7,16 +7,17 @@ defaults:
   - dataset: graph/ogbg-molhiv
   - model: graph/gps
 
-  # Transforms: automatically selected based on dataset, model, and pretraining task
-  - transforms: ${get_pretraining_transform:${dataset},${model},${oc.select:pretraining.enabled,false},${oc.select:pretraining.transform_suffix,""}}
+  # Set to none to skip pretraining
+  - pretraining: graphmaev2
+
+  # Transforms: use the pretraining-specific transform when one exists.
+  - transforms: ${get_pretraining_transform:${dataset},${model},${pretraining}}
   - optimizer: default
   
-  # These are defaults that will be overridden by pretraining config if pretraining != none
-  - loss: default
-  - evaluator: default
-  
-  # Pretraining configuration. Set to 'none' for supervised learning (default)
-  - pretraining: none
+  # Loss and evaluator are inferred automatically from the pretraining choice.
+  # When pretraining=none (or no dedicated config exists), both fall back to "default".
+  - loss: ${get_pretraining_loss:${pretraining}}
+  - evaluator: ${get_pretraining_evaluator:${pretraining}}
   
   - callbacks: default
   - logger: wandb # set logger here or use command line (e.g. `python train.py logger=tensorboard`)

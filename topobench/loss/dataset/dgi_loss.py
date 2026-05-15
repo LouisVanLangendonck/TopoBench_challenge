@@ -29,6 +29,7 @@ class DGILoss(AbstractLoss):
         self,
         loss_type: str = "bce",
         reduction: str = "mean",
+        **kwargs,
     ):
         super().__init__()
         

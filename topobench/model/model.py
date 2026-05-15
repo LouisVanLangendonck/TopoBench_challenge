@@ -334,6 +334,8 @@ class TBModel(LightningModule):
 
         This hook is used to log the train metrics.
         """
+        if hasattr(self.backbone, "on_epoch_end"):
+            self.backbone.on_epoch_end(self.current_epoch)
         # Log train metrics and reset evaluator
         if not self.train_metrics_logged:
             self.log_metrics(mode="train")

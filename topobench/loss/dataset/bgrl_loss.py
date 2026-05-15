@@ -10,7 +10,7 @@ from topobench.loss.base import AbstractLoss
 class BGRLLoss(AbstractLoss):
     r"""Symmetric BGRL loss based on negative cosine similarity."""
 
-    def __init__(self):
+    def __init__(self, **kwargs):
         super().__init__()
 
     @staticmethod

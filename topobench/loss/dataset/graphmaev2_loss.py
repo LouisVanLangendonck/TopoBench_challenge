@@ -30,7 +30,8 @@ class GraphMAEv2Loss(AbstractLoss):
         Weight for latent representation loss (default: 1.0).
     """
 
-    def __init__(self, loss_type: str = "sce", alpha: float = 2, lam: float = 1.0):
+    def __init__(self, loss_type: str = "sce", alpha: float = 2, lam: float = 1.0, **kwargs):
+        # Absorb keys merged from default loss config (e.g. task) when pretraining overrides dataset_loss.
         super().__init__()
         self.loss_type = loss_type
         self.alpha = alpha

@@ -8,6 +8,20 @@ pretraining:
   task: dgi
   transform_suffix: _dgi
 
+# DGI needs its own wrapper (corruption + dual encoding) and readout (discriminator).
+# Residual connections must be off — the wrapper returns a multi-key dict, not a plain x_0 tensor.
+model:
+  backbone_wrapper:
+    wrapper_name: DGIGNNWrapper
+    residual_connections: false
+  readout:
+    readout_name: DGIReadOut
+    # hidden_dim is the node-embedding size coming out of the backbone wrapper.
+    hidden_dim: ${model.feature_encoder.out_channels}
+    out_channels: 1  # binary discrimination score per node
+    task_level: ${dataset.parameters.task_level}
+    pooling_type: sum
+
 # Override loss and evaluator
 loss:
   _target_: topobench.loss.TBLoss

@@ -9,6 +9,20 @@ pretraining:
   # Suffix to append to model name for transform lookup (e.g., gps -> gps_graphmaev2)
   transform_suffix: _graphmaev2
 
+# GraphMAEv2 needs its own wrapper (masking + EMA teacher) and readout (decoder + re-masking).
+# Residual connections must be off — the wrapper returns a multi-key dict, not a plain x_0 tensor.
+model:
+  backbone_wrapper:
+    wrapper_name: GraphMAEv2GNNWrapper
+    residual_connections: false
+  readout:
+    readout_name: GraphMAEv2ReadOut
+    hidden_dim: ${model.feature_encoder.out_channels}
+    # Raw node dim for x_raw reconstruction (not encoder in_channels, which may include PSEs).
+    out_channels: ${get_raw_feature_dim:${dataset.parameters.num_features}}
+    task_level: ${dataset.parameters.task_level}
+    pooling_type: sum
+
 # Override loss and evaluator
 loss:
   _target_: topobench.loss.TBLoss

@@ -60,59 +60,107 @@ def get_default_trainer():
     return "gpu" if torch.cuda.is_available() else "cpu"
 
 
-def get_pretraining_transform(dataset, model, pretraining_enabled=False, pretraining_suffix=""):
-    r"""Get default transform with pretraining task suffix if applicable.
-    
-    This resolver extends get_default_transform to handle pretraining configs.
-    If pretraining is enabled and has a transform_suffix, it appends that suffix
-    to the model name when looking for model-specific transforms.
-    
+def get_pretraining_loss(pretraining_choice="none"):
+    r"""Return the loss config-group name for the given pretraining choice.
+
+    Falls back to ``"default"`` when no dedicated loss config exists or when
+    ``pretraining_choice`` is ``"none"``.
+
     Parameters
     ----------
-    dataset : str
-        Dataset name in format "data_domain/name".
-    model : str
-        Model name in format "model_domain/name".
-    pretraining_enabled : bool
-        Whether pretraining is enabled.
-    pretraining_suffix : str
-        Suffix to append to model name for pretraining transforms (e.g., "_graphmaev2").
-    
+    pretraining_choice : str
+        Hydra config-group choice for the pretraining group.
+
     Returns
     -------
     str
-        Transform configuration path.
-        
+        Loss config-group name (e.g. ``"bgrl"``, ``"default"``).
+    """
+    if pretraining_choice and pretraining_choice not in ("none", "null", ""):
+        base_dir = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+        candidate = os.path.join(base_dir, "configs", "loss", f"{pretraining_choice}.yaml")
+        if os.path.exists(candidate):
+            return pretraining_choice
+    return "default"
+
+
+def get_pretraining_evaluator(pretraining_choice="none"):
+    r"""Return the evaluator config-group name for the given pretraining choice.
+
+    Falls back to ``"default"`` when no dedicated evaluator config exists or when
+    ``pretraining_choice`` is ``"none"``.
+
+    Parameters
+    ----------
+    pretraining_choice : str
+        Hydra config-group choice for the pretraining group.
+
+    Returns
+    -------
+    str
+        Evaluator config-group name (e.g. ``"bgrl"``, ``"default"``).
+    """
+    if pretraining_choice and pretraining_choice not in ("none", "null", ""):
+        base_dir = os.path.dirname(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        )
+        candidate = os.path.join(base_dir, "configs", "evaluator", f"{pretraining_choice}.yaml")
+        if os.path.exists(candidate):
+            return pretraining_choice
+    return "default"
+
+
+def get_pretraining_transform(dataset, model, pretraining_choice="none"):
+    r"""Select the correct transform config for the given model + pretraining combination.
+
+    Called from the Hydra defaults list as::
+
+        transforms: ${get_pretraining_transform:${dataset},${model},${hydra:runtime.choices.pretraining}}
+
+    The third argument is the Hydra config-group choice string for the ``pretraining``
+    group (e.g. ``"graphmaev2"``, ``"dgi"``, ``"none"``).  This is available at
+    defaults-list resolution time because it is set by an earlier entry in that list.
+
+    If a file ``configs/transforms/model_defaults/<model>_<pretraining>.yaml`` exists
+    (e.g. ``gps_graphmaev2.yaml``), it is used; otherwise the standard transform
+    resolution falls through to :func:`get_default_transform`.
+
+    Parameters
+    ----------
+    dataset : str
+        Dataset name in format ``"data_domain/name"``.
+    model : str
+        Model name in format ``"model_domain/name"``.
+    pretraining_choice : str
+        Hydra config-group choice for the pretraining group (``"none"`` disables lookup).
+
+    Returns
+    -------
+    str
+        Transform configuration path relative to the ``transforms`` config group.
+
     Examples
     --------
-    >>> # Supervised learning (no pretraining)
-    >>> get_pretraining_transform("graph/ogbg-molhiv", "graph/gps", False, "")
+    >>> get_pretraining_transform("graph/ogbg-molhiv", "graph/gps", "none")
     "model_defaults/gps"
-    
-    >>> # GraphMAEv2 pretraining
-    >>> get_pretraining_transform("graph/ogbg-molhiv", "graph/gps", True, "_graphmaev2")
+    >>> get_pretraining_transform("graph/ogbg-molhiv", "graph/gps", "graphmaev2")
     "model_defaults/gps_graphmaev2"
     """
-    # Extract model name from "model_domain/model_name" format
     model_domain, model_name = model.split("/")
-    
-    # Check if pretraining is enabled and has a transform_suffix
-    if pretraining_enabled and pretraining_suffix:
-        # Try to find the pretraining-specific transform
+
+    if pretraining_choice and pretraining_choice not in ("none", "null", ""):
         base_dir = os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         )
         model_configs_dir = os.path.join(
             base_dir, "configs", "transforms", "model_defaults"
         )
-        pretraining_transform_file = f"{model_name}{pretraining_suffix}.yaml"
-        pretraining_transform_path = os.path.join(model_configs_dir, pretraining_transform_file)
-        
-        # If pretraining-specific transform exists, use it
-        if os.path.exists(pretraining_transform_path):
-            return f"model_defaults/{model_name}{pretraining_suffix}"
-    
-    # Fall back to standard transform resolution
+        candidate = os.path.join(model_configs_dir, f"{model_name}_{pretraining_choice}.yaml")
+        if os.path.exists(candidate):
+            return f"model_defaults/{model_name}_{pretraining_choice}"
+
     return get_default_transform(dataset, model)
 
 
@@ -343,9 +391,9 @@ def get_raw_feature_dim(in_channels):
     int
         The raw feature dimension (e.g., 15).
     """
-    if isinstance(in_channels, list):
-        return in_channels[0]
-    return in_channels
+    if isinstance(in_channels, (list, omegaconf.listconfig.ListConfig)):
+        return int(in_channels[0])
+    return int(in_channels)
 
 
 def infer_in_channels(dataset, transforms):

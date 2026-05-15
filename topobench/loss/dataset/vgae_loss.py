@@ -10,7 +10,7 @@ from topobench.loss.base import AbstractLoss
 class VAELoss(AbstractLoss):
     r"""BCE on edge logits plus optional :math:`\mathrm{KL}(q(z|x)\|p(z))` over nodes."""
 
-    def __init__(self, kl_weight: float = 1.0, pos_weight: float = 1.0):
+    def __init__(self, kl_weight: float = 1.0, pos_weight: float = 1.0, **kwargs):
         super().__init__()
         self.kl_weight = kl_weight
         self.pos_weight = pos_weight

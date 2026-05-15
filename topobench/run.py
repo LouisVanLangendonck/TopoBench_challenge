@@ -30,11 +30,14 @@ from topobench.utils.config_resolvers import (
     get_default_metrics,
     get_default_trainer,
     get_default_transform,
+    get_pretraining_evaluator,
+    get_pretraining_loss,
     get_pretraining_transform,
     get_flattened_channels,
     get_monitor_metric,
     get_monitor_mode,
     get_non_relational_out_channels,
+    get_raw_feature_dim,
     get_required_lifting,
     infer_in_channels,
     infer_num_cell_dimensions,
@@ -73,6 +76,12 @@ OmegaConf.register_new_resolver(
     "get_pretraining_transform", get_pretraining_transform, replace=True
 )
 OmegaConf.register_new_resolver(
+    "get_pretraining_loss", get_pretraining_loss, replace=True
+)
+OmegaConf.register_new_resolver(
+    "get_pretraining_evaluator", get_pretraining_evaluator, replace=True
+)
+OmegaConf.register_new_resolver(
     "get_flattened_channels",
     get_flattened_channels,
     replace=True,
@@ -101,6 +110,9 @@ OmegaConf.register_new_resolver(
     "infer_topotune_num_cell_dimensions",
     infer_topotune_num_cell_dimensions,
     replace=True,
+)
+OmegaConf.register_new_resolver(
+    "get_raw_feature_dim", get_raw_feature_dim, replace=True
 )
 OmegaConf.register_new_resolver(
     "parameter_multiplication", lambda x, y: int(int(x) * int(y)), replace=True
