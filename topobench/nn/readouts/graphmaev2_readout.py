@@ -206,7 +206,7 @@ class GraphMAEv2ReadOut(AbstractZeroCellReadOut):
             # For MLP decoders: skip re-masking (doesn't make sense without message passing)
             num_remasking_iterations = self.num_remasking if is_gnn_decoder else 1
             
-            for i in range(num_remasking_iterations):
+            for _i in range(num_remasking_iterations):
                 if is_gnn_decoder and num_remasking_iterations > 1:
                     # Re-mask for GNN decoder (different mask each iteration)
                     rep_remasked, remask_nodes, rekeep_nodes = self.random_remask(origin_rep, num_nodes, device)

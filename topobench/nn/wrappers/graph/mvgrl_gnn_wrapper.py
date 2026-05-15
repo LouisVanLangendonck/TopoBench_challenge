@@ -17,7 +17,7 @@ The ONLY difference between inductive (graph) and transductive (node) settings:
 
 From the paper:
 "To generate negative samples in transductive tasks, we randomly shuffle the features"
-"This procedure allows our approach to be applied to inductive tasks...and also to 
+"This procedure allows our approach to be applied to inductive tasks...and also to
 transductive tasks by considering sub-samples as independent graphs."
 
 Hyperparameter recommendations from the paper:
@@ -44,7 +44,7 @@ class MVGRLEncoder(nn.Module):
     
     From the paper (Equation 4):
     "We use a readout function similar to jumping knowledge network (JK-Net)
-    where we concatenate the summation of the node representations in each 
+    where we concatenate the summation of the node representations in each
     GCN layer and then feed them to a single layer feed-forward network"
     
     Returns both node representations (from final layer) and graph representations
@@ -212,7 +212,7 @@ class MVGRLWrapper(AbstractWrapper):
     def shuffle_features(self, x, batch_indices):
         """Shuffle node features within each graph for transductive negative sampling.
         
-        From the paper: "To generate negative samples in transductive tasks, 
+        From the paper: "To generate negative samples in transductive tasks,
         we randomly shuffle the features"
         
         Parameters

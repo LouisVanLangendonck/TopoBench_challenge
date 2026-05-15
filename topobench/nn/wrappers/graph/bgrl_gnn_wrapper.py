@@ -78,7 +78,7 @@ class BGRLGNNWrapper(AbstractWrapper):
     def update_target_encoder(self) -> None:
         """Momentum update target encoder using online encoder parameters."""
         for online_param, target_param in zip(
-            self.online_encoder.parameters(), self.backbone.parameters()
+            self.online_encoder.parameters(), self.backbone.parameters(), strict=False
         ):
             target_param.data.mul_(self.momentum).add_(
                 online_param.data, alpha=1.0 - self.momentum

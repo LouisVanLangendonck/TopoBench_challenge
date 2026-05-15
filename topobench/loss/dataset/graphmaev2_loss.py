@@ -30,7 +30,13 @@ class GraphMAEv2Loss(AbstractLoss):
         Weight for latent representation loss (default: 1.0).
     """
 
-    def __init__(self, loss_type: str = "sce", alpha: float = 2, lam: float = 1.0, **kwargs):
+    def __init__(
+        self,
+        loss_type: str = "sce",
+        alpha: float = 2,
+        lam: float = 1.0,
+        **kwargs,
+    ):
         # Absorb keys merged from default loss config (e.g. task) when pretraining overrides dataset_loss.
         super().__init__()
         self.loss_type = loss_type
@@ -60,11 +66,15 @@ class GraphMAEv2Loss(AbstractLoss):
         # Raw node features (e.g. ZINC atom indices) are often integer; SCE/MSE need floats.
         if not x_original.is_floating_point():
             x_original = x_original.to(dtype=x_reconstructed.dtype)
-        latent_loss = model_out.get("latent_loss", torch.tensor(0.0, device=x_reconstructed.device))
+        latent_loss = model_out.get(
+            "latent_loss", torch.tensor(0.0, device=x_reconstructed.device)
+        )
 
         # Compute reconstruction loss
         if self.loss_type == "sce":
-            recon_loss = sce_loss(x_reconstructed, x_original, alpha=self.alpha)
+            recon_loss = sce_loss(
+                x_reconstructed, x_original, alpha=self.alpha
+            )
         elif self.loss_type == "mse":
             recon_loss = F.mse_loss(x_reconstructed, x_original)
         else:
@@ -78,4 +88,3 @@ class GraphMAEv2Loss(AbstractLoss):
         total_loss = recon_loss + self.lam * latent_loss
 
         return total_loss
-

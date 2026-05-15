@@ -52,7 +52,7 @@ class MVGRLLoss(AbstractLoss):
     def local_global_loss(self, l_enc, g_enc, batch_indices, num_graphs):
         """Compute local-global contrastive loss using JSD estimator.
         
-        For cross_graph (inductive): negatives are nodes paired with graphs 
+        For cross_graph (inductive): negatives are nodes paired with graphs
         they don't belong to.
         """
         num_nodes = l_enc.shape[0]

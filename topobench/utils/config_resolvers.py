@@ -80,7 +80,9 @@ def get_pretraining_loss(pretraining_choice="none"):
         base_dir = os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         )
-        candidate = os.path.join(base_dir, "configs", "loss", f"{pretraining_choice}.yaml")
+        candidate = os.path.join(
+            base_dir, "configs", "loss", f"{pretraining_choice}.yaml"
+        )
         if os.path.exists(candidate):
             return pretraining_choice
     return "default"
@@ -106,7 +108,9 @@ def get_pretraining_evaluator(pretraining_choice="none"):
         base_dir = os.path.dirname(
             os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
         )
-        candidate = os.path.join(base_dir, "configs", "evaluator", f"{pretraining_choice}.yaml")
+        candidate = os.path.join(
+            base_dir, "configs", "evaluator", f"{pretraining_choice}.yaml"
+        )
         if os.path.exists(candidate):
             return pretraining_choice
     return "default"
@@ -157,7 +161,9 @@ def get_pretraining_transform(dataset, model, pretraining_choice="none"):
         model_configs_dir = os.path.join(
             base_dir, "configs", "transforms", "model_defaults"
         )
-        candidate = os.path.join(model_configs_dir, f"{model_name}_{pretraining_choice}.yaml")
+        candidate = os.path.join(
+            model_configs_dir, f"{model_name}_{pretraining_choice}.yaml"
+        )
         if os.path.exists(candidate):
             return f"model_defaults/{model_name}_{pretraining_choice}"
 
@@ -294,14 +300,14 @@ def get_monitor_mode(task):
         or task == "vgae"  # VGAE edge pretraining: maximize accuracy/auroc
         or task == "dgi"  # DGI: maximize discrimination accuracy
         or task == "bgrl"  # BGRL: maximize cosine similarity
-        ):
+    ):
         return "max"
 
     elif (
         task == "regression"
         or task == "grace"  # GRACE: minimize contrastive loss
         or task == "graphcl"  # GraphCL: minimize contrastive loss
-        ):
+    ):
         return "min"
 
     else:
@@ -377,15 +383,15 @@ def check_pses_in_transforms(transforms):
 
 def get_raw_feature_dim(in_channels):
     r"""Extract the raw feature dimension from in_channels list.
-    
+
     For GraphMAE/GraphMAEv2, we need to reconstruct raw features.
     This helper extracts the first dimension from the in_channels list.
-    
+
     Parameters
     ----------
     in_channels : list or int
         Input channels (can be list like [15] or int like 15).
-    
+
     Returns
     -------
     int

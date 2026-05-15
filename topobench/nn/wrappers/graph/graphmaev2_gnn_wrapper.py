@@ -127,11 +127,11 @@ class GraphMAEv2GNNWrapper(AbstractWrapper):
         m = self.momentum
         
         # Update encoder EMA
-        for param_q, param_k in zip(self.backbone.parameters(), self.encoder_ema.parameters()):
+        for param_q, param_k in zip(self.backbone.parameters(), self.encoder_ema.parameters(), strict=False):
             param_k.data.mul_(m).add_((1 - m) * param_q.detach().data)
         
         # Update projector EMA
-        for param_q, param_k in zip(self.projector.parameters(), self.projector_ema.parameters()):
+        for param_q, param_k in zip(self.projector.parameters(), self.projector_ema.parameters(), strict=False):
             param_k.data.mul_(m).add_((1 - m) * param_q.detach().data)
     
     def encoding_mask_noise(self, x, num_nodes, device):

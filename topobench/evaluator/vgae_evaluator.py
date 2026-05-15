@@ -59,9 +59,8 @@ class VGAEEvaluator(AbstractEvaluator):
             recon_bce = F.binary_cross_entropy_with_logits(logits, labels)
             self.metrics["loss"].update(recon_bce)
 
-        if "elbo" in self.metric_names:
-            if "loss" in model_out:
-                self.metrics["elbo"].update(model_out["loss"].detach().cpu())
+        if "elbo" in self.metric_names and "loss" in model_out:
+            self.metrics["elbo"].update(model_out["loss"].detach().cpu())
 
         if "accuracy" in self.metric_names:
             self.metrics["accuracy"].update(preds, labels.long())

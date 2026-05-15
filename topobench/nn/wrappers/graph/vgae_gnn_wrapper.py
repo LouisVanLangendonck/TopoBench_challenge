@@ -2,7 +2,6 @@
 
 import torch
 import torch.nn as nn
-from torch_geometric.utils import negative_sampling
 
 from topobench.nn.wrappers.base import AbstractWrapper
 
@@ -88,8 +87,8 @@ class _EdgeSamplingGNNWrapper(AbstractWrapper):
             
             # CRITICAL FIX 3: Use advanced indexing instead of torch.isin
             # This is 10-50x faster for edge filtering!
-            src_in_graph = graph_node_mask[remaining_edge_index[0]]
-            dst_in_graph = graph_node_mask[remaining_edge_index[1]]
+            graph_node_mask[remaining_edge_index[0]]
+            graph_node_mask[remaining_edge_index[1]]
             
             # CRITICAL FIX 4: Simple random negative sampling (no rejection, no mapping)
             # For VGAE, approximate negatives are fine - we're learning representations, not exact links
